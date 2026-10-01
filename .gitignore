@@ -1,0 +1,19 @@
+.venv/
+node_modules/
+.local/
+__pycache__/
+*.pyc
+*.sqlite3
+frontend/dist/
+test-results/
+
+# Local data stores, generated receipts, and imported data bundles.
+_build/
+data/*.zip
+data/*.sha256
+*.sqlite
+*.sqlite3-*
+*.db
+.env
+.env.*
+!.env.example

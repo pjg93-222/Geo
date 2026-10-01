@@ -1,0 +1,31 @@
+.map-navigation { position:absolute; top:12px; left:12px; display:flex; background:var(--paper); border:1px solid var(--control-border); border-radius:5px; overflow:hidden; z-index:2; }
+.map-navigation button { border:0; border-radius:0; font-size:12px; padding:7px 10px; }
+.map-navigation button[aria-pressed=true] { background:var(--plum); color:white; }
+.map-stage .fit-map { top:58px; left:12px; }
+.scope-progress { position:absolute; bottom:140px; left:12px; right:12px; z-index:5; background:var(--paper); border:1px solid var(--line); padding:10px 14px; pointer-events:none; }
+.scope-progress p { margin:3px 0 0; color:var(--muted); font-size:12px; }
+.map-progress { position:absolute; bottom:30px; left:12px; padding:5px 9px; background:var(--paper); color:var(--muted); font-size:12px; pointer-events:none; }
+.household-preload { margin:16px 0; width:100%; }
+.household-preload strong { display:block; font-size:12px; }
+.household-preload p { margin:6px 0; font-size:11px; color:var(--muted); }
+.household-preload button { font-size:12px; }
+.household-preload progress { display:block; width:100%; height:9px; margin-top:8px; accent-color:var(--teal); }
+.household-preload .error { color:#922d2a; }
+.map-detail-error { position:absolute; bottom:50px; left:12px; right:12px; display:flex; align-items:center; gap:12px; padding:10px; background:var(--paper); color:#922d2a; z-index:2; }
+.map-detail-error span { flex:1; }
+.road-label { font:11px Arial,sans-serif; color:#51483b; background:#fffdf6e8; padding:1px 4px; border-radius:2px; pointer-events:none; white-space:nowrap; }
+.contact-fields { overflow-wrap:anywhere; }
+.contact-fields dt { font-size:12px; color:var(--muted); margin-top:12px; }
+.contact-fields dd { margin:3px 0 0; }
+.registry-search { display:flex; align-items:flex-end; gap:12px; margin-block:24px; }
+.registry-search label { flex:1; max-width:650px; }
+.registry-table { overflow-x:auto; border:1px solid var(--line); }
+.registry-table table { min-width:760px; }
+.registry-table td { max-width:260px; overflow-wrap:anywhere; }
+.registry-table td:first-child { min-width:180px; }
+.contact-dialog { width:min(520px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; border:1px solid var(--control-border); border-radius:7px; padding:24px; color:var(--plum); background:var(--paper); }
+.contact-dialog::backdrop { background:#34264980; }
+.contact-dialog-close { display:flex; justify-content:flex-end; margin-bottom:20px; }
+.contact-dialog .person-contact h3 { font:23px Georgia,serif; }
+.contact-dialog .person-contact>.secondary { margin-top:8px; }
+@media(max-width:650px) { .map-navigation button { font-size:11px; padding:6px 8px; } .registry-search { flex-wrap:wrap; gap:8px; } .registry-search label { flex-basis:100%; } .registry-search input { font-size:16px; } .contact-dialog { padding:20px; } }

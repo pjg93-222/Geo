@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    environment:
+      CU_DEPLOYMENT: hosted
+      CU_SECRET_KEY: ${CU_SECRET_KEY:?Set a unique secret in the deployment environment}
+      CU_ALLOWED_HOSTS: ${CU_ALLOWED_HOSTS:?Set the hosted domain},127.0.0.1
+      CU_TRUSTED_ORIGINS: ${CU_TRUSTED_ORIGINS:?Set the HTTPS origin}
+      CU_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - research-data:/data
+    restart: unless-stopped
+volumes:
+  research-data:

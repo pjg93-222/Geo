@@ -1,0 +1,17 @@
+.credit-quality h3 { margin-block: 28px 10px; font-size: 16px; }
+.credit-quality p { max-width: 72ch; }
+.quality-table-scroll { overflow-x: auto; border: 1px solid var(--line); }
+.quality-table-scroll:focus-visible { outline: 3px solid var(--purple); outline-offset: 3px; }
+.quality-table-scroll table { min-width: 620px; }
+.quality-table-scroll tbody th { background: transparent; color: var(--plum); font-size: 13px; white-space: normal; }
+.quality-table-scroll th small { display: block; font-weight: normal; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+.quality-table-scroll tbody tr:last-child > * { border-bottom: 0; }
+.credit-quality .quality-caption { font-size: 13px; margin-block: 12px 24px; }
+.credit-quality details { border-block: 1px solid var(--line); padding-block: 14px; }
+.credit-quality summary { cursor: pointer; font-weight: 600; color: var(--purple); }
+.credit-quality summary:focus-visible { outline: 3px solid var(--purple); outline-offset: 3px; }
+.credit-quality details p { margin-top: 16px; }
+@media (max-width: 650px) {
+  .credit-quality > p, .credit-quality details p { font-size: 16px; }
+  .credit-quality .quality-caption { font-size: 14px; }
+}

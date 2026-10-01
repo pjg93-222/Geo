@@ -1,0 +1,248 @@
+{
+  "schema": "criteria-audit-v1",
+  "audited_at": "2026-09-27T23:16:55.682025+00:00",
+  "interpretation": "Existing Melange measures only. No voter-level predictors or political-support probabilities are computed.",
+  "support_likelihood": "Not measured",
+  "persistent_voices": "Not measured",
+  "sources": [
+    {
+      "name": "cu-member-desk.html",
+      "sha256": "8d9e99aafcdfe41125560b7da9a8c620b3c8b1a1e3d261471df22ba50909e6a3"
+    },
+    {
+      "name": "pillar_policy.py",
+      "sha256": "728be294ba05a30a6c2027182359f12cf0860b94d1c020a2a0172cfc6c99edf1"
+    },
+    {
+      "name": "moneyball_core.py",
+      "sha256": "ee190494e8be4e719a564a88923de18992910a367a9cf86a7fcacdcf964584b7"
+    },
+    {
+      "name": "demographic_potential.py",
+      "sha256": "c58ffaf1b9edb6af4dee094dbc3ecaee4cf5dbb1ae2413ee55acdcdd78f0bbf9"
+    }
+  ],
+  "systems": [
+    {
+      "id": "footprint",
+      "name": "Credit-union footprint",
+      "version": "3.0 \u00b7 footprint",
+      "weight_kind": "Judgmental percentage weights",
+      "total": 1.0,
+      "formula": "100 x sum(component percentile x chosen policy weight). Percentiles are tie-aware and calculated separately within district and state markets, using full-precision employment and establishment location quotients and un-inverted CU branch/deposit shares -- higher current credit-union footprint scores higher. Missing evidence is neutral at 0.50 and lowers the displayed evidence-coverage rate.",
+      "qualification": "Qualifies when the district or state credit-union employment location quotient (full precision, not the 3dp display rounding) is >= 1.00 -- credit-union employment there is at least as concentrated as it is nationally.",
+      "missing": "Existing Melange method uses neutral 0.50 and lowers evidence coverage. This app does not compute this score from the CSV.",
+      "normalization": "Tie-aware percentiles within qualifying district or state markets; full precision.",
+      "rows": [
+        {
+          "key": "employment_lq",
+          "name": "CU employment concentration (LQ)",
+          "weight": 0.3,
+          "definition": "CU-sector (NAICS 522130) employment location quotient: (local CU employment / local all-industry employment) / (U.S. CU employment / U.S. all-industry employment)",
+          "caveat": "LQ is concentration relative to the national CU workforce share, not absolute employment scale or growth.",
+          "csv_match": "Absent"
+        },
+        {
+          "key": "establishment_lq",
+          "name": "CU establishment concentration (LQ)",
+          "weight": 0.2,
+          "definition": "CU-sector (NAICS 522130) establishment location quotient: (local CU establishments / local all-industry establishments) / (U.S. CU establishments / U.S. all-industry establishments)",
+          "caveat": "LQ is concentration of establishment counts, not employment or deposit scale.",
+          "csv_match": "Absent"
+        },
+        {
+          "key": "cu_branch_share",
+          "name": "CU branch share",
+          "weight": 0.25,
+          "definition": "CU branches / (CU branches + FDIC-insured bank branches)",
+          "caveat": "Branch locations are geocoded/allocated to districts; unmatched and county-fallback records create estimation error.",
+          "csv_match": "Absent"
+        },
+        {
+          "key": "cu_deposit_share",
+          "name": "CU deposit share",
+          "weight": 0.25,
+          "definition": "estimated CU shares / (FDIC bank deposits + estimated CU shares)",
+          "caveat": "NCUA institution shares are divided equally across allocation-eligible CU branches, while FDIC reports branch deposits. This is a cross-system proxy, not a directly observed market share.",
+          "csv_match": "Absent"
+        }
+      ]
+    },
+    {
+      "id": "ranking",
+      "name": "Congressional ranking",
+      "version": "Current pillar policy",
+      "weight_kind": "Percentage weights",
+      "total": 1.0,
+      "formula": "0.45 \u00d7 legislative + 0.10 \u00d7 press + 0.40 \u00d7 influence + 0.05 \u00d7 demographic",
+      "normalization": "Legislation and demographics use percent ranks; press and influence divide by their respective maxima. Preserve source normalization.",
+      "missing": "The existing ranking is documented, not applied to source profiles.",
+      "rows": [
+        {
+          "name": "Legislative action",
+          "weight": 0.45,
+          "csv_match": "No comparable voter measure"
+        },
+        {
+          "name": "Press sentiment",
+          "weight": 0.1,
+          "csv_match": "No comparable voter measure"
+        },
+        {
+          "name": "Influence",
+          "weight": 0.4,
+          "csv_match": "No comparable voter measure"
+        },
+        {
+          "name": "Demographics",
+          "weight": 0.05,
+          "csv_match": "No comparable voter measure"
+        }
+      ],
+      "interpretation": "Influence contributes 40%; this congressional ranking is not a pure measure of support."
+    },
+    {
+      "id": "evidence",
+      "name": "Evidence within an issue",
+      "version": "Current label policy",
+      "weight_kind": "Nominal relative weights",
+      "total": null,
+      "formula": "Normalize source weights over available evidence. Nominal 0.10 media is not necessarily 10% of the result.",
+      "normalization": "Defensive categories: Interchange, CU Tax Status, Credit Card Mandates.",
+      "missing": "Absent evidence is not treated as opposition.",
+      "rows": [
+        {
+          "name": "Legislation",
+          "weight": 0.55,
+          "defensive_weight": 0.55
+        },
+        {
+          "name": "Media",
+          "weight": 0.1,
+          "defensive_weight": 0.1
+        },
+        {
+          "name": "Vote",
+          "weight": 0.1,
+          "defensive_weight": 0.2
+        }
+      ]
+    },
+    {
+      "id": "importance",
+      "name": "Issue importance",
+      "version": "18-category IMP table",
+      "weight_kind": "Relative weights",
+      "total": 17.45,
+      "formula": "Weighted mean across observed issue positions; relative weights do not represent fixed percentage contributions.",
+      "normalization": "The category \"No recorded position\" is excluded from the overall stance mean; retain the source semantic ladder.",
+      "missing": "Unknown is excluded, not scored as zero support.",
+      "rows": [
+        {
+          "name": "Examination & Supervision",
+          "weight": 0.75
+        },
+        {
+          "name": "CU Capital Requirements",
+          "weight": 0.25
+        },
+        {
+          "name": "NCUA Budget & Insurance",
+          "weight": 1.0
+        },
+        {
+          "name": "Interchange",
+          "weight": 2.0
+        },
+        {
+          "name": "Payments",
+          "weight": 0.75
+        },
+        {
+          "name": "Technology & Emerging",
+          "weight": 0.75
+        },
+        {
+          "name": "Fraud Prevention",
+          "weight": 0.75
+        },
+        {
+          "name": "Data Privacy & Cyber",
+          "weight": 1.0
+        },
+        {
+          "name": "Charter Modernization",
+          "weight": 1.0
+        },
+        {
+          "name": "Defense CU Issues",
+          "weight": 0.2
+        },
+        {
+          "name": "Field of Membership",
+          "weight": 1.0
+        },
+        {
+          "name": "CDFI Fund",
+          "weight": 0.1
+        },
+        {
+          "name": "CFPB",
+          "weight": 1.0
+        },
+        {
+          "name": "Credit Card Mandates",
+          "weight": 3.0
+        },
+        {
+          "name": "TCPA",
+          "weight": 0.2
+        },
+        {
+          "name": "Member Business Lending",
+          "weight": 0.3
+        },
+        {
+          "name": "Mortgage & Housing",
+          "weight": 0.4
+        },
+        {
+          "name": "CU Tax Status",
+          "weight": 3.0
+        }
+      ]
+    }
+  ],
+  "drift": [
+    {
+      "source": "DEMOGRAPHIC_POTENTIAL_METHOD.md",
+      "finding": "The eight-component growth-room document is not the active four-component footprint mode."
+    },
+    {
+      "source": "MATHEMATICAL_SPECIFICATION.md",
+      "finding": "The documented 25/30/40/5 ranking differs from the inspected current 45/10/40/5 code and page."
+    }
+  ],
+  "rejected_proxies": [
+    {
+      "field": "sai_labor_union_support_score",
+      "reason": "Labor-union support is not credit-union support."
+    },
+    {
+      "field": "sai_activist_score",
+      "reason": "Modeled activism does not document repeated CU engagement."
+    },
+    {
+      "field": "sci_ct_volunteer_chtyorg",
+      "reason": "Does not establish CU-specific participation or persistence."
+    },
+    {
+      "field": "svi_vh_* / svi_voter_frequency",
+      "reason": "Election participation does not measure CU support."
+    },
+    {
+      "field": "Party / ideology / religion / race / moral-model fields",
+      "reason": "Excluded from descriptive metric calculations."
+    }
+  ]
+}

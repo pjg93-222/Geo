@@ -1,0 +1,23 @@
+.index-evidence { border-top:1px solid var(--line); margin-top:22px; padding-top:20px; }
+.index-groups { margin:0 0 18px; font-variant-numeric:tabular-nums; }
+.index-groups>div { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:10px 0; }
+.index-groups dt { font-size:12px; }
+.index-groups dt small { display:block; color:var(--muted); font-size:11px; }
+.index-groups dd { margin:0; font-size:13px; }
+.index-evidence summary,.index-method summary { cursor:pointer; color:var(--purple); padding:8px 0; }
+.index-evidence summary:focus-visible,.index-method summary:focus-visible { outline:3px solid var(--purple); outline-offset:3px; }
+.index-part { margin:12px 0; font-size:12px; overflow-wrap:anywhere; }
+.index-part strong,.index-part span,.index-part small,.index-part code { display:block; }
+.index-part code { font-size:10px; color:var(--muted); }
+.index-method { border-top:1px solid var(--line); padding:12px 0; }
+.index-method summary { font-size:16px; font-weight:600; }
+.index-method p { max-width:75ch; }
+.index-method dl>div { margin:18px 0; }
+.index-method dt { font-weight:600; }
+.index-method dd { margin:8px 0; }
+.index-method code { display:block; overflow-wrap:anywhere; font-size:12px; }
+.hierarchy-table { overflow-x:auto; }
+.hierarchy-table table { min-width:580px; }
+.geography-context { margin:0 28px 16px; color:var(--muted); font-size:12px; max-width:100ch; }
+.regional-legend p { margin:5px 0 12px; color:var(--muted); font-size:12px; }
+@media(max-width:650px){ .geography-context { margin-inline:16px; } }

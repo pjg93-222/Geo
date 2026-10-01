@@ -1,0 +1,13 @@
+.terrier{position:relative;display:block;width:100%;height:100%;overflow:hidden;border-radius:inherit;background:#342649}
+.terrier img,.terrier video{display:block;width:100%;height:100%;object-fit:contain;max-width:none}
+.terrier-video{position:absolute;inset:0;opacity:0}
+.terrier-video.is-playing{opacity:1}
+.terrier-loading{position:fixed;inset:0;z-index:10;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#fcf7f4;color:#342649;font:500 16px/1.5 'Geist','Segoe UI',sans-serif}
+.terrier-loading-icon{width:144px;height:144px;border-radius:24px}
+.app-stage{height:100%}
+.terrier-startup{pointer-events:auto}
+.terrier-startup .terrier-loading-icon{width:min(280px,75vw);height:auto;aspect-ratio:1;border-radius:32px}
+@media(min-resolution:3.5dppx){.terrier-startup .terrier-loading-icon{width:min(240px,75vw)}}
+.map-pane>.terrier-loading{position:absolute;inset:auto auto 24px 50%;transform:translateX(-50%);background:#fcf7f4;border:1px solid #d9d4de;padding:12px 20px;border-radius:12px;gap:6px;font-size:13px}
+.map-pane>.terrier-loading .terrier-loading-icon{width:84px;height:84px;border-radius:14px}
+@media(prefers-reduced-motion:reduce){.terrier-video{display:none!important}}

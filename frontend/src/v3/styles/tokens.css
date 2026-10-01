@@ -1,0 +1,32 @@
+/* Design tokens: Credit Union Geography v3 (FIDELITY_SPEC section 3 / tokens.json).
+   Sizes are written as "Nu": N design units, where 1u = one pixel of the 2688-wide approved render.
+   The vite "design-units" plugin turns "30u" into calc(30 * var(--u)). */
+
+@font-face{font-family:'Geist';src:url('../fonts/geist-sans.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:block}
+@font-face{font-family:'Geist Mono';src:url('../fonts/geist-mono.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:block}
+
+:root{
+  /* 1 u = 100vw / 2688, clamped to the 1440..1920 px viewport range (FIDELITY_SPEC section 2). */
+  --u:clamp(0.5357px,calc(100vw / 2688),0.7143px);
+
+  --canvas:#FCF7F4;--paper:#F7EDE4;--surface:#FFFFFF;
+  --ink:#342649;--muted:#62596E;--subtle:#766880;
+  --plum:#342649;--accent:#57447B;--accent-text:#57447B;
+  --teal:#327A7A;--bar:#327A7A;--bar-track:#D0E7E8;
+  --range-track:#EEF2F5;--range:#91C1CB;
+  --line:#D8D9E6;--line-soft:#E4E5F2;--control-line:#C4C4D7;
+  --hover:#ECF5F4;--selected-row:#E6F2F2;--skeleton:#EDE7ED;--toggle-off:#CDD1DD;
+  --ring:#ECA91C;--district:#57447B;
+  --land:#EEE9DF;--water:#DCE6EA;--park:#E7EDE2;--road:#FFFFFF;--road-casing:#E2DCD3;--building:#E9E3DA;--map-label:#565470;
+
+  --s1:#E6F1EC;--s2:#C2E0DB;--s3:#8BC2BC;--s4:#54979B;--s5:#286D73;
+  --strong-r:#BE5E43;--lean-r:#DD9E85;--centre:#E5DFDA;--lean-d:#8DACCF;--strong-d:#4978AF;
+  --reg-d:#95ADCE;--reg-r:#E7A490;--reg-u:#C6C2D3;--reg-o:#F5F1E9;
+  --hatch-stripe:#C8B8E6;--hatch-base:#FAF8FC;
+
+  --shadow-overlay:0 6u 24u rgba(42,36,86,.12);
+  --shadow-popover:0 8u 28u rgba(42,36,86,.14);
+
+  --sans:'Geist','Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;
+  --mono:'Geist Mono',ui-monospace,Consolas,monospace;
+}
