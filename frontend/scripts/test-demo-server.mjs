@@ -17,7 +17,7 @@ const server=createServer(async(req,res)=>{
     }
     if(pathname==='/favicon.ico'){res.writeHead(204);return res.end();}
     if(pathname.startsWith('/api/')||pathname.includes('\\')){res.writeHead(404);return res.end();}
-    const route=pathname==='/'||pathname==='/people'||pathname==='/method'||/^\/people\/[^/]+$/.test(pathname);
+    const route=['/','/people','/method','/contacts','/criteria','/sources','/workspace'].includes(pathname.replace(/\/+$/,'')||'/')||/^\/people\/[^/]+$/.test(pathname);
     const file=resolve(root,'.'+(route?'/index.html':pathname));
     if(!file.startsWith(resolve(root)+sep)){res.writeHead(403);return res.end();}
     let actual=file;let zipped=false;

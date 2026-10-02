@@ -18,6 +18,8 @@ if(parseRoute().name==='map')void loadMap().catch(()=>{}); // React.lazy/AppBoun
 const PeopleScreen=lazy(()=>import('./components/PeopleScreen').then(m=>({default:m.PeopleScreen})));
 const ProfileScreen=lazy(()=>import('./components/ProfileScreen').then(m=>({default:m.ProfileScreen})));
 const MethodScreen=lazy(()=>import('./components/MethodScreen').then(m=>({default:m.MethodScreen})));
+const ContactsScreen=lazy(()=>import('./components/ContactsScreen').then(m=>({default:m.ContactsScreen})));
+const WorkspaceScreen=lazy(()=>import('./components/WorkspaceScreen').then(m=>({default:m.WorkspaceScreen})));
 
 function V3App(){
   const route=useRoute();
@@ -42,6 +44,8 @@ function V3App(){
     case 'people':screen=<PeopleScreen meta={meta} route={route}/>;break;
     case 'profile':screen=<ProfileScreen meta={meta} route={route}/>;break;
     case 'method':screen=<MethodScreen meta={meta}/>;break;
+    case 'contacts':screen=<ContactsScreen meta={meta} route={route}/>;break;
+    case 'criteria':case 'sources':case 'workspace':screen=<WorkspaceScreen meta={meta} route={route}/>;break;
     default:screen=<MapScreen meta={meta} route={route}/>;
   }
   const booting=!introDone||!meta;
@@ -59,3 +63,4 @@ class AppBoundary extends Component<{children:ReactNode},{failed:boolean}>{
 createRoot(document.getElementById('root')!).render(<AppBoundary><V3App/></AppBoundary>);
 
 import './styles/completion.css';
+import './styles/workspace-shell.css';

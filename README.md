@@ -2,6 +2,8 @@
 
 Local synthetic geography and profile demo with the Terrier loading animation and Mentat palette.
 
+The persistent navigation includes Map, People, Contact sheet, Criteria audit, Data & sources, Team & snapshots, and Method. Contacts support search, filters, profile/map links and matching CSV export. Team & snapshots stores local saved views and exports the bundled snapshot summary; team accounts and imports require the separate full backend.
+
 ## Desktop app
 
 ```powershell
@@ -38,6 +40,10 @@ node frontend/scripts/verify-terrier.mjs
 node frontend/scripts/verify-terrier-dart.mjs
 node frontend/scripts/verify-test-demo.mjs --no-screenshots
 node frontend/scripts/verify-debug.mjs
+node frontend/scripts/verify-contacts.mjs
+node frontend/scripts/verify-contacts-ui.mjs
+node frontend/scripts/verify-workspace.mjs
+node frontend/scripts/verify-restored-navigation.mjs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/Test-TerrierDesktop.ps1
 ```
 
@@ -46,6 +52,7 @@ Generated receipts go to `_build/` and are not versioned. Browser checks use ins
 ## Handoffs and scope
 
 - [Current Terrier handoff](TERRIER_HANDOFF_2026-10-01.md)
+- [Synthetic data coherence audit](DATA_AUDIT_2026-10-01.md)
 - [Debug and commit receipt](DEBUG_2026-10-01.md)
 - [Completed synthetic UI handoff](HANDOFF_2026-10-01_COMPLETED.md)
 

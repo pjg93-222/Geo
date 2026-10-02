@@ -8,7 +8,7 @@ export function describeOpinions(fields:Pick<FieldRow,'field'|'value'>[]){
   const parties=[['sci_ct_political_partyaff_democrat','Democrat'],['sci_ct_political_partyaff_gop','Republican'],['sci_ct_political_partyaff_ind','Independent']] as const;
   const chosen=parties.filter(([k])=>values.get(k)==='Yes');
   return {
-    outlook:outlook.length===1?OUTLOOK_LABELS[OUTLOOK_KEYS.indexOf(outlook[0])]:'Unknown',
+    outlook:outlook.length===1?OUTLOOK_LABELS[OUTLOOK_KEYS.indexOf(outlook[0])]:outlook.length>1?'Multiple responses':'Unknown',
     affiliation:chosen.length===1?chosen[0][1]:chosen.length>1?'Multiple responses':parties.every(([k])=>values.get(k)==='No')?'Other':'Unknown',
   };
 }

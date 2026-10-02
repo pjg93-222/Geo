@@ -53,9 +53,10 @@ function Body({p}:{p:Profile}){
     <div className="p-head">
       <div className="p-who">
         <Link to={backTarget()} className="back-link">{'←'} People</Link>
+        <Link to={'/contacts?q='+encodeURIComponent(p.person_id)} className="profile-contact">Contact details</Link>
         <h1 className="person-name" title={p.name}>{p.name}</h1>
         <p className="person-meta">
-          {[p.age!=null?String(p.age):'',`Household of ${p.household_size}`,reg,blockLabel(p.block),precinctLabel(p.precinct)].filter(Boolean)
+          {[p.age!=null?String(p.age):'',`Household of ${p.household_size}`,`Party registration: ${reg}`,blockLabel(p.block),precinctLabel(p.precinct)].filter(Boolean)
             .map((t,i)=><span key={i}>{i>0&&<b className="dot">{MIDDOT}</b>}{t}</span>)}
         </p>
       </div>
@@ -79,8 +80,8 @@ function Body({p}:{p:Profile}){
       <IndexPanel title={GROUP_LABEL.soi} card={p.cards.soi}/>
       <section className="card lean">
         <h2 className="panel-title">Political views</h2>
-        <dl className="opinion-facts"><div><dt>Registration</dt><dd>{reg}</dd></div><div><dt>Affiliation</dt><dd>{opinions.affiliation}</dd></div><div><dt>Outlook</dt><dd>{opinions.outlook}</dd></div></dl>
-        <p className="lean-note">Not part of overall standing</p>
+        <dl className="opinion-facts"><div><dt>Party registration</dt><dd>{reg}</dd></div><div><dt>Self-described affiliation</dt><dd>{opinions.affiliation}</dd></div><div><dt>Political outlook</dt><dd>{opinions.outlook}</dd></div></dl>
+        <p className="lean-note">Separate responses. No belief score.</p>
       </section>
     </div>
 

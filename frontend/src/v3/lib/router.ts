@@ -1,8 +1,9 @@
-// A minimal history router: "/" map, "/people", "/people/:pid", "/method". The ?demo=1 and ?source=fixture flags are
+// History router for the map, people/profiles, contacts, audit, sources, workspace and method. Demo/source flags are
 // kept on every link so a pseudonymised session stays pseudonymised.
 import {useEffect,useState} from 'react';
+import {rememberView} from './savedViews';
 
-export type RouteName='map'|'people'|'profile'|'method';
+export type RouteName='map'|'people'|'profile'|'method'|'contacts'|'criteria'|'sources'|'workspace';
 export interface Route{name:RouteName;pid:string;search:URLSearchParams}
 
 const KEEP=['demo','source'];
@@ -14,6 +15,9 @@ export function parseRoute(loc:Location=location):Route{
   const m=/^\/people\/([^/]+)$/.exec(path);
   if(m){let pid=m[1];try{pid=decodeURIComponent(pid);}catch{/* invalid URI becomes an unknown fixture id */}return {name:'profile',pid,search};}
   if(path==='/method')return {name:'method',pid:'',search};
+  for(const name of ['contacts','criteria','sources','workspace'] as const){
+    if(path==='/'+name)return {name,pid:'',search};
+  }
   return {name:'map',pid:'',search};
 }
 
@@ -27,9 +31,12 @@ export function withKept(to:string):string{
 }
 
 const EVENT='v3:navigate';
+export const LOCATION_EVENT='v3:location';
 export function navigate(to:string,opts:{replace?:boolean}={}):void{
+  rememberView(location.pathname+location.search);
   const url=withKept(to);
   if(opts.replace)history.replaceState(null,'',url);else history.pushState(null,'',url);
+  window.dispatchEvent(new Event(LOCATION_EVENT));
   window.dispatchEvent(new Event(EVENT));
 }
 
@@ -37,6 +44,7 @@ export function useRoute():Route{
   const [route,setRoute]=useState<Route>(()=>parseRoute());
   useEffect(()=>{
     const on=()=>setRoute(parseRoute());
+    rememberView(location.pathname+location.search);
     window.addEventListener('popstate',on);window.addEventListener(EVENT,on);
     return ()=>{window.removeEventListener('popstate',on);window.removeEventListener(EVENT,on);};
   },[]);
@@ -49,4 +57,6 @@ export function replaceQuery(params:Record<string,string|null>):void{
   for(const [k,v] of Object.entries(params)){if(v===null||v==='')q.delete(k);else q.set(k,v);}
   const s=q.toString();
   history.replaceState(null,'',location.pathname+(s?'?'+s:''));
+  window.dispatchEvent(new Event(LOCATION_EVENT));
+  rememberView(location.pathname+location.search);
 }

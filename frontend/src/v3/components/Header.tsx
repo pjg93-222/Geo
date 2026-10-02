@@ -1,10 +1,9 @@
-// Top bar (FIDELITY_SPEC section 3.5): one bar on every screen. Map variant carries the index and level controls;
-// page variant carries the Map / People / Method tabs. Both carry the search field.
+// Shared identity/search and persistent section navigation. The map adds its index and geography controls.
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {Search} from 'lucide-react';
 import {TerrierMark} from './TerrierMark';
 import {Segmented,cx} from './ui';
-import {navigate,withKept} from '../lib/router';
+import {navigate,withKept,LOCATION_EVENT,type RouteName} from '../lib/router';
 import {int,countLabel,areaLabel,LEVELS,LEVEL_LABEL,type Level} from '../lib/format';
 import {getAreas,searchPeople} from '../api/client';
 import type {Group,Meta} from '../types';
@@ -104,11 +103,11 @@ function SearchBox({meta}:{meta:Meta|null}){
 
 export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:Group;level:Level;onIndex:(g:Group)=>void;onLevel:(l:Level)=>void}){
   return <header className="topbar map">
-    <Brand busy={p.busy}/>
-    <div className="seg-slot index"><Segmented variant="index" label="Index" items={INDEX_ITEMS} value={p.index} onChange={p.onIndex}/></div>
-    <div className="seg-slot level"><Segmented variant="level" label="Level" items={LEVELS.map(l=>({id:l,label:LEVEL_LABEL[l]}))} value={p.level} onChange={p.onLevel}/></div>
-    <div className="topbar-right">
-      <SearchBox meta={p.meta}/>
+    <div className="masthead"><Brand busy={p.busy}/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <SectionNav active="map"/>
+    <div className="map-toolbar">
+      <div className="seg-slot index"><Segmented variant="index" label="Index" items={INDEX_ITEMS} value={p.index} onChange={p.onIndex}/></div>
+      <div className="seg-slot level"><Segmented variant="level" label="Level" items={LEVELS.map(l=>({id:l,label:LEVEL_LABEL[l]}))} value={p.level} onChange={p.onLevel}/></div>
       <div className="counts">{p.meta
         ?<><Link to="/people">{countLabel(p.meta.people,'person','people')}</Link> {'·'} {countLabel(p.meta.households,'household')}</>
         :<span className="sk" style={{width:'calc(250 * var(--u))',height:'calc(14 * var(--u))'}}/>}</div>
@@ -116,13 +115,36 @@ export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:Group;level:Leve
   </header>;
 }
 
-export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:'map'|'people'|'method'}){
-  const tabs:{id:'map'|'people'|'method';label:string;to:string}[]=[{id:'map',label:'Map',to:'/'},{id:'people',label:'People',to:'/people'},{id:'method',label:'Method',to:'/method'}];
+type Section=Exclude<RouteName,'profile'>;
+const tabs:{id:Section;label:string;to:string}[]=[
+  {id:'map',label:'Map',to:'/'},{id:'people',label:'People',to:'/people'},
+  {id:'contacts',label:'Contact sheet',to:'/contacts'},{id:'criteria',label:'Criteria audit',to:'/criteria'},
+  {id:'sources',label:'Data & sources',to:'/sources'},{id:'workspace',label:'Team & snapshots',to:'/workspace'},
+  {id:'method',label:'Method',to:'/method'},
+];
+function SectionNav({active}:{active:Section}){
+  const [viewPath,setViewPath]=useState(()=>location.pathname+location.search);
+  const nav=useRef<HTMLElement>(null);
+  useEffect(()=>{
+    const sync=()=>setViewPath(location.pathname+location.search);sync();
+    window.addEventListener(LOCATION_EVENT,sync);window.addEventListener('popstate',sync);
+    return ()=>{window.removeEventListener(LOCATION_EVENT,sync);window.removeEventListener('popstate',sync);};
+  },[]);
+  useEffect(()=>{
+    const container=nav.current;const current=container?.querySelector<HTMLElement>('[aria-current="page"]');
+    if(container&&current){
+      const left=current.offsetLeft-container.offsetLeft;const right=left+current.offsetWidth;
+      if(left<container.scrollLeft)container.scrollLeft=Math.max(0,left-16);
+      else if(right>container.scrollLeft+container.clientWidth)container.scrollLeft=right-container.clientWidth+16;
+    }
+  },[active]);
+  return <div className="section-bar"><nav ref={nav} className="tabs" aria-label="Sections">
+    {tabs.map(t=><Link key={t.id} to={t.to} className={cx('tab',t.id===active&&'on')} aria-current={t.id===active?'page':undefined}>{t.label}</Link>)}
+  </nav>{(active==='map'||active==='people')&&<a className="save-view-link" href={withKept('/workspace?from='+encodeURIComponent(viewPath))} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey||e.button!==0)return;e.preventDefault();navigate('/workspace?from='+encodeURIComponent(location.pathname+location.search));}}>Save view</a>}</div>;
+}
+export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:Section}){
   return <header className="topbar page">
-    <Brand busy={p.busy}/>
-    <nav className="tabs" aria-label="Sections">
-      {tabs.map(t=><Link key={t.id} to={t.to} className={cx('tab',t.id===p.active&&'on')} aria-current={t.id===p.active?'page':undefined}>{t.label}</Link>)}
-    </nav>
-    <div className="topbar-right"><SearchBox meta={p.meta}/></div>
+    <div className="masthead"><Brand busy={p.busy}/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <SectionNav active={p.active}/>
   </header>;
 }

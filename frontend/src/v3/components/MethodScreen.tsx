@@ -22,15 +22,19 @@ export function MethodScreen({meta}:{meta:Meta|null}){
       <section>
         <h2 className="section-title">Political views</h2>
         <p>Registration, affiliation and outlook are separate categorical responses. They are not combined into a displayed belief score, standardized, ranked, or included in overall standing. The Outlook filter uses the original response. The registration map shows the largest registration group, with category proportions in the detail panel; Mixed means a tie.</p>
-        <p>These test profiles currently supply every opinion response. Missing or conflicting categories display as Unknown or Multiple responses; no missing response is assigned a middle position. Ethical beliefs are not collected or scored in this preview. The other three indices retain their existing synthetic score and percentile conventions.</p>
+        <p>Test responses come from authored categorical scenarios, with occasional crossovers between registration, affiliation and outlook. These fixture choices are not population estimates. Missing or conflicting categories display as Unknown or Multiple responses; no missing response is assigned a middle position. Ethical beliefs are not collected or scored in this preview. The other three indices retain their synthetic score and percentile conventions.</p>
       </section>
       <section>
         <h2 className="section-title">Measured and estimated</h2>
         <p>Each person has 40 framework fields: 12 in Credit Union Alignment, 10 in Participation, 7 in Sphere of Influence and 11 in Political views. A field is observed or estimated; estimated values are shown with their probability. Opinion fields display their original responses without score contributions. % measured is an illustrative evidence indicator in this test data.</p>
       </section>
       <section>
+        <h2 className="section-title">Household consistency</h2>
+        <p>Every fixture household has an adult-only roster, so its adult count equals its listed size and its child count is zero. Household members share tenure and dwelling facts. These facts are fixed before the remaining illustrative index inputs are generated; a target outside their feasible range is adjusted to keep contributions and displayed standings consistent.</p>
+      </section>
+      <section>
         <h2 className="section-title">Areas</h2>
-        <p>Blocks, precincts, tracts and ZIPs are built on the registration basis. Every synthetic area is shown, including areas containing one test person. No minimum-count floor applies to these generated fixtures. Grades exist for each person and each index; they are not given to areas.</p>
+        <p>Blocks, tracts and ZIPs use public Census boundary context. Preview precincts are generated block partitions, not official election precincts. Areas are built on the registration basis. Every synthetic area is shown, including areas containing one test person. No minimum-count floor applies to these generated fixtures. Grades exist for each person and each index; they are not given to areas.</p>
       </section>
     </main>
   </div>;

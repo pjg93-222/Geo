@@ -60,12 +60,27 @@ export function core(hh:number,j:number):Core{
   const key=hh+':'+j;const hit=cores.get(key);if(hit)return hit;
   const c=compute(hh,j);cores.set(key,c);return c;
 }
-/** Raw categorical dummy responses. Never fitted to a score or a cohort.
- * Registration, affiliation and outlook are distinct responses. */
-function opinionResponses(hh:number,j:number):Record<string,number>{
+type Affiliation='D'|'R'|'U'|'O';
+/** Fixture scenario weights, not population estimates or quotas. A person's categorical
+ * answers are selected once from a seeded joint scenario, never inferred from a score. */
+const AFFILIATION_SCENARIOS:Record<Core['reg'],readonly number[]>={
+  D:[88,1,9,2],R:[1,88,9,2],U:[14,14,70,2],O:[4,4,12,80],
+};
+const OUTLOOK_SCENARIOS:Record<Affiliation,readonly number[]>={
+  D:[1,5,24,45,25],R:[25,45,24,5,1],U:[5,15,60,15,5],O:[10,20,40,20,10],
+};
+function scenarioChoice(r:()=>number,weights:readonly number[]):number{
+  let choice=r()*weights.reduce((sum,w)=>sum+w,0);
+  for(let i=0;i<weights.length;i++){choice-=weights[i];if(choice<0)return i;}
+  return weights.length-1;
+}
+/** Registration, self-described affiliation and outlook remain distinct responses.
+ * These authored dummy scenarios include occasional crossovers; they do not rewrite
+ * real opinions, force party/outlook equivalence, or standardize any belief. */
+function opinionResponses(hh:number,j:number,registration:Core['reg']):Record<string,number>{
   const r=rng(hash('raw-opinions',hh,j));
-  const outlook=Math.floor(r()*5);
-  const affiliation=['D','R','U','O'][Math.floor(r()*4)];
+  const affiliation=(['D','R','U','O'] as const)[scenarioChoice(r,AFFILIATION_SCENARIOS[registration])];
+  const outlook=scenarioChoice(r,OUTLOOK_SCENARIOS[affiliation]);
   return {
     sci_cpi_conservative_index:Number(outlook<2),sci_cpi_liberal_index:Number(outlook>2),
     sci_ct_political_partyaff_democrat:Number(affiliation==='D'),
@@ -78,18 +93,52 @@ function opinionResponses(hh:number,j:number):Record<string,number>{
     sci_ct_political_outlk_vliberal:Number(outlook===4),
   };
 }
+
+interface HouseholdFact{value:string;exposure:number}
+// All members in this fixture are adults. The two count fields therefore use the
+// same fixed reference distribution; children is explicitly 0 (constant ridit .5).
+const HOUSEHOLDS=45000;
+const sizeRidits=(()=>{
+  const counts=Array<number>(7).fill(0);
+  for(let hh=1;hh<=HOUSEHOLDS;hh++){const size=hhSize(hh);counts[size]+=size;}
+  const total=counts.reduce((sum,n)=>sum+n,0);let before=0;
+  return counts.map(n=>{const value=(before+n/2)/total;before+=n;return value;});
+})();
+function householdFacts(hh:number):Record<string,HouseholdFact>{
+  const r=rng(hash('household-facts',hh));const x=r();
+  const owner=x<.45?'H':x<.9?'R':'U';
+  const tenure=owner==='H'?1:owner==='R'?0:.5;
+  const dwelling=['S','H','P','G'][Math.floor(r()*4)];const size=hhSize(hh);
+  return {
+    sci_owner_renter:{value:OWNER_TEXT[owner],exposure:tenure},
+    sii_homeowner:{value:'Code '+owner,exposure:tenure},
+    sii_dwelling_type:{value:'Code '+dwelling,exposure:dwelling==='S'?1:.5},
+    household_size:{value:String(size),exposure:sizeRidits[size]},
+    sci_number_of_adults_in_household:{value:String(size),exposure:sizeRidits[size]},
+    sci_number_of_children_in_household:{value:'0',exposure:.5},
+  };
+}
+function feasibleScore(group:'cua'|'soi',score:number,hh:number):number{
+  const facts=householdFacts(hh);let floor=0,remaining=0;
+  for(const d of FIELDS.filter(f=>f.group===group)){
+    if(facts[d.key])floor+=d.w*facts[d.key].exposure;else remaining+=d.w;
+  }
+  // Keep the illustrative target wherever possible. An impossible extreme must
+  // move to the feasible boundary rather than contradict the shared household facts.
+  return clamp(score,100*floor,100*(floor+remaining));
+}
 function compute(hh:number,j:number):Core{
   const size=hhSize(hh);
   const rh=rng(hash('hh',hh));const zhh=gauss(rh);
   const r=rng(hash('p',hh,j));
   // /1.7 keeps the top of a 45,000-household world near 98 instead of saturating at 100 (fixture look only)
   const mix=(z:number)=>(0.72*zhh+0.69*z)/1.7;
-  const cua=phi100(mix(gauss(r)));const part=phi100(mix(gauss(r)));const soi=phi100(mix(gauss(r)));
+  const cua=feasibleScore('cua',phi100(mix(gauss(r))),hh);const part=phi100(mix(gauss(r)));const soi=feasibleScore('soi',phi100(mix(gauss(r))),hh);
   const ovr=0.40*cua+0.35*part+0.25*soi;
   const x=r();const reg:Core['reg']=x<0.16?'D':x<0.43?'R':x<0.97?'U':'O';
   const regC=reg==='D'?50:reg==='R'?-50:0;
   gauss(r); // Keep the independent fixture streams (age, measured %, other grades) unchanged.
-  const opinions=opinionResponses(hh,j);
+  const opinions=opinionResponses(hh,j,reg);
   const lean=regC+FIELDS.filter(d=>d.group==='lean'&&d.kind!=='party').reduce((sum,d)=>sum+d.w*opinions[d.key],0);
   const measured=clamp(70+gauss(r)*13,28,98);
   const hw=3+10*(1-measured/100);
@@ -154,7 +203,6 @@ function place(g:Geo,hh:number):Placed{
 }
 
 // --- pool: the fixture world's ranked list ---------------------------------------------------------------------
-const HOUSEHOLDS=45000;
 export function fixtureTotals(){let people=0;for(let hh=1;hh<=HOUSEHOLDS;hh++)people+=hhSize(hh);return {people,households:HOUSEHOLDS};}
 interface Pool{rows:Core[];rankOf:Map<string,number>;balanced:Set<string>}
 let poolP:Promise<Pool>|null=null;
@@ -175,7 +223,7 @@ function pool():Promise<Pool>{
   return poolP;
 }
 function rowOf(c:Core,rank:number):PeopleRow{
-  const responses=opinionResponses(c.hh,c.j);
+  const responses=opinionResponses(c.hh,c.j,c.reg);
   const index=OUTLOOK_KEYS.findIndex(k=>responses[k]===1);
   return {
     rank:String(rank),person_id:c.id,name:c.name,ovr_pct:c.ovr,lo:c.lo,hi:c.hi,cua_pct:c.cua,part_pct:c.part,soi_pct:c.soi,
@@ -191,7 +239,7 @@ export async function fixturePeople(q:PeopleQuery):Promise<PeoplePage>{
   if(q.reg!=='all')list=list.filter(x=>x.c.reg===q.reg);
   if(q.grade==='AB')list=list.filter(x=>x.c.grade.ovr==='A'||x.c.grade.ovr==='B');
   if(q.lean!=='all')list=list.filter(x=>{
-    const responses=opinionResponses(x.c.hh,x.c.j);const index=OUTLOOK_KEYS.findIndex(k=>responses[k]===1);
+    const responses=opinionResponses(x.c.hh,x.c.j,x.c.reg);const index=OUTLOOK_KEYS.findIndex(k=>responses[k]===1);
     if(q.lean==='U')return index<0;
     return index>=0&&index-2===Number(q.lean);
   });
@@ -250,11 +298,13 @@ function buildGroup(group:'cua'|'part'|'soi'|'lean',c:Core):FieldGroup{
     let observed=defs.map(d=>r()<frac);
     const exposures=new Array<number>(defs.length).fill(0);
     const fixed=new Array<boolean>(defs.length).fill(false);
+    const facts=householdFacts(c.hh);
     const attempt=(useFixed:boolean):boolean=>{
       let sFixed=0;
       defs.forEach((d,i)=>{
-        fixed[i]=useFixed&&observed[i]&&BINARY.has(d.kind);
-        if(fixed[i]){exposures[i]=r()<target?1:0;sFixed+=w[i]*exposures[i];}
+        const fact=facts[d.key];
+        fixed[i]=Boolean(fact)||(useFixed&&observed[i]&&BINARY.has(d.kind));
+        if(fixed[i]){exposures[i]=fact?fact.exposure:r()<target?1:0;sFixed+=w[i]*exposures[i];}
       });
       const idx=defs.map((_d,i)=>i).filter(i=>!fixed[i]);
       const cap=idx.reduce((s,i)=>s+w[i],0);const need=target-sFixed;
@@ -271,14 +321,14 @@ function buildGroup(group:'cua'|'part'|'soi'|'lean',c:Core):FieldGroup{
       const status=isObs?'observed' as const:'estimated' as const;
       const yes=e>=0.5;
       rows.push({
-        field:d.key,label:d.label,value:valueText(d,e,c,r),status,
+        field:d.key,label:d.label,value:facts[d.key]?.value??valueText(d,e,c,r),status,
         p:isObs?null:Math.round((BINARY.has(d.kind)?(yes?e:1-e):0.55+0.4*r())*100)/100,
         exposure:e,contribution:100*d.w*e,
       });
     });
   }else{
     const regC=c.reg==='D'?50:c.reg==='R'?-50:0;
-    const opinions=opinionResponses(c.hh,c.j);
+    const opinions=opinionResponses(c.hh,c.j,c.reg);
     for(const d of defs){
       if(d.key==='svi_party_registration'){
         rows.push({field:d.key,label:d.label,value:valueText(d,1,c,r),status:'observed',p:null,exposure:1,contribution:regC});

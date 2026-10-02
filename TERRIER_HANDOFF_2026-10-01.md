@@ -1,6 +1,6 @@
 # Terrier — completed handoff
 
-Completed 2026-10-01 in the isolated synthetic preview. This current receipt includes the caption-free automatic startup and source-resolution media follow-up; it supersedes earlier preview-control, CSS-animation, and numerical partisan-display descriptions.
+Completed 2026-10-01 in the isolated synthetic preview. The latest release restores the full navigation and contact sheet, repairs contradictory dummy household facts, and improves political fixture coherence. It also retains the caption-free automatic startup and source-resolution media. See the latest release section below and [the full data audit](DATA_AUDIT_2026-10-01.md).
 
 - App: http://127.0.0.1:8767/
 - Motion preview: http://127.0.0.1:8767/brand/preview.html
@@ -133,3 +133,43 @@ The Windows desktop app is now named exactly **Terrier**. `Install-TerrierDeskto
 Validation passed: production build/compression, all 20 unit tests, desktop icon/shortcut identity, cold launch, warm PID reuse, refusal of an unrelated port owner without terminating it, restored service, exact static/dynamic title, and startup video/error/reduced-motion tests. Actual Desktop shortcut launch produced a Chrome app window titled exactly `Terrier`. Evidence: `_build/desktop-verification/checks.json`, `window.json`, and `_build/terrier-startup-verification/checks.json`.
 
 Git: `main` was created from the prior initial commit `7366030`. This desktop release is committed on `codex/terrier` and merged into local `main` by fast-forward, preserving the earlier app/debug work. No remote is configured and nothing is pushed. The desktop installer is rerun from the merged revision. These scripts make future desktop regeneration repeatable.
+
+## Restored workspace and data coherence — latest release, 2026-10-01
+
+The desktop shortcut had switched from the older full application to a standalone preview containing only Map, People and Method. The current release restores persistent navigation to **Map, People, Contact sheet, Criteria audit, Data & sources, Team & snapshots, and Method**. Direct route reloads work in the production server. Every section is reachable from the map and other pages, including mobile horizontal navigation.
+
+### Data repairs
+
+- Audited every generated person: **109,150 people in 45,000 households**. Adult counts, child counts, roster size and shared tenure now agree. Adult-count-over-size errors fell from 20,729 to zero; roster disagreements from 84,699 to zero; tenure/homeowner conflicts from 8,750 to zero.
+- The old affiliation/outlook generator used independent uniform draws. It now uses authored joint categorical scenarios, with occasional valid crossovers retained. Conservative Democratic affiliates changed from 40.21% to 6.16% of Democratic affiliates. These are fixture design choices, not measured population rates or a rule for correcting real opinions.
+- Registration, self-described affiliation and political outlook are explicitly labelled separately. They remain unscored and excluded from overall standing; missing/conflicting responses stay Unknown/Multiple responses. Ethical beliefs are not collected.
+- Fixed household facts are no longer overwritten to meet an impossible illustrative score target. Contributions reconcile across the full cohort; 5,767 overall standings changed at feasible boundaries, with a maximum absolute change of 7.2239 points. The 40/35/25 overall formula is unchanged. Full evidence and limitations: [DATA_AUDIT_2026-10-01.md](DATA_AUDIT_2026-10-01.md).
+
+### Restored functions
+
+- **Contact sheet:** all 109,150 existing dummy identities; search by name, email, phone, address or ID; address/channel filters; 50-row pages; keyboard-accessible contact dialog; profile and census-block links; CSV export of all matching rows; retry and empty states. Contact values are generated placeholders on example.test / fictional 555 ranges; absent data remains absent. Coverage: 74,096 email, 57,270 phone, 79,668 wireless, 4,427 with no channels.
+- **Criteria audit:** all 40 current framework fields, group/search filters and matching CSV export; 11 political fields marked Not scored.
+- **Data & sources:** source ledger and fixture coverage; identifies synthetic precinct partitions and independently generated area statistics. The area map does not aggregate the displayed dummy profiles.
+- **Team & snapshots:** current bundled snapshot summary download plus persistent local saved views with save/open/delete. Actual team administration, imports and switching among backend snapshots require the separate full backend; this isolated preview does not offer those services.
+- **Save view:** map/People link retains the current query, including after control changes, when clicked normally or opened in another tab. Saved map views retain layer/index/selected area; camera pan and zoom are not stored.
+
+### Higgsfield design pass
+
+Used the existing **Terrier — Mentat identity** project and original approved logo for one layout study, generation `0c5e23bd-5073-4965-9336-fbe3257ada0b` (GPT Image 2.5, quoted 0.25 credits). [Higgsfield layout reference](https://d8j0ntlcm91z4.cloudfront.net/user_3J1aVESwhbXLraSW8PtRFWWgpV2/hf_20261002_014936_0c5e23bd-5073-4965-9336-fbe3257ada0b.png).
+
+Applied persistent two-row navigation, the gold active marker, clear table hierarchy and teal contact actions. The contact table scrolls within a bounded region with sticky column headings. Kept the existing Geist typography, approved logo and native 960px loading video. No media was re-encoded in this release. Desktop/mobile screenshots were inspected, followed by one confirmation pass after navigation and spacing fixes.
+
+### Verification and release
+
+Passed production TypeScript/Vite build and compression, **26 unit tests**, the full-cohort fixture audit, complete contact-data checks, contact UI flows/CSV/retry, workspace exports/bookmarks, all seven direct routes, browser Back/Forward, saved-link query synchronization, desktop/mobile overflow checks, and existing map/profile/loader regressions. Browser suites reported zero unexpected page errors and zero live API requests. Startup still preserves DPR2/DPR3 source resolution, automatic entry, reduced motion and failure recovery.
+
+Local receipts (ignored build artifacts):
+
+- `_build/test-dummy-verification/fixture-checks.json` and `browser-functional-final.json`
+- `_build/contact-verification/contacts-checks.json` and `contacts-ui-checks.json`
+- `_build/workspace-verification/checks.json`
+- `_build/restored-workspace/checks.json` and desktop/mobile PNGs
+- `_build/debug-verification/` and `_build/terrier-startup-verification/checks.json`
+- `_build/desktop-verification/checks.json`
+
+The Desktop shortcut was regenerated as **Terrier**. Cold launch, warm reuse, icon/shortcut identity and unrelated-port-owner protection passed; the verified fixture server was restored on 8767. Release branch: `codex/terrier-restored-workspace`, fast-forward merged into local `main`. No Git remote is configured. Original services/data on ports 8765/8766 remain outside this release.
