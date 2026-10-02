@@ -1,4 +1,4 @@
-// CSV export guard of lib/csv.ts (same rule as csv_value in server/research/terrier_contacts.py). Run with: node --test tests/v3/
+// CSV export guard of lib/csv.ts (same rule as csv_value in server/research/terrier_contacts.py).
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {csvText, csvValue} from '../../src/v3/lib/csv.ts';
