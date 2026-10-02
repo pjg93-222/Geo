@@ -111,6 +111,7 @@ async function step(name,fn,needs=[]){
 
 let listing=null;     // the list payload the screen is showing after "generate"
 let savedKey='';      // the key of the list saved by the first recorded result
+let reknockKey='';    // the key of the re-knock list made from it
 const csvPath=join(work,'streets.csv');
 // a matched row, a street with two places, one that matches nothing, and a second matched row
 await writeFile(csvPath,'street\r\nCedar Heights Drive\r\nRidgeview Court\r\nPine St\r\nZzyzx Rd\r\n');
@@ -311,9 +312,96 @@ try{
     assert.deepEqual(shown,wanted.map(v=>text(v.name)).sort(),'The screen does not show the Not home voters');
     const mine=(await api('/api/v3/walk/lists')).lists.find(l=>l.key===again.list.key);
     assert.ok(mine&&mine.kind==='reknock'&&mine.voters===wanted.length,'The saved lists do not hold the re-knock list');
-    report.walk.reknockVoters=wanted.length;
+    report.walk.reknockVoters=wanted.length;reknockKey=again.list.key;
     return `Not home again: a new re-knock list holds only the ${wanted.length} voters marked NH (not the S or U voters)`;
   },['result persists']);
+
+  // ---- 8b. a result whose save fails is not lost by leaving the tab; it is sent, with its visit day, on return -----------------------
+  await step('result survives leaving',async()=>{
+    const voter=flat(await api('/api/v3/walk/lists/'+reknockKey))[0];
+    const isSave=url=>url.pathname==='/api/v3/walk/dispositions';
+    const down=route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Verification source unavailable'})});
+    await page.route(isSave,down);
+    try{
+      await choose(groups().first(),'MV');
+      await page.getByRole('alert').filter({hasText:'Results not saved'}).first().waitFor();
+      const nav=page.getByRole('navigation',{name:'Sections',exact:true});
+      await nav.getByRole('link').first().click();                      // another tab of the app: the walk screen goes away
+      await heading().waitFor({state:'detached'});
+      await page.waitForTimeout(800);                                   // the send on leaving fails too: the result stays on the page's shelf
+    }finally{await page.unroute(isSave,down);}
+    const today=await page.evaluate(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;});
+    const [sent]=await Promise.all([page.waitForRequest(q=>new URL(q.url()).pathname==='/api/v3/walk/dispositions'&&q.method()==='POST'),
+      page.getByRole('navigation',{name:'Sections',exact:true}).getByRole('link',{name:'Walk list',exact:true}).click()]);
+    const body=sent.postDataJSON();
+    assert.equal(body.list,reknockKey,'sent for the list it was set on');
+    assert.deepEqual(body.entries,[{person_id:voter.person_id,code:'MV'}],'the result set before leaving is sent on return');
+    assert.equal(body.on,today,'with the day of the visit');
+    await until(async()=>{const v=flat(await api('/api/v3/walk/lists/'+reknockKey)).find(x=>x.person_id===voter.person_id);return v?.last?.code==='MV'&&v.last.list===reknockKey;},'the MV on file');
+    return 'A result whose save failed survives leaving the Walk list tab and is saved on return, for its own list and visit day';
+  },['not home again']);
+
+  // ---- 8c. the first match of an uploaded file answers after a saved list replaced the picker: the answer changes nothing --------------
+  await step('late file match',async()=>{
+    await heading().waitFor();
+    const late=join(work,'late.csv');await writeFile(late,'street\r\nJuniper Lane\r\n');
+    const isMatch=url=>url.pathname==='/api/v3/walk/match';
+    let release;const held=new Promise(r=>{release=r;});
+    const slow=async route=>{await held;await route.continue().catch(()=>{});};
+    await page.route(isMatch,slow);
+    try{
+      const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Upload CSV',exact:true}).click()]);
+      await chooser.setFiles(late);
+      await page.getByRole('button',{name:'Matching…',exact:true}).waitFor();
+      await Promise.all([page.waitForResponse(r=>isGet(r,'/api/v3/walk/lists/'+savedKey)),page.getByLabel('Saved lists',{exact:true}).selectOption(savedKey)]);
+      await tables().first().waitFor();
+      const chips=await page.getByRole('list',{name:'Streets in this walk list'}).innerText();
+      release();await page.waitForTimeout(1500);
+      assert.equal(await page.getByRole('list',{name:'Streets in this walk list'}).innerText(),chips,'the late answer changed the saved list\'s streets');
+      assert.equal(await page.getByRole('button',{name:/^Remove Juniper Ln/}).count(),0,'Juniper Ln was added to another list\'s picker');
+      assert.equal(await page.getByText(/late\.csv/).count(),0,'the late file is shown as the upload');
+      await page.getByRole('button',{name:'Upload CSV',exact:true}).waitFor();
+    }finally{release();await page.unroute(isMatch,slow);}
+    return 'An uploaded file still being matched when a saved list is opened adds nothing to that list\'s picker';
+  },['result persists']);
+
+  // ---- 8d. a result the server refuses stays the walker's mark, flagged and named; it does not block opening another list --------------
+  await step('refused result',async()=>{
+    const saved=await api('/api/v3/walk/lists/'+savedKey);
+    const run=saved.runs.findLast(r=>r.doors.some(d=>d.voters.length)),door=run.doors.findLast(d=>d.voters.length);   // the last voter on screen
+    const isSave=url=>url.pathname==='/api/v3/walk/dispositions';
+    let posts=0;
+    const refuse=route=>{posts++;return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Some of those voters are not on this list.'})});};
+    const group=()=>groups().last();
+    await page.route(isSave,refuse);
+    try{
+      await choose(group(),'O');
+      const note=page.getByRole('alert').filter({hasText:/The server refused 1 result, so it was not saved\. Record that door again:/}).first();
+      await note.waitFor();
+      const said=text(await note.innerText());
+      assert.ok(said.includes(`${door.house}`)&&said.includes(`${run.street} (O)`),'the note names the door and its code');
+      assert.ok(said.includes('Some of those voters are not on this list.'),'the note gives the server\'s reason');
+      assert.equal(await group().getByRole('radio',{name:code('O')}).getAttribute('aria-checked'),'true','the walker\'s O stays marked');
+      await page.getByText('O (not saved)',{exact:true}).last().waitFor();
+      assert.equal(await page.getByRole('alert').filter({hasText:'Results not saved'}).count(),0,'a refusal offers no Retry');
+      const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download CSV',exact:true}).click()]);
+      const file=join(work,'refused.csv');await download.saveAs(file);
+      const table=csvRows(stripBom(await readFile(file,'utf8'))),result=table[0].map(h=>h.toLowerCase()).indexOf('result');
+      assert.equal(table.at(-1)[result],'O (not saved)','the CSV keeps the refused O, flagged');
+      const before=posts;
+      await Promise.all([page.waitForResponse(r=>isGet(r,'/api/v3/walk/lists/'+reknockKey)),page.getByLabel('Saved lists',{exact:true}).selectOption(reknockKey)]);
+      await tables().first().waitFor();
+      assert.equal(posts,before,'the refused result is not sent again');
+      assert.equal(await page.getByText('Some results are not saved yet',{exact:false}).count(),0,'opening another list is blocked');
+      await Promise.all([page.waitForResponse(r=>isGet(r,'/api/v3/walk/lists/'+savedKey)),page.getByLabel('Saved lists',{exact:true}).selectOption(savedKey)]);
+      await tables().first().waitFor();
+      await until(async()=>(await group().getByRole('radio',{name:code('O')}).getAttribute('aria-checked'))==='true','the refused O to come back with its list');
+      await page.getByText('O (not saved)',{exact:true}).last().waitFor();
+      await page.getByRole('button',{name:'Dismiss',exact:true}).click();
+      await note.waitFor({state:'detached'});
+    }finally{await page.unroute(isSave,refuse);}
+    return 'A refused result stays marked and flagged "not saved" (screen and CSV), the note names its door and the server\'s reason, it is not retried, and another saved list opens straight away';
+  },['not home again']);
 
   // ---- 9. phone width: no sideways page scroll, tables scroll in their own region ---------------------------------------------
   await step('mobile',async()=>{

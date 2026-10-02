@@ -921,7 +921,174 @@ test('walk screen wiring (round 4): the shelf outlives the screen, a file is mat
   const save = /async function save\(title:string\)\{[\s\S]*?\n  \}/.exec(src)?.[0] ?? '';
   assert.ok(save.includes('ensureSaved(title)') && !save.includes('.focus()'), 'save() does not focus the button it has just disabled');
   assert.ok(/if\(refocusSave\.current&&busy===''&&!saveOpen\)\{refocusSave\.current=false;saveButton\.current\?\.focus\(\);\}/.test(src), 'focus returns to Save after the render that cleared busy');
-  assert.ok(/markAfterClick\(p\.value,c\)/.test(src) && !/initialResults/.test(src), 'a code on file is history, not a mark');
-  assert.ok(/setResults\(listMarks\(p\)\)/.test(src), 'a list opens with the results recorded on it selected');
+  assert.ok(/markAfterClick\(p\.value,c,p\.unsaved\)/.test(src) && !/initialResults/.test(src), 'a code on file is history, not a mark');
+  assert.ok(/const marks=marksWithRefused\(p,/.test(src) && /setResults\(marks\.results\)/.test(src), 'a list opens with the results recorded on it selected');
   assert.ok(/confirmedClears\(resultsRef\.current,id=>entry\.box\.holds\(id\)\)/.test(src) && /setResults\(r=>dropCleared\(r,ids\)\)/.test(src), 'a confirmed clearing is reconciled with what the server holds');
+});
+// --- a refused batch: the server will not take it however often it is sent, so it must not hold up the screen, nor erase what the walker saw ---
+import {
+  ResultsRefused, addRefusal, clearRefused, doorsByPerson, keepRefused, listIdentity, marksWithRefused, refusalCount, refusalHeadline, refusalOf, refusedStatus, unsavedText
+} from '../../src/v3/lib/walk.ts';
+import type {RefusalNote, RefusedMarks} from '../../src/v3/lib/walk.ts';
+import {ApiError} from '../../src/v3/api/client.ts';
+const {saveWalkDispositions} = await import('../../src/v3/api/walk.ts');
+
+/** A server that refuses any request holding one of `bad` (all or nothing), as walk_views.dispositions does for a voter not on the list. */
+const refuser = (bad: string[], log: string[][] = []) => async (batch: Map<string, WalkVisit>) => {
+  log.push([...batch.keys()]);
+  if ([...batch.keys()].some(k => bad.includes(k))) throw new ResultsRefused('Some of those voters are not on this list.');
+};
+const answered = (status: number, message = 'Some of those voters are not on this list.') => new ApiError(message, status, true);
+
+test('refusals: only the walk API refusing in its own JSON words, with 400 or 404, is a refusal; everything else is retried', () => {
+  assert.deepEqual([400, 404].filter(refusedStatus), [400, 404]);
+  for (const s of [0, 403, 408, 409, 410, 413, 422, 429, 500, 502, 503]) assert.ok(!refusedStatus(s), `${s} is sent again`);
+  const r400 = refusalOf(answered(400), 'results'), r404 = refusalOf(answered(404, 'That saved list was not found.'), 'results');
+  assert.ok(r400 instanceof ResultsRefused && !r400.whole && r400.message === 'Some of those voters are not on this list.', 'a 400 on results: split to find the refused ones');
+  assert.ok(r404 instanceof ResultsRefused && r404.whole, 'a 404 on results: the list is gone, so the whole batch, unsplit');
+  const list400 = refusalOf(answered(400, 'No voters live on those streets in this area.'), 'list');
+  assert.ok(list400 instanceof ResultsRefused && list400.whole, 'a 400 on saving the list refuses all its results');
+  assert.equal(refusalOf(answered(404), 'list'), null, 'saving a list is refused only on a 400');
+  assert.equal(refusalOf(answered(409, 'The data is being updated.'), 'list'), null, 'a 409 while the store is swapped is retried');
+  for (const s of [403, 409, 410, 413, 422, 429, 500, 503]) assert.equal(refusalOf(answered(s), 'results'), null, String(s));
+  assert.equal(refusalOf(new ApiError('The local data service returned an unreadable response.', 400), 'results'), null, 'an HTML 400 (a proxy, Django) is not the walk API speaking');
+  assert.equal(refusalOf(new Error('Failed to fetch'), 'results'), null); assert.equal(refusalOf(null, 'results'), null);
+});
+
+test('refusals through the real client: an HTML 400 and a failed session fetch are retried, a JSON 400 is refused', async () => {
+  const real = globalThis.fetch;
+  let session: Response, post: Response;
+  globalThis.fetch = (async (url: string) => String(url).includes('/api/auth/session') ? session : post) as typeof fetch;
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+  const send = (batch: Map<string, WalkVisit>) => { const {on, entries} = visitRequest(batch); return saveWalkDispositions('k1', on, entries).catch((e: unknown) => { throw refusalOf(e, 'results') ?? e; }); };
+  const run = async () => {
+    const outbox = resultOutbox<string, WalkVisit>(v => v.on); outbox.set('a', visit('S'));
+    const refused: string[] = [];
+    const ok = await drainResults(outbox, {...calm, send, refuse: r => refused.push(...r.keys())});
+    return {ok, refused, waiting: [...outbox.waiting.keys()]};
+  };
+  try {
+    session = json(400, {error: 'Bad session.'}); post = json(200, {saved: 1});
+    assert.deepEqual(await run(), {ok: false, refused: [], waiting: ['a']}, 'the session fetch failing is not the endpoint refusing: retried');
+    session = json(200, {csrf: 't'}); post = new Response('<!doctype html><h1>Bad Request (400)</h1>', {status: 400, headers: {'Content-Type': 'text/html'}});
+    assert.deepEqual(await run(), {ok: false, refused: [], waiting: ['a']}, 'an HTML 400 is retried, never refused');
+    post = json(422, {error: 'Unprocessable.'});
+    assert.deepEqual(await run(), {ok: false, refused: [], waiting: ['a']}, 'a JSON 422 is retried');
+    post = json(400, {error: 'Some of those voters are not on this list.'});
+    assert.deepEqual(await run(), {ok: true, refused: ['a'], waiting: []}, 'a JSON 400 from the endpoint is refused');
+  } finally { globalThis.fetch = real; }
+});
+
+test('refusals: a refused request is split until the refused result stands alone; the rest are saved and the outbox is clear', async () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on);
+  for (const id of ['a', 'b', 'c', 'd', 'e']) outbox.set(id, visit('S'));
+  const log: string[][] = [], refused: [string[], string][] = [], states: string[] = [];
+  const ok = await drainResults(outbox, {ready: () => true, send: refuser(['c'], log), report: s => states.push(s), refuse: (r, why) => refused.push([[...r.keys()], why])});
+  assert.equal(ok, true, 'a refusal is not a failure: nothing is left to retry');
+  assert.deepEqual(refused, [[['c'], 'Some of those voters are not on this list.']]);
+  assert.deepEqual(log.filter(b => !b.includes('c')).flat().sort(), ['a', 'b', 'd', 'e'], 'every other result is saved');
+  assert.ok(log.length <= 1 + 2 * Math.ceil(Math.log2(5)), `a few requests, not one per result: ${log.length}`);
+  assert.ok(!outbox.unconfirmed() && !outbox.holds('c'), 'the refused result is not sent again'); assert.equal(states.at(-1), 'saved');
+});
+
+test('refusals: splitting is bounded: 200 results refused throughout cost three requests, and a list that is gone costs one', async () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on);
+  for (let i = 0; i < 200; i++) outbox.set(`p${i}`, visit('S'));
+  const sizes: number[] = []; let refused = 0;
+  assert.equal(await drainResults(outbox, {...calm, send: async b => { sizes.push(b.size); throw new ResultsRefused('The visit date must be a real day, not in the future.'); }, refuse: r => { refused += r.size; }}), true);
+  assert.deepEqual(sizes, [200, 100, 100], 'the batch, then its two halves; both refused, so the split stops'); assert.equal(refused, 200);
+  for (let i = 0; i < 200; i++) outbox.set(`p${i}`, visit('S'));
+  const gone: number[] = []; refused = 0;
+  assert.equal(await drainResults(outbox, {...calm, send: async b => { gone.push(b.size); throw refusalOf(answered(404, 'That saved list was not found.'), 'results'); }, refuse: r => { refused += r.size; }}), true);
+  assert.deepEqual(gone, [200], 'a 404 refuses the whole batch unsplit'); assert.equal(refused, 200); assert.ok(!outbox.unconfirmed());
+});
+
+test('refusals: the stuck screen: a refused batch no longer fails every flush, so loading another list is not blocked', async () => {
+  const shelf = resultShelf<string, WalkVisit>(v => v.on), list = shelf.open({meta: null, title: 'Saturday', query: {}}); shelf.keep(list);
+  list.box.set('gone', visit('S'));
+  const sends: string[][] = [];
+  assert.equal(await flushList(list, {...calm, send: refuser(['gone'], sends)}), true, 'the first flush settles');
+  assert.equal(await flushList(list, {...calm, send: refuser(['gone'], sends)}), true, 'and so does the next, without sending it again');
+  assert.equal(sends.length, 1); assert.deepEqual(shelf.held(), [], 'the shelf lets the list go, so returning to the screen is not blocked either');
+  list.box.set('gone', visit('U', '2026-10-02')); list.box.set('ok', visit('NH', '2026-10-03')); shelf.keep(list);
+  const days: string[] = [];
+  assert.equal(await flushList(list, {...calm, send: async b => { days.push(visitRequest(b).on); if (b.has('gone')) throw new ResultsRefused('no'); }}), true);
+  assert.deepEqual(days, ['2026-10-02', '2026-10-03'], 'a refusal of one day does not hold up the next'); assert.ok(!shelf.unconfirmed());
+});
+
+test('refusals: a list the server will not save refuses all its results at once; nothing is split or sent again', async () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on); for (const id of ['a', 'b', 'c']) outbox.set(id, visit('S'));
+  let sends = 0; const refused: string[] = [], states: string[] = [];
+  const ok = await drainResults(outbox, {ready: () => true, send: async () => { sends++; throw new ResultsRefused('No voters live on those streets in this area.', true); },
+    report: s => states.push(s), refuse: r => refused.push(...r.keys())});
+  assert.equal(ok, true); assert.equal(sends, 1, 'the list is asked to be saved once'); assert.deepEqual(refused, ['a', 'b', 'c']);
+  assert.ok(!outbox.unconfirmed()); assert.deepEqual(states, ['saving', 'idle'], 'nothing was saved, so the status does not say Saved');
+});
+
+test('refusals: a failure partway through a split keeps only what was neither saved nor refused, and a newer mark wins', async () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on); for (const id of ['a', 'b', 'c', 'd']) outbox.set(id, visit('S'));
+  const refused: string[] = [], reports: [string, string | undefined][] = [];
+  let calls = 0;
+  const send = async (b: Map<string, WalkVisit>) => {
+    calls++;
+    if (calls === 1) throw new ResultsRefused('no');           // a,b,c,d refused: split
+    if (calls === 2) { outbox.set('a', visit('O')); return; }   // a,b saved; meanwhile the walker marks a again
+    if (b.size > 1) throw new ResultsRefused('no');              // c,d refused: split
+    if (b.has('c')) throw new ResultsRefused('Some of those voters are not on this list.');
+    throw new Error('offline');                                  // d: the connection drops
+  };
+  assert.equal(await drainResults(outbox, {ready: () => true, send, report: (s, m) => reports.push([s, m]), refuse: r => refused.push(...r.keys())}), false);
+  assert.deepEqual(refused, ['c']);
+  assert.deepEqual([...outbox.waiting], [['a', visit('O')], ['d', visit('S')]], 'd waits again; a waits with its newer mark; b is saved and gone');
+  assert.deepEqual(reports.at(-1), ['error', 'offline']);
+});
+
+test('refusals never erase a mark: a refused mark stays the walker\'s code, flagged not saved, on screen and in the CSV, until marked again and saved', () => {
+  const a = voter({person_id: 'a', last: {code: 'NH', on: '2026-09-30', list: 'k1'}}), b = voter({person_id: 'b', name: 'Lee Stone'}), c = voter({person_id: 'c', name: 'Pat Moss'});
+  const p: WalkListPayload = {...payload([run({doors: [door(1, '4102', [a, b]), door(2, '4106', [c], '2')]})]), list: {key: 'k1', title: 'Saturday', kind: 'standard', created_at: null}};
+  const store: RefusedMarks = new Map(), id = listIdentity('k1', p.query);
+  keepRefused(store, id, new Map([['a', visit('S')], ['b', visit(null)]]));
+  const shown = marksWithRefused(p, store, id);
+  assert.deepEqual(shown.results, {a: 'S', b: null}, 'the walker\'s S over the NH on file, and the clearing, both kept'); assert.deepEqual([...shown.unsaved].sort(), ['a', 'b']);
+  const col = walkCsvRows(p, shown.results, {}, shown.unsaved).map(r => r[15]);
+  assert.deepEqual(col, ['S (not saved)', 'cleared (not saved)', ''], 'the CSV, the walker\'s fallback copy, keeps the code with the flag');
+  assert.ok(buildWalkCsv(p, shown.results, {}, shown.unsaved).includes('"S (not saved)"'));
+  assert.equal(unsavedText('NH'), 'NH (not saved)');
+  assert.equal(markAfterClick('S', 'S', true), 'S', 'choosing a refused code again records it again rather than taking it back'); assert.equal(markAfterClick('S', 'S'), null);
+  assert.deepEqual(marksWithRefused(p, store, listIdentity('k9', p.query)).unsaved.size, 0, 'another list does not take these marks');
+  assert.deepEqual(marksWithRefused({...p, list: {...p.list, key: null}}, store, listIdentity(null, p.query)).unsaved.size, 0, 'an unsaved list is named by its query');
+  clearRefused(store, id, ['a']);
+  assert.deepEqual(marksWithRefused(p, store, id), {results: {a: 'NH', b: null}, unsaved: new Set(['b'])}, 'a saved: back to what is on file; b still flagged');
+  clearRefused(store, id, ['b']); assert.equal(store.size, 0);
+  assert.equal(listIdentity(null, {streets: '1:odd', precinct: '02012'}), listIdentity(null, {precinct: '02012', streets: '1:odd'}), 'the order of the query does not matter');
+  assert.deepEqual(doorsByPerson(p), {a: '4102 N Cedar Heights Dr', b: '4102 N Cedar Heights Dr', c: `${doorAddress(door(2, '4106', [], '2'))} N Cedar Heights Dr`});
+});
+
+test('refusals: the note adds up across batches, days and lists until dismissed, and names each door with its code', () => {
+  let note: RefusalNote | null = null;
+  note = addRefusal(note, 'Saturday', new Map([['a', visit('S')]]), {a: '4102 N Cedar Heights Dr'}, 'Some of those voters are not on this list.');
+  note = addRefusal(note, 'Saturday', new Map([['b', visit('NH', '2026-10-03')], ['a', visit('O')]]), {a: '4102 N Cedar Heights Dr', b: '4106 N Cedar Heights Dr'}, 'Some of those voters are not on this list.');
+  note = addRefusal(note, 'Not home again · Saturday', new Map([['z', visit(null)]]), {}, 'That saved list was not found.');
+  assert.equal(refusalCount(note), 3, 'a door refused twice counts once, with its latest code');
+  assert.deepEqual(note.lists, [
+    {title: 'Saturday', doors: {a: '4102 N Cedar Heights Dr (O)', b: '4106 N Cedar Heights Dr (NH)'}},
+    {title: 'Not home again · Saturday', doors: {z: 'A door on this list (cleared)'}},
+  ]);
+  assert.deepEqual(note.reasons, ['Some of those voters are not on this list.', 'That saved list was not found.']);
+  assert.equal(refusalHeadline(note), 'The server refused 3 results, so they were not saved. Record these doors again:');
+  assert.equal(refusalHeadline(addRefusal(null, '', new Map([['a', visit('S')]]), {}, '')), 'The server refused 1 result, so it was not saved. Record that door again:');
+});
+
+test('walk screen wiring (refusals): narrow classification, marks kept and flagged, the note at page level', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  const client = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/client.ts'), 'utf8');
+  assert.ok(/throw refusalOf\(e,step\)\?\?e;/.test(src) && /await refusing\(save\(\),'list'\)/.test(src) && /await refusing\(saveWalkDispositions\(list,on,entries\),'results'\)/.test(src), 'both requests are classified by refusalOf');
+  assert.ok(!/takeBack|refusedStatus\(e\.status\)/.test(src), 'nothing takes a mark off the screen');
+  assert.ok(/refuse:\(refused,why\)=>refuse\(entry,refused,why\)/.test(src) && /setUnsaved\(u=>new Set\(\[\.\.\.u,\.\.\.refused\.keys\(\)\]\)\)/.test(src), 'a refused mark on screen is flagged, not removed');
+  assert.ok(/marksWithRefused\(p,refusedMarks,listIdentity\(p\.list\?\.key,p\.query\?\?\{\}\)\)/.test(src), 'a list opened again shows its refused marks, flagged');
+  assert.ok(/buildWalkCsv\(p,results,history,unsaved\)/.test(src), 'the CSV carries the flag');
+  assert.ok(/clearRefused\(refusedMarks,id,batch\.keys\(\)\)/.test(src), 'marked again and saved: the flag goes');
+  assert.ok(/^const refusedMarks:RefusedMarks=new Map\(\);/m.test(src) && /^let refusalNote:RefusalNote\|null=null;/m.test(src) && /useState<RefusalNote\|null>\(\(\)=>refusalNote\)/.test(src), 'marks and note outlive the screen');
+  assert.ok(/token=\(fresh:boolean\)=>csrf\(fresh,signal\)\.catch\(\(e:unknown\)=>\{throw e instanceof ApiError\?new ApiError\(e\.message,e\.status\):e;\}\)/.test(client), 'a session failure is never an answer of the endpoint');
+  assert.ok(/catch\{throw new ApiError\('The local data service returned an unreadable response\.',response\.status\);\}/.test(client), 'an unreadable body is not answered');
 });

@@ -155,8 +155,9 @@ export function dropCleared(results:WalkResults,ids:readonly string[]):WalkResul
 }
 
 /** What choosing `code` does to a voter's mark on this list. The code is recorded as a new visit whatever the history on file says (a voter last seen
- *  Not home who is not home again gets another Not home); choosing the code that is already marked takes the mark back (null). */
-export const markAfterClick=(mark:WalkCode|null|undefined,code:WalkCode):WalkCode|null=>mark===code?null:code;
+ *  Not home who is not home again gets another Not home); choosing the code that is already marked takes the mark back (null), except a mark the
+ *  server refused (`unsaved`): choosing it again records it again. */
+export const markAfterClick=(mark:WalkCode|null|undefined,code:WalkCode,unsaved=false):WalkCode|null=>mark===code&&!unsaved?null:code;
 /** A result as the walker set it: the code (null clears the result) and the day of the visit, taken when the walker set it. */
 export interface WalkVisit{code:WalkCode|null;on:string}
 /** The day and entries of one request. A request holds one day: the outbox batches by day, and the day is the one taken when the results were set, never today's. */
@@ -217,28 +218,85 @@ export function resultOutbox<K,V>(group?:(value:V)=>string):ResultOutbox<K,V>{
     clear(){waiting.clear();},
   };
 }
+/**
+ * The server will not take these results however often they are sent: a voter no longer on the list or a visit day it refuses (400), or a
+ * list that is gone (404). `whole` when none of the batch can be saved (the list is gone, or the server will not save the list itself), so
+ * the batch is not split to look for the refused ones.
+ */
+export class ResultsRefused extends Error{
+  whole:boolean;
+  constructor(message:string,whole=false){super(message);this.name='ResultsRefused';this.whole=whole;}
+}
+/** The walk API's answers that mean the same request is refused again: a bad request, a list not found. Nothing else: a conflict while the
+ *  store is swapped (409), access refused (403), a timeout, a rate limit or a server fault is worth sending again. */
+export const refusedStatus=(status:number):boolean=>status===400||status===404;
+/**
+ * The refusal a failed request means, or null for a failure to retry. Only the walk API answering in JSON with an error of its own counts
+ * (`answered`): an HTML page from a proxy or from Django, or a failure to get the session, does not. Saving the list (`list`) is refused only
+ * on a 400, and then all its results are; a results request is refused on a 400 (split to find the refused ones) or a 404 (the list is gone: all of it).
+ */
+export function refusalOf(e:unknown,step:'list'|'results'):ResultsRefused|null{
+  if(!e||typeof e!=='object')return null;
+  const {status,answered,message}=e as {status?:unknown;answered?:unknown;message?:unknown};
+  if(answered!==true||typeof status!=='number'||!refusedStatus(status)||(step==='list'&&status!==400))return null;
+  return new ResultsRefused(typeof message==='string'?message:'',step==='list'||status===404);
+}
 /** What a drain needs from its caller. */
 export interface DrainIo<K,V>{
   ready():boolean;                                    // false while no list is on screen
-  send(batch:Map<K,V>):Promise<unknown>;              // saves the list if it is not saved yet, then posts the batch
+  send(batch:Map<K,V>):Promise<unknown>;              // saves the list if it is not saved yet, then posts the batch; throws ResultsRefused for a refusal
   report(state:SaveState,message?:string):void;
+  refuse?(refused:Map<K,V>,message:string):void;     // results the server refused: they leave the outbox and are not sent again
+}
+/** One request: true when it is saved, the server's word when it is refused. A refusal of the whole batch, and any other failure, is thrown. */
+async function trySend<K,V>(batch:Map<K,V>,io:DrainIo<K,V>,left:Map<K,V>):Promise<true|string>{
+  try{await io.send(batch);}
+  catch(e){if(e instanceof ResultsRefused&&!e.whole)return e.message;throw e;}
+  for(const k of batch.keys())left.delete(k);
+  return true;
+}
+const refuseAll=<K,V>(batch:Map<K,V>,left:Map<K,V>,refused:Map<K,V>):void=>{for(const [k,v] of batch){refused.set(k,v);left.delete(k);}};
+/**
+ * Sends a batch. A refused request is split in halves to find the refused results, so one bad result costs no other; when both halves are
+ * refused as well the split stops and the whole batch is refused, so a batch refused throughout costs three requests, not one per result.
+ * Saved and refused results leave `left`; answers with the server's word on a refusal (`known`: the batch was already sent and refused).
+ */
+async function sendSplit<K,V>(batch:Map<K,V>,io:DrainIo<K,V>,left:Map<K,V>,refused:Map<K,V>,known?:string):Promise<string>{
+  const first=known??await trySend(batch,io,left);
+  if(first===true)return '';
+  if(batch.size===1){refuseAll(batch,left,refused);return first;}
+  const all=[...batch],half=all.length>>1,parts=[new Map(all.slice(0,half)),new Map(all.slice(half))],said:(true|string)[]=[];
+  for(const part of parts){
+    const s=await trySend(part,io,left);said.push(s);
+    if(s!==true&&part.size===1)refuseAll(part,left,refused);   // settled now, so a failure of the other half cannot send it again
+  }
+  if(said[0]!==true&&said[1]!==true){refuseAll(batch,left,refused);return said[0]||said[1]||first;}
+  let why='';
+  for(let i=0;i<2;i++){const s=said[i];if(s!==true)why=(await sendSplit(parts[i],io,left,refused,s))||why;}
+  return why||first;
 }
 /**
  * Sends the waiting results, one request at a time and at most MAX_RESULTS_PER_REQUEST each, until none are left.
- * False when a request fails: its results go back to waiting and the failure is reported.
+ * False when a request fails: its results that were not saved go back to waiting and the failure is reported. Results the server
+ * refuses are not a failure: they leave the outbox and go to `refuse`, so a refusal never holds up the results behind it, or the screen.
  */
 export async function drainResults<K,V>(outbox:ResultOutbox<K,V>,io:DrainIo<K,V>):Promise<boolean>{
   while(io.ready()&&outbox.waiting.size){
-    const batch=outbox.take();
+    const batch=outbox.take(),left=new Map(batch),refused=new Map<K,V>();
     io.report('saving');
-    try{await io.send(batch);}
+    let why='',failed:unknown=null;
+    try{why=await sendSplit(batch,io,left,refused);}
     catch(e){
-      outbox.restore(batch);
-      io.report('error',e instanceof Error&&e.message?e.message:'The results could not be saved.');
+      if(e instanceof ResultsRefused){why=e.message;for(const [k,v] of left)refused.set(k,v);left.clear();}   // the list cannot be saved: nor can any of its results
+      else failed=e;
+    }
+    outbox.confirm(batch);outbox.restore(left);   // what was neither saved nor refused waits again, unless the walker has changed it since
+    if(refused.size)io.refuse?.(refused,why||'The server refused them.');
+    if(failed!==null){
+      io.report('error',failed instanceof Error&&failed.message?failed.message:'The results could not be saved.');
       return false;
     }
-    outbox.confirm(batch);
-    io.report(outbox.waiting.size?'pending':'saved');
+    io.report(outbox.waiting.size?'pending':refused.size===batch.size?'idle':'saved');
   }
   return true;
 }
@@ -258,12 +316,14 @@ export interface ListResults<K,V>{
   saving:Promise<WalkListMeta>|null;
   /** The latest flush of this list; the next one starts after it, so requests for one list never overlap and stay in order. */
   chain:Promise<boolean>;
+  /** Where each voter of the list lives (doorsByPerson), to name the doors of results the server refuses. */
+  readonly where:Record<string,string>;
 }
 /** A list's results with the day of each visit: the form the walk screen keeps them in. */
 export type HeldList=ListResults<string,WalkVisit>;
 export interface ResultShelf<K,V>{
   /** A new, empty entry for a list that has come on screen. It joins the shelf when `keep` is called (the first result does). */
-  open(list:{meta:WalkListMeta|null;title:string;query:Record<string,string>}):ListResults<K,V>;
+  open(list:{meta:WalkListMeta|null;title:string;query:Record<string,string>;where?:Record<string,string>}):ListResults<K,V>;
   keep(entry:ListResults<K,V>):void;
   /** The entries that hold results the server has not confirmed. An entry that holds none leaves the shelf. */
   held():ListResults<K,V>[];
@@ -274,7 +334,7 @@ export function resultShelf<K,V>(group?:(value:V)=>string):ResultShelf<K,V>{
   const entries=new Set<ListResults<K,V>>();
   const held=():ListResults<K,V>[]=>{for(const e of entries)if(!e.box.unconfirmed())entries.delete(e);return [...entries];};
   return {
-    open:list=>({box:resultOutbox<K,V>(group),meta:list.meta,title:list.title,query:list.query,saving:null,chain:Promise.resolve(true)}),
+    open:list=>({box:resultOutbox<K,V>(group),meta:list.meta,title:list.title,query:list.query,saving:null,chain:Promise.resolve(true),where:list.where??{}}),
     keep:entry=>{entries.add(entry);},
     held,
     unconfirmed:()=>held().length>0,
@@ -305,23 +365,74 @@ export function latestJob(){
   };
 }
 
-// A mark set on screen wins over the result on file; a cleared mark leaves the cell empty until the screen has asked what is on file.
-const resultCode=(v:WalkVoter,results?:WalkResults,history?:WalkHistory):string=>
-  results&&Object.hasOwn(results,v.person_id)?results[v.person_id]??'':lastOf(v,history)?.code??'';
+// --- results the server refused: still the walker's marks, flagged as not saved, and named in a note ----------------------------------
+/** Where each voter of a list lives, to name a door: "4102 N Cedar Heights Dr". */
+export function doorsByPerson(payload:Pick<WalkListPayload,'runs'>):Record<string,string>{
+  const out:Record<string,string>={};
+  for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)out[v.person_id]=`${doorAddress(door)} ${run.street}`.trim();
+  return out;
+}
+/** What names a list across visits: its key once it is saved, else the query it is built from. */
+export const listIdentity=(key:string|null|undefined,query?:Record<string,string>):string=>
+  key?`key:${key}`:'query:'+Object.keys(query??{}).sort().map(k=>`${k}=${query?.[k]??''}`).join('&');
+/** The marks the server refused, by list (listIdentity) and voter. They stay the walker's marks until marked again and saved: never erased. */
+export type RefusedMarks=Map<string,Map<string,WalkCode|null>>;
+export function keepRefused(store:RefusedMarks,list:string,refused:ReadonlyMap<string,{code:WalkCode|null}>):void{
+  const marks=store.get(list)??new Map<string,WalkCode|null>();
+  for(const [id,v] of refused)marks.set(id,v.code);
+  if(marks.size)store.set(list,marks);
+}
+/** Voters whose result has now been saved: their marks are no longer refused. */
+export function clearRefused(store:RefusedMarks,list:string,ids:Iterable<string>):void{
+  const marks=store.get(list);if(!marks)return;
+  for(const id of ids)marks.delete(id);
+  if(!marks.size)store.delete(list);
+}
+/** A list as it comes on screen: the marks recorded on it (listMarks), with any mark of the walker's that the server refused on top, flagged. */
+export function marksWithRefused(payload:Pick<WalkListPayload,'runs'|'list'>,store:RefusedMarks,list:string):{results:WalkResults;unsaved:Set<string>}{
+  const results=listMarks(payload),unsaved=new Set<string>(),marks=store.get(list);
+  if(marks)for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)
+    if(marks.has(v.person_id)){results[v.person_id]=marks.get(v.person_id)??null;unsaved.add(v.person_id);}
+  return {results,unsaved};
+}
+/** A refused mark as the list and the CSV show it: "S (not saved)", or "cleared (not saved)" for a clearing the server refused. */
+export const unsavedText=(code:WalkCode|null|undefined):string=>`${code??'cleared'} (not saved)`;
+/** The results the server refused since the walker last dismissed the note: each list by title, each door once with its code, each reason once. */
+export interface RefusalNote{lists:{title:string;doors:Record<string,string>}[];reasons:string[]}
+export function addRefusal(note:RefusalNote|null,title:string,refused:ReadonlyMap<string,{code:WalkCode|null}>,doors:Record<string,string>,why:string):RefusalNote{
+  const lists=(note?.lists??[]).map(l=>({title:l.title,doors:{...l.doors}}));
+  const name=title.trim()||'Walk list';
+  let list=lists.find(l=>l.title===name);if(!list){list={title:name,doors:{}};lists.push(list);}
+  for(const [id,v] of refused)list.doors[id]=`${doors[id]||'A door on this list'} (${v.code??'cleared'})`;
+  const reasons=note?.reasons??[],w=why.trim();
+  return {lists,reasons:w&&!reasons.includes(w)?[...reasons,w]:reasons};
+}
+export const refusalCount=(note:RefusalNote|null):number=>(note?.lists??[]).reduce((n,l)=>n+Object.keys(l.doors).length,0);
+/** "The server refused 3 results, so they were not saved. Record these doors again:" */
+export function refusalHeadline(note:RefusalNote|null):string{
+  const n=refusalCount(note);
+  return `The server refused ${countText(n,'result')}, so ${n===1?'it was':'they were'} not saved. Record ${n===1?'that door':'these doors'} again:`;
+}
 
-/** One row per voter in walking order. Result holds the mark in `results` when the walker has set one, else the latest result on file (`history` is a fresher look at what is on file than the list itself). */
-export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory):string[][]{
+// A mark set on screen wins over the result on file; a cleared mark leaves the cell empty until the screen has asked what is on file. A mark
+// the server refused keeps its code, flagged: the CSV is the walker's copy of what was seen at the door.
+const resultCode=(v:WalkVoter,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>):string=>
+  results&&Object.hasOwn(results,v.person_id)?unsaved?.has(v.person_id)?unsavedText(results[v.person_id]):results[v.person_id]??'':lastOf(v,history)?.code??'';
+
+/** One row per voter in walking order. Result holds the mark in `results` when the walker has set one, flagged when it is in `unsaved`, else the latest
+ *  result on file (`history` is a fresher look at what is on file than the list itself). */
+export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>):string[][]{
   const rows:string[][]=[];
   for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)rows.push([
     String(run.stop),run.precinct,run.street,sideLabel(run.side),door.house,door.unit,v.name,phoneText(v.phone),
-    csvTally(v.pri),csvTally(v.gen),csvTally(v.abs),v.party,v.age==null?'':String(v.age),v.gender,v.reg_date,resultCode(v,results,history),
+    csvTally(v.pri),csvTally(v.gen),csvTally(v.abs),v.party,v.age==null?'':String(v.age),v.gender,v.reg_date,resultCode(v,results,history,unsaved),
   ]);
   return rows;
 }
 const BOM=String.fromCharCode(0xfeff);
 /** UTF-8 BOM, CRLF rows, every field quoted. */
-export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory):string{
-  const lines=[[...CSV_COLUMNS] as string[],...walkCsvRows(payload,results,history)].map(r=>r.map(csvField).join(',')+'\r\n');
+export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>):string{
+  const lines=[[...CSV_COLUMNS] as string[],...walkCsvRows(payload,results,history,unsaved)].map(r=>r.map(csvField).join(',')+'\r\n');
   return BOM+lines.join('');
 }
 

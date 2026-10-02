@@ -3,15 +3,21 @@ import type {AreaGeometry,AreasPayload,HouseholdPopover,Meta,PeoplePage,PeopleQu
 import type {Level} from '../lib/format';
 export type Family='meta'|'geometry'|'areas'|'people'|'person'|'household'|'street'|'search';
 export const sources:Record<Family,Source>={meta:'live',geometry:'live',areas:'live',people:'live',person:'live',household:'live',street:'live',search:'live'};
-export class ApiError extends Error{readonly status:number;constructor(message:string,status:number){super(message);this.status=status;}}
+/** `answered` is true only when the server of the requested URL answered in JSON with an `error` of its own; never for an unreadable body
+ *  (a proxy's or Django's HTML page) or a failure on the way, such as fetching the session for a write. */
+export class ApiError extends Error{
+  readonly status:number;readonly answered:boolean;
+  constructor(message:string,status:number,answered=false){super(message);this.status=status;this.answered=answered;}
+}
+const errorOf=(body:unknown):string|null=>body&&typeof body==='object'&&'error' in body&&typeof body.error==='string'?body.error:null;
 
 export async function localJson<T>(url:string,signal?:AbortSignal):Promise<T>{
   const response=await fetch(url,{credentials:'same-origin',signal,cache:'no-store',headers:{Accept:'application/json'}});
   let body:unknown;
   try{body=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
   if(!response.ok){
-    const message=body&&typeof body==='object'&&'error' in body&&typeof body.error==='string'?body.error:'The local data could not be loaded.';
-    throw new ApiError(message,response.status);
+    const said=errorOf(body);
+    throw new ApiError(said??'The local data could not be loaded.',response.status,said!==null);
   }
   return body as T;
 }
@@ -44,15 +50,17 @@ async function csrf(fresh:boolean,signal?:AbortSignal):Promise<string>{
   return csrfToken;
 }
 export async function postJson<T>(url:string,body:unknown,signal?:AbortSignal):Promise<T>{
-  const send=async(fresh:boolean)=>fetch(url,{method:'POST',credentials:'same-origin',signal,cache:'no-store',headers:{Accept:'application/json','Content-Type':'application/json','X-CSRFToken':await csrf(fresh,signal)},body:JSON.stringify(body)});
+  // a failure to get the token is not this endpoint's answer: it never counts as one
+  const token=(fresh:boolean)=>csrf(fresh,signal).catch((e:unknown)=>{throw e instanceof ApiError?new ApiError(e.message,e.status):e;});
+  const send=async(fresh:boolean)=>fetch(url,{method:'POST',credentials:'same-origin',signal,cache:'no-store',headers:{Accept:'application/json','Content-Type':'application/json','X-CSRFToken':await token(fresh)},body:JSON.stringify(body)});
   const cached=!!csrfToken;
   let response=await send(false);
   if(response.status===403&&cached)response=await send(true); // a kept token can go stale; ask once more with a fresh one
   let data:unknown;
   try{data=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
   if(!response.ok){
-    const message=data&&typeof data==='object'&&'error' in data&&typeof data.error==='string'?data.error:'The request could not be completed.';
-    throw new ApiError(message,response.status);
+    const said=errorOf(data);
+    throw new ApiError(said??'The request could not be completed.',response.status,said!==null);
   }
   return data as T;
 }
