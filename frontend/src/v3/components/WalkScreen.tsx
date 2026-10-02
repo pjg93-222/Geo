@@ -11,12 +11,12 @@ import type {Meta} from '../types';
 import {downloadFile} from '../lib/download';
 import {ApiError} from '../api/client';
 import {getWalkList,getWalkLists,getWalkOptions,getWalkSavedList,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,searchWalkStreets} from '../api/walk';
-import type {WalkArea,WalkCode,WalkDoor,WalkLevel,WalkListPayload,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkVoter} from '../api/walkTypes';
+import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkVoter} from '../api/walkTypes';
 import {
-  CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,countText,defaultListTitle,doorAddress,doorsOnSide,drainResults,fullDate,historyKey,initialResults,
-  leftOutNote,listLabel,localToday,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,regDate,resultOutbox,runHeader,
-  savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,walkFileName,
-  type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkPick,type WalkResults,
+  CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
+  lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,listMarks,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
+  regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
+  type HeldList,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkVisit,
 } from '../lib/walk';
 import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
 import {exportWalkPdf} from '../lib/walkPdf';
@@ -32,6 +32,30 @@ const LEVELS:{level:WalkLevel;label:string;aria:string}[]=[
 const AUTOSAVE_MS=600;
 const COLUMNS=['Address','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Reg. date','Result'];
 const noArea=(a:Area)=>!a.ss&&!a.sh&&!a.precinct;
+
+// --- results the server has not confirmed --------------------------------------------------------------------------------------
+// One entry per list the walker has marked results on in this page load. The shelf belongs to the page, not to the screen: leaving the
+// walk list while a save is failing keeps the results here, coming back sends them again, and closing the page asks first.
+const outbox=resultShelf<string,WalkVisit>(v=>v.on);
+const warnHeld=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()){e.preventDefault();e.returnValue='';}};   // the guard while the screen is away
+/** Saves the list an entry belongs to, once. The answer stays on the entry, so a second ask (or a screen that comes later) shares it. */
+function saveEntry(entry:HeldList,title?:string):Promise<WalkListMeta>{
+  if(entry.meta?.key)return Promise.resolve(entry.meta);
+  if(entry.saving)return entry.saving;
+  if(title?.trim())entry.title=title.trim();
+  const job:Promise<WalkListMeta>=saveWalkList(entry.title,entry.query).then(saved=>{
+    if(!saved.list?.key)throw new Error('The list could not be saved.');
+    return entry.meta=saved.list;
+  }).finally(()=>{if(entry.saving===job)entry.saving=null;});
+  return entry.saving=job;
+}
+/** Posts one request of an entry's results (one day of visits), saving the list first when it is not saved yet. Answers with the list's key. */
+async function sendBatch(entry:HeldList,batch:Map<string,WalkVisit>,key?:string):Promise<string>{
+  const list=key??String((await saveEntry(entry)).key);
+  const {on,entries}=visitRequest(batch);
+  await saveWalkDispositions(list,on,entries);
+  return list;
+}
 
 // --- area: Senate, House and Precinct, each optional; a parent change resets what lies below it ------------------------------
 function useOptions(level:WalkLevel,area:Area){
@@ -165,14 +189,17 @@ function UploadReport(p:{upload:Upload;picks:WalkPick[];onChoose:(i:number,c:Wal
   </div>;
 }
 
-// --- results: five toggle buttons per voter ------------------------------------------------------------------------------------
+// --- results: five toggle buttons per voter, and the latest result on file as dated history beside them ----------------------------
+// A button shows a mark on this list: one set on this screen, or one recorded on this list before, which comes back selected. A result on
+// file from another list is history: it is not a mark, and choosing a code records a new visit on this list, the same code as the history
+// included. Choosing the code that is marked takes the mark back.
 const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:WalkCode|null|undefined;onMark:(id:string,code:WalkCode|null)=>void}){
   const refs=useRef<(HTMLButtonElement|null)[]>([]);
   const tab=p.value?WALK_CODES.indexOf(p.value):0;
   const go=(i:number)=>{const n=(i+WALK_CODES.length)%WALK_CODES.length;refs.current[n]?.focus();p.onMark(p.id,WALK_CODES[n]);};
   return <div className="walk-res" role="radiogroup" aria-label={`Result for ${p.name}`}>
     {WALK_CODES.map((c,i)=><button key={c} ref={el=>{refs.current[i]=el;}} type="button" role="radio" aria-checked={p.value===c} aria-label={`${CODE_LABEL[c]} (${c})`} title={CODE_LABEL[c]} tabIndex={i===tab?0:-1}
-      onClick={()=>p.onMark(p.id,p.value===c?null:c)}
+      onClick={()=>p.onMark(p.id,markAfterClick(p.value,c))}
       onKeyDown={e=>{
         if(e.key==='ArrowRight'||e.key==='ArrowDown'){e.preventDefault();go(i+1);}
         else if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault();go(i-1);}
@@ -182,7 +209,7 @@ const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:Wal
   </div>;
 });
 
-const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean;value:WalkCode|null|undefined;onMark:(id:string,code:WalkCode|null)=>void}){
+const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean;value:WalkCode|null|undefined;last:WalkLast|null;onMark:(id:string,code:WalkCode|null)=>void}){
   const {v,door,first}=p;
   return <tr className={first?undefined:'cont'}>
     <td className="walk-addr">{first
@@ -192,11 +219,12 @@ const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean
     <td>{phoneText(v.phone)}</td>
     <td>{tallyText(v.pri)}</td><td>{tallyText(v.gen)}</td><td>{tallyText(v.abs)}</td>
     <td>{v.party}</td><td>{v.age??''}</td><td>{v.gender}</td><td>{regDate(v.reg_date)}</td>
-    <td className="walk-res-cell"><ResultRadios id={v.person_id} name={v.name} value={p.value} onMark={p.onMark}/></td>
+    <td className="walk-res-cell"><ResultRadios id={v.person_id} name={v.name} value={p.value} onMark={p.onMark}/>
+      {p.last&&<span className={cx('walk-last',p.value!==undefined&&'is-marked')} title={`Last result: ${lastLabel(p.last)}`}>Last: {lastText(p.last)}</span>}</td>
   </tr>;
 });
 
-const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkResults;onMark:(id:string,code:WalkCode|null)=>void}){
+const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkResults;history:WalkHistory;onMark:(id:string,code:WalkCode|null)=>void}){
   const {run}=p;
   const title=`${run.street} (${sideLabel(run.side)})`;
   return <section className="walk-run" id={`walk-run-${run.stop}`} aria-labelledby={`walk-run-title-${run.stop}`}>
@@ -209,8 +237,8 @@ const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkRe
       <table className="walk-table">
         <colgroup>{COLUMNS.map(h=><col key={h}/>)}</colgroup>
         <thead><tr>{COLUMNS.map(h=><th key={h} scope="col">{h}</th>)}</tr></thead>
-        <tbody>{run.doors.flatMap(door=>door.voters.map((v,i)=>
-          <VoterRow key={`${door.seq}-${v.person_id}`} v={v} door={door} first={i===0} value={Object.hasOwn(p.results,v.person_id)?p.results[v.person_id]:v.last?.code} onMark={p.onMark}/>))}</tbody>
+        <tbody>{run.doors.flatMap(door=>door.voters.map((v,i)=>   // a voter with a mark, or a cleared mark awaiting the server, keeps the room for the history line but does not show it
+          <VoterRow key={`${door.seq}-${v.person_id}`} v={v} door={door} first={i===0} value={Object.hasOwn(p.results,v.person_id)?p.results[v.person_id]:undefined} last={lastOf(v,p.history)} onMark={p.onMark}/>))}</tbody>
       </table>
     </div>
     {run.doors.some(d=>d.placed_by==='interpolated')&&<p className="walk-run-foot">“≈” = placed by house number (no geocode)</p>}
@@ -256,13 +284,15 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [loading,setLoading]=useState(false);const [loadError,setLoadError]=useState<{message:string;retry:()=>void}|null>(null);
   const [note,setNote]=useState('');const [actionNote,setActionNote]=useState<{text:string;alert:boolean}|null>(null);const [announce,setAnnounce]=useState('');
   const [shade,setShade]=useState<WalkShade>('doors');
-  const [results,setResults]=useState<WalkResults>({});
+  const [results,setResults]=useState<WalkResults>({});const resultsRef=useRef(results);resultsRef.current=results;
+  const [history,setHistory]=useState<WalkHistory>({});   // the marks on this list, and the results on file that a later look at the list changed
   const [saveState,setSaveState]=useState<SaveState>('idle');const [saveError,setSaveError]=useState('');
   const [saveOpen,setSaveOpen]=useState(false);const [saveTitle,setSaveTitle]=useState('');const [busy,setBusy]=useState<''|'save'|'pdf'>('');
   const [lists,setLists]=useState<WalkSavedList[]>([]);const [listsError,setListsError]=useState(false);
-  const outbox=useRef(resultOutbox<string,WalkCode|null>()).current;const timer=useRef<ReturnType<typeof setTimeout>>(undefined);
-  const chain=useRef<Promise<boolean>>(Promise.resolve(true));const saving=useRef<{base:WalkListPayload;job:Promise<string>}|null>(null);
-  const gen=useRef(0);const genAbort=useRef<AbortController|null>(null);
+  const [earlier,setEarlier]=useState<{message:string}|null>(null);   // results from before the screen was left that could not be saved
+  const entryRef=useRef<HeldList|null>(null);const timer=useRef<ReturnType<typeof setTimeout>>(undefined);   // the shelf entry of the list on screen
+  const saving=useRef<{base:WalkListPayload;job:Promise<string>}|null>(null);const resume=useRef<(()=>void)|null>(null);
+  const gen=useRef(0);const genAbort=useRef<AbortController|null>(null);const matchJobs=useRef(latestJob()).current;const refocusSave=useRef(false);
   const main=useRef<HTMLElement>(null);const saveButton=useRef<HTMLButtonElement>(null);const fileInput=useRef<HTMLInputElement>(null);const search=useRef<HTMLDivElement>(null);
 
   // ---- saved lists ---------------------------------------------------------------------------------------------------------------
@@ -272,44 +302,80 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
 
   // A list is frozen on the server the first time it is saved, by the Save button or by the first result recorded.
   const ensureSaved=useCallback((title?:string):Promise<string>=>{
-    const base=payloadRef.current;
-    if(!base)return Promise.reject(new Error('There is no list to save.'));
+    const base=payloadRef.current,entry=entryRef.current;
+    if(!base||!entry)return Promise.reject(new Error('There is no list to save.'));
     if(base.list.key)return Promise.resolve(base.list.key);
     if(saving.current?.base===base)return saving.current.job;   // only this list's own save: another list's key would take these results
-    const job:Promise<string>=saveWalkList(title?.trim()||defaultListTitle(base),base.query).then(saved=>{
-      const key=saved.list?.key;
-      if(!key)throw new Error('The list could not be saved.');
-      if(payloadRef.current===base){const next={...base,list:saved.list};payloadRef.current=next;setPayload(next);setListKey(key);}
+    const job:Promise<string>=saveEntry(entry,title).then(list=>{
+      const key=String(list.key);
+      if(payloadRef.current===base){const next={...base,list};payloadRef.current=next;setPayload(next);setListKey(key);}
       void refreshLists();
       return key;
     }).finally(()=>{if(saving.current?.job===job)saving.current=null;});
     saving.current={base,job};return job;
   },[refreshLists]);
 
-  // Results are sent after 600 ms of quiet, at most 200 a request; one request at a time, in order. A failure keeps the batch for Retry.
-  // The outbox counts a batch as unsaved until its request is answered, so closing the page is warned about while one is in flight.
+  // Clearing a mark brings back whatever else is on file for the voter (a result recorded on another list). That is history to show, so
+  // the list is looked at again: the voters whose clearing is confirmed show what the server holds for them, as a reload would, and their
+  // cleared marks stop standing in for it. Everyone else keeps the history the list came with.
+  const reconcile=useCallback(async(key:string)=>{
+    try{
+      const fresh=historyOf(await getWalkSavedList(key));
+      const entry=entryRef.current;
+      if(!entry||payloadRef.current?.list.key!==key)return;   // another list is on screen now
+      const ids=confirmedClears(resultsRef.current,id=>entry.box.holds(id));
+      if(!ids.length)return;
+      setHistory(h=>({...h,...Object.fromEntries(ids.map(id=>[id,fresh[id]??null]))}));
+      setResults(r=>dropCleared(r,ids));
+    }catch{/* the cleared cells stay empty; the next clear looks again */}
+  },[]);
+
+  // Results are sent after 600 ms of quiet, a day of visits and at most 200 a request; one request at a time, in order. A failure keeps
+  // the batch for Retry. The entry counts a batch as unsaved until its request is answered, so closing the page is warned about while one
+  // is in flight, and a batch that fails after the screen was left stays on the shelf for the next visit.
   const flush=useCallback((): Promise<boolean>=>{
     clearTimeout(timer.current);
-    const run=():Promise<boolean>=>drainResults(outbox,{
-      ready:()=>!!payloadRef.current,
+    const entry=entryRef.current;
+    if(!entry)return Promise.resolve(true);
+    return flushList(entry,{
+      ready:()=>true,
       send:async batch=>{
-        const key=await ensureSaved();
-        await saveWalkDispositions(key,localToday(),[...batch].map(([person_id,code])=>({person_id,code})));
+        const shown=entryRef.current===entry;   // the list on screen takes its key into the screen; one that was left saves quietly
+        const key=await sendBatch(entry,batch,shown?await ensureSaved():undefined);
+        if(shown&&[...batch.values()].some(v=>v.code===null))void reconcile(key);
       },
-      report:(state,message)=>{if(state==='saving')setSaveError('');else if(state==='error')setSaveError(message??'');setSaveState(state);},
+      report:(state,message)=>{
+        if(entryRef.current!==entry)return;
+        if(state==='saving')setSaveError('');else if(state==='error')setSaveError(message??'');
+        setSaveState(state);
+      },
     });
-    chain.current=chain.current.then(run,run);
-    return chain.current;
-  },[ensureSaved,outbox]);
+  },[ensureSaved,reconcile]);
   const mark=useCallback((id:string,code:WalkCode|null)=>{
+    const entry=entryRef.current;if(!entry)return;
     setResults(r=>({...r,[id]:code}));
-    outbox.set(id,code);setSaveState('pending');
+    outbox.keep(entry);entry.box.set(id,{code,on:localToday()});setSaveState('pending');   // the day is the day of the visit, taken now
     clearTimeout(timer.current);timer.current=setTimeout(()=>void flush(),AUTOSAVE_MS);
-  },[flush,outbox]);
+  },[flush]);
+  // Results kept from before the screen was left, for lists that are not on screen: sent again here; a failure shows with Retry.
+  const settleEarlier=useCallback(async():Promise<boolean>=>{
+    const others=outbox.held().filter(e=>e!==entryRef.current);
+    if(!others.length){setEarlier(null);return true;}
+    let message:string|null=null;
+    for(const entry of others){
+      let why='';
+      const ok=await flushList(entry,{ready:()=>true,send:batch=>sendBatch(entry,batch),report:(state,text)=>{if(state==='error')why=text??'';}});
+      if(!ok)message??=why||'The results could not be saved.';
+    }
+    setEarlier(message===null?null:{message});
+    if(message===null){setAnnounce('Results from earlier are saved.');void refreshLists();}
+    return message===null;
+  },[refreshLists]);
 
   // ---- build a list --------------------------------------------------------------------------------------------------------------
   const show=useCallback((p:WalkListPayload,adopt:boolean)=>{
-    payloadRef.current=p;setPayload(p);setResults(initialResults(p));outbox.clear();clearTimeout(timer.current);
+    payloadRef.current=p;setPayload(p);setResults(listMarks(p));setHistory({});clearTimeout(timer.current);   // results recorded on this list come back selected; the rest is history
+    entryRef.current=outbox.open({meta:p.list?.key?p.list:null,title:defaultListTitle(p),query:p.query??{}});
     setSaveState('idle');setSaveError('');setSaveOpen(false);setActionNote(null);setListKey(p.list?.key??'');
     const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
     const from=adopt?pickerOf(p):null;   // a re-knock list (either query shape) and a list with no picker settings leave the picker as it is
@@ -323,7 +389,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     setAnnounce(`Walk list ready. ${totalsLine(p.totals)}.`);
   },[]);
   const load=useCallback(async(job:(signal:AbortSignal)=>Promise<WalkListPayload>,done:(p:WalkListPayload)=>void,opts:{fail?:()=>void;say?:(message:string)=>void}={}):Promise<void>=>{
+    resume.current=null;
     if(!(await flush())){setNote('Some results are not saved yet. Use Retry beside the list actions, then try again.');return;}
+    if(!(await settleEarlier())){   // results from before the screen was left go first; Retry under the note builds the list once they are saved
+      resume.current=()=>void load(job,done,opts);
+      setNote('Some results from earlier are not saved yet. Use Retry below, and the list builds once they are.');return;
+    }
     const id=++gen.current;
     genAbort.current?.abort();const ac=genAbort.current=new AbortController();
     setLoading(true);setLoadError(null);setNote('');setAnnounce('Building the walk list.');
@@ -338,7 +409,11 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       if(e instanceof ApiError&&(e.status===400||e.status===422))(opts.say??setNote)(e.message);   // a limit or a bad pick: said beside the button that was used
       else setLoadError({message:e instanceof Error&&e.message?e.message:'The walk list could not be built.',retry:()=>void load(job,done,opts)});
     }finally{if(id===gen.current)setLoading(false);}
-  },[flush]);
+  },[flush,settleEarlier]);
+  const retryEarlier=async()=>{
+    if(!(await settleEarlier()))return;
+    setNote('');const go=resume.current;resume.current=null;go?.();   // the list the walker asked for while these were failing
+  };
 
   function generate(){
     const waiting=(upload?.rows??[]).filter(r=>rowState(r,picks)==='pick');
@@ -362,10 +437,14 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   }
   async function save(title:string){
     setBusy('save');setActionNote(null);
-    try{await ensureSaved(title);setSaveOpen(false);setAnnounce('List saved.');saveButton.current?.focus();void flush();}
+    try{await ensureSaved(title);refocusSave.current=true;setSaveOpen(false);setAnnounce('List saved.');void flush();}   // focus moves once this render has cleared busy
     catch(e){setActionNote({text:e instanceof Error&&e.message?e.message:'The list could not be saved.',alert:true});}
     finally{setBusy('');}
   }
+  // The Save button is disabled while saving and the form that held focus is gone once the list is saved: focus goes back to the button after that render.
+  useEffect(()=>{
+    if(refocusSave.current&&busy===''&&!saveOpen){refocusSave.current=false;saveButton.current?.focus();}
+  },[busy,saveOpen]);
 
   // ---- exports -------------------------------------------------------------------------------------------------------------------
   async function exportPdf(){
@@ -376,7 +455,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   }
   function exportCsv(){
     const p=payloadRef.current;if(!p)return;
-    downloadFile(walkFileName(listLabel(p),p.generated_on,'csv'),'text/csv;charset=utf-8',buildWalkCsv(p,results));
+    downloadFile(walkFileName(listLabel(p),p.generated_on,'csv'),'text/csv;charset=utf-8',buildWalkCsv(p,results,history));
   }
 
   // ---- streets: chips and upload -------------------------------------------------------------------------------------------------
@@ -391,12 +470,14 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const s=next.find(p=>p.id===id);if(s)setAnnounce(`${pickName(s)}: ${sideWords(s.side)}.`);
   }
   const fromStreet=(s:WalkStreet,side:WalkPick['side']='both'):WalkPick=>({id:s.id,side,label:s.label,city:s.city});
-  // The upload on screen lives in uploadRef as well as in state; replacing or clearing it cancels the requests still open for the old one.
+  // The upload on screen lives in uploadRef as well as in state; replacing or clearing it cancels the requests still open for the old one,
+  // and clearing it (or leaving it behind for a saved list) also drops a file that is still being matched.
   function putUpload(next:Upload|null){
     if(next?.id!==uploadRef.current?.id){uploadAbort.current?.abort();uploadAbort.current=next?new AbortController():null;}
+    if(!next&&matchJobs.cancel())setMatching(false);
     uploadRef.current=next;setUpload(next);
   }
-  function patchRow(id:number,i:number,patch:Partial<UploadRow>){putUpload(patchUploadRow(uploadRef.current,id,i,patch));}
+  function patchRow(id:number,i:number,patch:Partial<UploadRow>){const next=patchUploadRow(uploadRef.current,id,i,patch);if(next)putUpload(next);}
   function choose(i:number,c:WalkStreet){
     const u=uploadRef.current,r=u?.rows[i];if(!u||!r)return;setNote('');
     if(r.chosen!=null&&r.chosen!==c.id)setPicks(picksRef.current=picksRef.current.filter(p=>p.id!==r.chosen));
@@ -422,21 +503,26 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }
   }
   async function onFile(file:File){
+    // The file chosen last is the only one whose answer is wanted: choosing another, clearing the upload, opening a saved list that
+    // restores the picker or leaving the screen makes this one stale, and a stale answer changes nothing.
+    const job=matchJobs.start();setMatching(false);
     setUploadError('');setSkipped([]);setNote('');
     let read:WalkCsvRead;
-    try{read=readWalkCsv(await file.text());}catch(e){setUploadError(e instanceof Error?e.message:'That file could not be read.');return;}
+    try{read=readWalkCsv(await file.text());}catch(e){if(job.live()){job.end();setUploadError(e instanceof Error?e.message:'That file could not be read.');}return;}
+    if(!job.live())return;
     setSkipped(read.problems);   // rows with a value the server would refuse are reported and left out; the rest go on
     const inputs=read.rows;
-    if(!inputs.length){if(!read.problems.length)setUploadError('No streets found in that file. Add a column named street.');return;}
+    if(!inputs.length){job.end();if(!read.problems.length)setUploadError('No streets found in that file. Add a column named street.');return;}
     setMatching(true);
     try{
-      const res=await matchWalkStreets(inputs,area);
+      const res=await matchWalkStreets(inputs,area,job.signal);
+      if(!job.live())return;
       const rows=res.rows.map((row,i):UploadRow=>({input:inputs[i]??{street:row.input},row,chosen:row.status==='matched'?row.candidates[0]?.id??null:null,skipped:false,busy:false}));
       putUpload({id:++uploadSeq.current,name:file.name,count:inputs.length,rows});
       addPicks(rows.flatMap(r=>r.row.status==='matched'&&r.row.candidates[0]?[fromStreet(r.row.candidates[0],r.row.side)]:[]));
       setAnnounce(`${countText(rows.length,'row')} matched against the street list.`);
-    }catch(e){setUploadError(e instanceof Error&&e.message?e.message:'The streets could not be matched.');}
-    finally{setMatching(false);}
+    }catch(e){if(job.live())setUploadError(e instanceof Error&&e.message?e.message:'The streets could not be matched.');}
+    finally{if(job.live()){job.end();setMatching(false);}}
   }
 
   // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
@@ -448,14 +534,21 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   useEffect(()=>{
     if(started.current)return;started.current=true;
     void refreshLists();
+    void settleEarlier();   // results that could not be saved before the screen was left are sent again now
     const plan=startPlan(init);   // the address names a saved list, or streets and/or an area to build a list from
     if(plan==='saved')openSaved(init.list);else if(plan==='build')generate();
   },[]);
   useEffect(()=>{
     const warn=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||saving.current){e.preventDefault();e.returnValue='';}};
     const hidden=()=>{if(document.visibilityState==='hidden')void flush();};
+    window.removeEventListener('beforeunload',warnHeld);   // while the screen is here, its own guard speaks for every list on the shelf
     window.addEventListener('beforeunload',warn);document.addEventListener('visibilitychange',hidden);
-    return ()=>{window.removeEventListener('beforeunload',warn);document.removeEventListener('visibilitychange',hidden);void flush();genAbort.current?.abort();};
+    return ()=>{
+      window.removeEventListener('beforeunload',warn);document.removeEventListener('visibilitychange',hidden);
+      window.addEventListener('beforeunload',warnHeld);   // results the server has not confirmed outlive the screen, and so does the warning about them
+      void flush();entryRef.current=null;   // sent once more; whatever fails stays on the shelf, and the screen no longer takes part in the sending
+      genAbort.current?.abort();matchJobs.cancel();uploadAbort.current?.abort();
+    };
   },[flush]);
   const goToStop=useCallback((stop:number)=>{
     const el=document.getElementById(`walk-run-${stop}`);if(!el)return;
@@ -491,6 +584,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
 
         <button type="button" className="walk-generate" onClick={generate} disabled={loading} aria-busy={loading}>{loading?'Building…':'Generate walk list'}</button>
         {note&&<p className="walk-note" role="alert">{note}</p>}
+        {earlier&&<div className="walk-note" role="alert"><p>Results from earlier are not saved yet. {earlier.message}</p>
+          <p><button type="button" className="walk-link" onClick={()=>void retryEarlier()}>Retry</button></p></div>}
 
         <h2 className="walk-lab">Saved lists</h2>
         {lists.length>0
@@ -540,8 +635,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
               <MapGuard><Suspense fallback={<div className="walk-map-wait sk" role="status" aria-label="Loading the map"/>}><WalkMap payload={payload} shade={shade} onStop={goToStop}/></Suspense></MapGuard>
             </div>
             <DoorScript/>
-            <p className="walk-key">{historyKey(payload.window)} {codeLegend()}.</p>
-            {payload.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} onMark={mark}/>)}
+            <p className="walk-key">{historyKey(payload.window)} {codeLegend()}. Last shows the latest result on file with its date; choosing a result records a new visit.</p>
+            {payload.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} history={history} onMark={mark}/>)}
           </>:<div className="walk-empty"><h2>No doors found</h2><p>These streets have no voters on file. Try another street or a wider area.</p></div>}
         </>
         :<div className="walk-empty">

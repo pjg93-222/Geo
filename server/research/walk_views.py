@@ -7,7 +7,7 @@
   GET  /api/v3/walk/overview     the blocks of an area with door and party counts, for map shading
   GET  /api/v3/walk/lists        the 50 newest saved lists
   POST /api/v3/walk/lists        freeze a list {title, query}, or make a re-knock list {title, from, reknock: true}
-  GET  /api/v3/walk/lists/<key>  a saved list as it was frozen, with each voter's latest result refreshed
+  GET  /api/v3/walk/lists/<key>  a saved list as it was frozen, with each voter's latest result {code, on, list} refreshed
   POST /api/v3/walk/dispositions results of visits {list, on, entries}, appended; the newest entry of a person wins
 
 Every endpoint is local only (loopback owner, no proxy headers, not hosted), answers 403 in demo mode (lists carry real
@@ -443,20 +443,22 @@ def standard_payload(store, picks, area, query):
 
 
 def latest_codes(voter_keys):
-    """{voter key: {code, on}}: for each voter the newest result that stands. A list's current result for a person is
-    its newest entry (a null code cleared it); across lists the newest of those that are not cleared is the latest.
-    Newest is the last one saved (the row id), not the clock's word: results are appended and never edited."""
+    """{voter key: {code, on, list}}: for each voter the newest result that stands, and the key of the list it was recorded
+    on. A list's current result for a person is its newest entry (a null code cleared it); across lists the newest of those
+    that are not cleared is the latest. Newest is the last one saved (the row id), not the clock's word: results are
+    appended and never edited."""
     keys = sorted(set(voter_keys))
     latest = {}
     for start in range(0, len(keys), 500):
         state = {}
         entries = Disposition.objects.filter(voter_key__in=keys[start:start + 500]).order_by('id')
-        for walk_list, key, code, day, ident in entries.values_list('walk_list_id', 'voter_key', 'code', 'contacted_on', 'id'):
-            state[(walk_list, key)] = (ident, code, day)
-        for (_, key), (order, code, day) in state.items():
+        for walk_list, list_key, key, code, day, ident in entries.values_list(
+                'walk_list_id', 'walk_list__key', 'voter_key', 'code', 'contacted_on', 'id'):
+            state[(walk_list, key)] = (ident, code, day, list_key)
+        for (_, key), (order, code, day, list_key) in state.items():
             if code is not None and (key not in latest or order > latest[key][0]):
-                latest[key] = (order, code, day)
-    return {key: {'code': code, 'on': day.isoformat()} for key, (_, code, day) in latest.items()}
+                latest[key] = (order, code, day, list_key)
+    return {key: {'code': code, 'on': day.isoformat(), 'list': list_key} for key, (_, code, day, list_key) in latest.items()}
 
 
 def attach_last(payload, keys):

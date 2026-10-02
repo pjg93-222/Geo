@@ -475,11 +475,13 @@ test('PDF map: one scale in both directions, east-west degrees shrunk by cos(lat
 test('PDF map: every name stays inside the frame and none sit on another', async () => {
   const tight = {...context(), bbox: boxOf(at(-60, -20), at(60, 20))};   // a tight box puts the street name against an edge
   const many = {...context(), precincts: Array.from({length: 6}, (_, i) => ({id: `0${i}`, label: `PRECINCT-${i}-WITH-A-LONG-CODE`, rings: [[at(-500, -500 + i * 40), at(500, -500 + i * 40), at(500, 600), at(-500, 600), at(-500, -500 + i * 40)]]}))};
-  for (const ctx of [context(), tight, many, undefined]) {
+  // every fixture is named and checked for overlaps; `least` is how many names it must put down, so the pairs checked are real ones
+  const cases: [string, WalkContext | undefined, number][] = [['ordinary', context(), 4], ['tight', tight, 4], ['many', many, 7], ['none', undefined, 1]];
+  for (const [name, ctx, least] of cases) {
     const {map} = await buildWalkPdf(mapPayload(ctx)), f = map.frame;
-    assert.ok(map.labels.length >= 1);
-    for (const l of map.labels) for (const [x, y] of l.corners) assert.ok(x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h, `${l.kind} ${l.text} inside the frame`);
-    if (ctx === context() || ctx === undefined) for (let i = 0; i < map.labels.length; i++) for (let j = i + 1; j < map.labels.length; j++) assert.ok(!boxesHit(map.labels[i].corners, map.labels[j].corners), `${map.labels[i].text} / ${map.labels[j].text}`);
+    assert.ok(map.labels.length >= least, `${name}: ${map.labels.length} names`);
+    for (const l of map.labels) for (const [x, y] of l.corners) assert.ok(x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h, `${name}: ${l.kind} ${l.text} inside the frame`);
+    for (let i = 0; i < map.labels.length; i++) for (let j = i + 1; j < map.labels.length; j++) assert.ok(!boxesHit(map.labels[i].corners, map.labels[j].corners), `${name}: ${map.labels[i].text} / ${map.labels[j].text}`);
   }
   const {map} = await buildWalkPdf(mapPayload(context()));
   for (let i = 0; i < map.labels.length; i++) for (let j = i + 1; j < map.labels.length; j++) assert.ok(!boxesHit(map.labels[i].corners, map.labels[j].corners), `${map.labels[i].text} / ${map.labels[j].text}`);
@@ -676,4 +678,250 @@ test('walk screen wiring: the unload guard, the startup plan, the rematch check 
   assert.ok(/pickerOf\(p\)/.test(src) && !/k in q/.test(src), 'a saved list restores the picker only through pickerOf');
   assert.ok(/readWalkCsv\(/.test(src) && /leftOutNote\(skipped\)/.test(src) && !/parseWalkCsv/.test(src), 'rows left out of an upload are reported');
   assert.ok(!/takeResults|pending\.current/.test(src), 'results go through the outbox');
+});
+
+// --- review round 4: results that outlive the screen, history apart from marks, one answer at a time, visit days, enclave labels -----
+import {
+  MAX_RESULTS_PER_REQUEST, confirmedClears, dropCleared, flushList, historyOf, lastLabel, lastOf, lastText, latestJob, listMarks, markAfterClick, resultShelf, takeResults, visitRequest
+} from '../../src/v3/lib/walk.ts';
+import type {WalkHistory, WalkVisit} from '../../src/v3/lib/walk.ts';
+import {inArea, pointInRing} from '../../src/v3/lib/walkGeo.ts';
+import type {Bounds, XY} from '../../src/v3/lib/walkGeo.ts';
+import type {WalkCode} from '../../src/v3/api/walkTypes.ts';
+
+const visit = (code: WalkVisit['code'], on = '2026-10-02'): WalkVisit => ({code, on});
+const calm = {ready: () => true, report: () => {}};
+const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+test('visit days: a result keeps the day it was set, and a request holds one day, the oldest first', () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on);
+  outbox.set('a', visit('S')); outbox.set('b', visit('NH')); outbox.set('c', visit(null, '2026-10-03')); outbox.set('d', visit('U'));
+  const first = outbox.take();
+  assert.deepEqual([...first.keys()], ['a', 'b', 'd'], 'the oldest result sets the day; the next day waits for a request of its own');
+  assert.deepEqual(visitRequest(first), {on: '2026-10-02', entries: [{person_id: 'a', code: 'S'}, {person_id: 'b', code: 'NH'}, {person_id: 'd', code: 'U'}]});
+  assert.deepEqual(visitRequest(outbox.take()), {on: '2026-10-03', entries: [{person_id: 'c', code: null}]});
+  assert.equal(outbox.take().size, 0);
+  assert.throws(() => visitRequest(new Map([['a', visit('S')], ['b', visit('S', '2026-10-03')]])), /one day/);
+  assert.deepEqual(visitRequest(new Map()), {on: '', entries: []});
+  // without a grouping one request holds whatever waits (what the other outbox tests rely on); with one it never mixes groups, at the limit too
+  const parity = () => new Map(Array.from({length: 450}, (_, i) => [`p${i}`, i % 2] as [string, number]));
+  assert.equal(takeResults(parity()).size, MAX_RESULTS_PER_REQUEST);
+  const batch = takeResults(parity(), MAX_RESULTS_PER_REQUEST, v => String(v));
+  assert.equal(batch.size, 200); assert.ok([...batch.values()].every(v => v === 0));
+});
+
+test('visit days: a request that fails keeps its day for the retry, even after midnight, and a later result brings its own day', async () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on); outbox.set('a', visit('S', '2026-10-02'));
+  const sent: [string, string[]][] = []; let online = false;
+  const io = {...calm, send: async (batch: Map<string, WalkVisit>) => { if (!online) throw new Error('offline'); const r = visitRequest(batch); sent.push([r.on, r.entries.map(e => e.person_id)]); }};
+  assert.equal(await drainResults(outbox, io), false);
+  outbox.set('b', visit('U', '2026-10-03'));   // the walker carries on after midnight
+  online = true;
+  assert.equal(await drainResults(outbox, io), true);
+  assert.deepEqual(sent, [['2026-10-02', ['a']], ['2026-10-03', ['b']]], 'a request for each day, each with the day of its visits');
+  assert.ok(!outbox.unconfirmed());
+  outbox.set('a', visit('S', '2026-10-02')); outbox.set('a', visit('O', '2026-10-03'));   // a voter marked again on a later day is one visit of that day
+  assert.deepEqual(visitRequest(outbox.take()), {on: '2026-10-03', entries: [{person_id: 'a', code: 'O'}]});
+});
+
+test('visit days: when the second day fails the first stays saved, and only the second is sent again', async () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on); outbox.set('a', visit('S', '2026-10-02')); outbox.set('b', visit('U', '2026-10-03'));
+  const sent: string[] = []; let failSecond = true;
+  const io = {...calm, send: async (batch: Map<string, WalkVisit>) => { const {on} = visitRequest(batch); if (on === '2026-10-03' && failSecond) throw new Error('offline'); sent.push(on); }};
+  assert.equal(await drainResults(outbox, io), false); assert.deepEqual(sent, ['2026-10-02']);
+  assert.deepEqual([...outbox.waiting.keys()], ['b']); assert.ok(outbox.unconfirmed());
+  failSecond = false;
+  assert.equal(await drainResults(outbox, io), true); assert.deepEqual(sent, ['2026-10-02', '2026-10-03']);
+});
+
+test("unsaved results: holds() says whether a voter's result is still on its way, waiting or in a request", () => {
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on);
+  assert.ok(!outbox.holds('a')); outbox.set('a', visit('S')); assert.ok(outbox.holds('a') && !outbox.holds('b'));
+  const batch = outbox.take(); assert.ok(outbox.holds('a'), 'in a request that has not been answered');
+  outbox.confirm(batch); assert.ok(!outbox.holds('a'));
+  outbox.set('a', visit(null)); const again = outbox.take(); outbox.restore(again); assert.ok(outbox.holds('a'), 'back to waiting after a failure');
+});
+
+test('results outlive the screen: a save that fails after the walker leaves stays on the shelf, and coming back sends it', async () => {
+  const shelf = resultShelf<string, WalkVisit>(v => v.on);
+  const list = shelf.open({meta: null, title: 'Precinct 02012 · 10/2/2026', query: {precinct: '02012'}});
+  assert.ok(!shelf.unconfirmed() && !shelf.held().length, 'a list that has come on screen holds nothing yet');
+  shelf.keep(list); list.box.set('a', visit('S')); list.box.set('b', visit(null));
+  assert.ok(shelf.unconfirmed(), 'results waiting count');
+  // the screen is left, and the request that goes out as it closes fails
+  assert.equal(await flushList(list, {...calm, send: async () => { throw new Error('offline'); }}), false);
+  assert.deepEqual(shelf.held(), [list]); assert.ok(shelf.unconfirmed(), 'the page still has results to warn about');
+  assert.deepEqual([...list.box.waiting], [['a', visit('S')], ['b', visit(null)]], 'both results are back in the outbox, with their days');
+  assert.equal(list.title, 'Precinct 02012 · 10/2/2026'); assert.deepEqual(list.query, {precinct: '02012'}); assert.equal(list.meta, null);   // what saving the list again needs
+  // another list is opened and marked meanwhile
+  const other = shelf.open({meta: null, title: 'Other', query: {}}); shelf.keep(other); other.box.set('z', visit('U', '2026-10-03'));
+  assert.deepEqual(shelf.held(), [list, other]);
+  // back on the walk screen: the entries that are not on screen are sent again
+  const sent: string[] = [];
+  assert.equal(await flushList(list, {...calm, send: async b => { sent.push(`${visitRequest(b).on}:${[...b.keys()]}`); }}), true);
+  assert.deepEqual(sent, ['2026-10-02:a,b']); assert.deepEqual(shelf.held(), [other], 'a list whose results are saved leaves the shelf');
+  assert.equal(await flushList(other, {...calm, send: async () => {}}), true); assert.ok(!shelf.unconfirmed());
+});
+
+test('results outlive the screen: a result set while a request is in flight is not lost when that request fails', async () => {
+  const shelf = resultShelf<string, WalkVisit>(v => v.on), list = shelf.open({meta: null, title: 't', query: {}}); shelf.keep(list);
+  list.box.set('a', visit('S')); let fail!: (e: Error) => void;
+  const done = flushList(list, {...calm, send: () => new Promise<void>((_, rej) => { fail = rej; })});
+  await tick();
+  assert.ok(list.box.unconfirmed(), 'the request holds the result'); list.box.set('a', visit('O')); list.box.set('c', visit('NH'));
+  fail(new Error('offline')); assert.equal(await done, false);
+  assert.deepEqual([...list.box.waiting], [['a', visit('O')], ['c', visit('NH')]], 'the newer O wins over the S that failed');
+  assert.ok(shelf.unconfirmed());
+});
+
+test('results outlive the screen: flushes of one list run one after another, so a second request never overtakes the first', async () => {
+  const shelf = resultShelf<string, WalkVisit>(v => v.on), list = shelf.open({meta: null, title: 't', query: {}}); shelf.keep(list);
+  const log: string[] = []; let release!: () => void, calls = 0;
+  list.box.set('a', visit('S'));
+  const first = flushList(list, {...calm, send: b => { log.push(`first ${[...b.keys()]}`); return calls++ ? Promise.resolve() : new Promise<void>(r => { release = r; }); }});
+  await tick();
+  list.box.set('b', visit('U'));   // set while the first request is in flight
+  const second = flushList(list, {...calm, send: async b => { log.push(`second ${[...b.keys()]}`); }});
+  await tick();
+  assert.deepEqual(log, ['first a'], 'the second flush waits for the request in flight');
+  release(); assert.deepEqual([await first, await second], [true, true]);
+  assert.deepEqual(log, ['first a', 'first b'], 'the flush in flight sends what came meanwhile, in order, and the second flush finds nothing left'); assert.ok(!shelf.unconfirmed());
+  // a flush that fails does not stop the one after it
+  list.box.set('c', visit('S'));
+  assert.equal(await flushList(list, {...calm, send: async () => { throw new Error('offline'); }}), false);
+  assert.equal(await flushList(list, {...calm, send: async () => {}}), true); assert.ok(!shelf.unconfirmed());
+});
+
+test('history apart from marks: what is on file shows with its day and is never a mark; the code on file can be recorded again', () => {
+  const a = voter({person_id: 'a', last: {code: 'NH', on: '2026-09-30', list: 'k0'}}), b = voter({person_id: 'b', last: null});
+  const p = payload([run({doors: [door(1, '4102', [a, b])]})]);
+  assert.equal(lastText(a.last), 'NH 9/30/2026'); assert.equal(lastLabel(a.last), 'Not home on 9/30/2026'); assert.equal(lastText(null), ''); assert.equal(lastText({code: 'S', on: '', list: null}), 'S');
+  assert.deepEqual(historyOf(p), {a: {code: 'NH', on: '2026-09-30', list: 'k0'}, b: null}); assert.deepEqual(historyOf(payload([])), {});
+  assert.deepEqual(lastOf(a), a.last); assert.equal(lastOf(b), null);
+  assert.deepEqual(lastOf(a, {a: {code: 'MV', on: '2026-10-01', list: 'k1'}}), {code: 'MV', on: '2026-10-01', list: 'k1'}, 'a fresher look at the list wins');
+  assert.equal(lastOf(a, {a: null}), null, 'nothing on file after all'); assert.deepEqual(lastOf(a, {b: null}), a.last, 'no fresher look at this voter: what the list came with');
+  // the history is not a mark: choosing the code on file records a visit, and only a code that is marked is taken back
+  assert.equal(markAfterClick(undefined, 'NH'), 'NH', 'last seen Not home and not home again: another Not home is recorded'); assert.equal(markAfterClick(null, 'NH'), 'NH');
+  assert.equal(markAfterClick('NH', 'NH'), null); assert.equal(markAfterClick('NH', 'S'), 'S');
+  // initialResults is the history as codes, whichever list it was recorded on (the screen starts from listMarks instead)
+  assert.deepEqual(initialResults(p), {a: 'NH'});
+});
+
+test('marks come back with the list: a result recorded on this list is selected after a reload, one from another list is history', () => {
+  const here = voter({person_id: 'a', last: {code: 'S', on: '2026-10-02', list: 'k1'}});
+  const parent = voter({person_id: 'b', name: 'Lee Stone', last: {code: 'NH', on: '2026-09-30', list: 'k0'}});
+  const none = voter({person_id: 'c', name: 'Pat Moss', last: null});
+  const unsure = voter({person_id: 'd', name: 'Ann Poe', last: {code: 'U', on: '2026-09-01', list: null}});
+  const saved = (key: string | null): WalkListPayload => ({...payload([run({doors: [door(1, '4102', [here, parent, none, unsure])]})]), list: {key, title: 'Saturday', kind: 'standard', created_at: null}});
+  assert.deepEqual(listMarks(saved('k1')), {a: 'S'}, 'only the result recorded on this list is a mark');
+  assert.deepEqual(listMarks(saved('k0')), {b: 'NH'}, 'on the list that holds the Not home, that one is the mark');
+  assert.deepEqual(listMarks(saved('k9')), {}, 'a list that none of the results belong to starts with no marks');
+  assert.deepEqual(listMarks(saved(null)), {}, 'a list that is not saved has no results of its own');
+  assert.deepEqual(listMarks(payload([])), {}); assert.deepEqual(listMarks({list: saved('k1').list, runs: undefined as unknown as WalkRun[]}), {});
+  assert.deepEqual(historyOf(saved('k1')), {a: here.last, b: parent.last, c: null, d: unsure.last}, 'every voter keeps the history the list came with');
+  // a re-knock list made from k0: the Not home of k0 is history there, so choosing Not home records a new visit and does not clear anything
+  const reknock: WalkListPayload = {...saved('k5'), list: {key: 'k5', title: 'Not home again · Saturday', kind: 'reknock', created_at: null}};
+  assert.deepEqual(listMarks(reknock), {}); assert.equal(markAfterClick(listMarks(reknock).b, 'NH'), 'NH');
+  // after the Not home is recorded on k5 and the list is opened again, it is the mark of k5 and the line for it is gone
+  const again = {...reknock, runs: [run({doors: [door(1, '4102', [{...parent, last: {code: 'NH', on: '2026-10-02', list: 'k5'}}])]})]};
+  assert.deepEqual(listMarks(again), {b: 'NH'}); assert.equal(markAfterClick(listMarks(again).b, 'NH'), null, 'and choosing it again takes it back');
+  assert.ok(Object.keys(initialResults(saved('k1'))).length === 3, 'initialResults still reads every code on file, from any list');
+});
+
+test('history apart from marks: the CSV Result is the mark, else the latest result on file, as fresh as the last look at the list', () => {
+  const a = voter({person_id: 'a', last: {code: 'NH', on: '2026-09-30'}}), b = voter({person_id: 'b', name: 'Lee Stone', last: {code: 'S', on: '2026-09-30'}});
+  const p = payload([run({doors: [door(1, '4102', [a, b])]})]), col = (rows: string[][]) => rows.map(r => r[15]);
+  assert.deepEqual(col(walkCsvRows(p)), ['NH', 'S']);
+  assert.deepEqual(col(walkCsvRows(p, {a: 'MV'})), ['MV', 'S'], 'a mark wins');
+  assert.deepEqual(col(walkCsvRows(p, {a: null})), ['', 'S'], 'a cleared mark is empty until the server has confirmed the clearing');
+  // the clearing is confirmed and the list is looked at again: a's older result from another list is back, b has nothing on file
+  const fresh: WalkHistory = {a: {code: 'U', on: '2026-09-01', list: 'k0'}, b: null};
+  assert.deepEqual(col(walkCsvRows(p, {}, fresh)), ['U', ''], 'the fresh look replaces what the list came with');
+  assert.deepEqual(col(walkCsvRows(p, {a: 'MV'}, fresh)), ['MV', '']);
+  assert.ok(buildWalkCsv(p, {}, fresh).includes('"1994-09-29","U"\r\n'));
+  const marks: Record<string, WalkCode | null> = {a: null, b: 'S', c: null};
+  assert.deepEqual(confirmedClears(marks, id => id === 'c'), ['a'], 'a cleared mark counts once no result for the voter is still on its way');
+  assert.deepEqual(confirmedClears(marks, () => false), ['a', 'c']); assert.deepEqual(confirmedClears({b: 'S'}, () => false), []);
+  assert.deepEqual(dropCleared(marks, ['a']), {b: 'S', c: null}, 'a confirmed clearing leaves; one still on its way stays');
+  assert.deepEqual(dropCleared({a: 'U'}, ['a']), {a: 'U'}, 'a voter marked again since stays marked');
+  const same = {b: 'S' as WalkCode};
+  assert.equal(dropCleared(same, ['b', 'z']), same, 'nothing to drop: the same object');
+  assert.deepEqual(marks, {a: null, b: 'S', c: null}, 'the input is not changed');
+});
+
+test('one answer at a time: a later job, a cancel or an end settles the earlier job, and a stale job cannot change anything', async () => {
+  const jobs = latestJob();
+  const a = jobs.start(); assert.ok(a.live() && !a.signal.aborted);
+  const b = jobs.start(); assert.ok(!a.live() && a.signal.aborted, 'starting b makes a stale and aborts its request'); assert.ok(b.live() && !b.signal.aborted);
+  assert.equal(jobs.cancel(), true); assert.ok(!b.live() && b.signal.aborted); assert.equal(jobs.cancel(), false, 'nothing is open');
+  const c = jobs.start(); c.end(); assert.ok(!c.live() && !c.signal.aborted, 'a job that finished was not cancelled'); assert.equal(jobs.cancel(), false);
+  const d = jobs.start(); a.end(); b.end(); assert.ok(d.live(), 'a stale job ending does not end the live one');
+  // initial matching of file A, then a saved list is adopted (its picker replaces the one A would add to), then A answers late
+  const picker: string[] = [], matching = latestJob();
+  const match = async (streets: string[], wait: number) => {
+    const job = matching.start(); await new Promise(r => setTimeout(r, wait));
+    if (!job.live()) return false;
+    picker.push(...streets); job.end(); return true;
+  };
+  const slow = match(['pine st'], 20);
+  matching.cancel(); picker.splice(0, picker.length, 'oak st');   // cleared, or left behind by a saved list that restores its own streets
+  assert.equal(await slow, false); assert.deepEqual(picker, ['oak st'], 'the late answer of the file adds nothing to the other list');
+  const first = match(['elm ave'], 30), second = match(['cedar dr'], 5);
+  assert.deepEqual([await first, await second], [false, true]); assert.deepEqual(picker, ['oak st', 'cedar dr'], 'only the file chosen last is answered');
+});
+
+// --- precinct names: inside the fill, never on an enclave ---------------------------------------------------------------------
+const sq = (cx: number, cy: number, r: number): XY[] => [[cx - r, cy - r], [cx + r, cy - r], [cx + r, cy + r], [cx - r, cy + r], [cx - r, cy - r]];
+
+test('precinct label points: inside the fill of the area, never in a hole where another precinct lies', () => {
+  const view: Bounds = [0, 0, 100, 100];
+  // A is a square ring around a square hole that B fills (the server sends both rings of A): the middle of A's outer ring is in B
+  const A = [sq(50, 50, 48), sq(50, 50, 30)], B = [sq(50, 50, 30)];
+  const a = labelPoint(A, view);
+  assert.ok(a && inArea(a, A) && !pointInRing(a, B[0]), `A is named at ${a}`);
+  assert.deepEqual(labelPoint(B, view), [50, 50], 'B is named at its middle');
+  assert.deepEqual(labelPoint([...A].reverse(), view), a, 'the order of the rings does not matter');
+  const fills: [string, XY[][]][] = [
+    ['a hole off centre', [sq(50, 50, 48), sq(35, 50, 25)]],
+    ['two holes with fill between them', [sq(50, 50, 48), sq(25, 50, 15), sq(75, 50, 15)]],
+    ['a hole cut by the edge of the view', [sq(50, 50, 200), sq(0, 50, 30)]],
+    ['a thin ring', [sq(50, 50, 48), sq(50, 50, 47)]],
+    ['a piece of the area inside the hole', [sq(50, 50, 48), sq(50, 50, 40), sq(50, 50, 20)]],
+    ['two pieces, one with a hole', [sq(25, 25, 20), sq(25, 25, 10), sq(80, 80, 10)]],
+  ];
+  for (const [what, rings] of fills) { const p = labelPoint(rings, view); assert.ok(p && inArea(p, rings), `${what}: ${p}`); }
+  assert.equal(labelPoint([sq(50, 50, 48), sq(50, 50, 40)], [30, 30, 70, 70]), null, 'a view that lies wholly in the hole shows none of the area');
+  const parts = labelPoint([sq(25, 25, 20), sq(25, 25, 10), sq(80, 80, 10)], view);
+  assert.ok(parts && parts[0] < 50 && parts[1] < 50, `the bigger piece, the one with the hole, is named: ${parts}`);
+});
+
+test('PDF map: the code of a precinct that surrounds another is written in its own fill, and the enclave keeps its own', async () => {
+  const hole = [at(-150, -150), at(150, -150), at(150, 150), at(-150, 150), at(-150, -150)];   // B, centred on the map; 150 m from the middle to each side
+  const A = {id: '02012', label: '02012', rings: [[at(-400, -400), at(400, -400), at(400, 400), at(-400, 400), at(-400, -400)], hole]};
+  const B = {id: '02013', label: '02013', rings: [hole]};
+  const {map} = await buildWalkPdf(mapPayload({...context(), precincts: [A, B]}));
+  const f = map.frame, half = 150 / map.metresPerPoint;
+  const away = (l: {corners: XY[]}) => Math.max(Math.abs(l.corners.reduce((s, c) => s + c[0], 0) / 4 - (f.x + f.w / 2)), Math.abs(l.corners.reduce((s, c) => s + c[1], 0) / 4 - (f.y + f.h / 2)));
+  const a = map.labels.find(l => l.kind === 'precinct' && l.text === '02012'), b = map.labels.find(l => l.kind === 'precinct' && l.text === '02013');
+  assert.ok(a && b, 'both codes are written');
+  assert.ok(away(a) > half, `A (${away(a).toFixed(0)} pt from the middle) is outside the ${half.toFixed(0)} pt enclave`);
+  assert.ok(away(b) < half, `B (${away(b).toFixed(0)} pt from the middle) is inside it`);
+  for (const l of map.labels) for (const [x, y] of l.corners) assert.ok(x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h, `${l.text} inside the frame`);
+});
+
+test('walk screen wiring (round 4): the shelf outlives the screen, a file is matched as the latest job, the visit day is taken when a result is set, focus returns after the save render', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  assert.ok(/^const outbox=resultShelf<string,WalkVisit>\(v=>v\.on\);/m.test(src), 'one shelf for the page, outside the component, split into requests by day');
+  assert.ok(!/outbox\.clear\(\)/.test(src), 'showing another list does not forget results that were not saved');
+  assert.ok(/window\.addEventListener\('beforeunload',warnHeld\)/.test(src) && /const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\)/.test(src), 'closing the page asks while the screen is away too');
+  assert.ok(/settleEarlier\(\)/.test(src) && /outbox\.held\(\)/.test(src), 'results kept from an earlier visit are sent again');
+  assert.ok(/entry\.box\.set\(id,\{code,on:localToday\(\)\}\)/.test(src) && !/saveWalkDispositions\([^)]*localToday/.test(src), 'the day is taken when a result is set, never when it is sent');
+  assert.ok(/matchJobs\.start\(\)/.test(src) && /matchWalkStreets\(inputs,area,job\.signal\)/.test(src) && /if\(!job\.live\(\)\)return;/.test(src), 'the first answer for a file is dropped once the file is replaced, cleared or left behind');
+  assert.ok(/if\(!next&&matchJobs\.cancel\(\)\)/.test(src), 'clearing or replacing the upload drops a file still being matched');
+  const save = /async function save\(title:string\)\{[\s\S]*?\n  \}/.exec(src)?.[0] ?? '';
+  assert.ok(save.includes('ensureSaved(title)') && !save.includes('.focus()'), 'save() does not focus the button it has just disabled');
+  assert.ok(/if\(refocusSave\.current&&busy===''&&!saveOpen\)\{refocusSave\.current=false;saveButton\.current\?\.focus\(\);\}/.test(src), 'focus returns to Save after the render that cleared busy');
+  assert.ok(/markAfterClick\(p\.value,c\)/.test(src) && !/initialResults/.test(src), 'a code on file is history, not a mark');
+  assert.ok(/setResults\(listMarks\(p\)\)/.test(src), 'a list opens with the results recorded on it selected');
+  assert.ok(/confirmedClears\(resultsRef\.current,id=>entry\.box\.holds\(id\)\)/.test(src) && /setResults\(r=>dropCleared\(r,ids\)\)/.test(src), 'a confirmed clearing is reconciled with what the server holds');
 });

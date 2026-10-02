@@ -26,7 +26,9 @@ export interface WalkMatchPayload { rows: WalkMatchRow[] }
 
 // GET /api/v3/walk/list?streets=12:even,15:both&ss=&sh=&precinct=
 export interface WalkTally { voted: number; eligible: number }
-export interface WalkLast { code: WalkCode; on: string }
+// A voter's latest result across all lists: its code, the day of the visit, and the key of the saved list it was recorded on
+// (a result with `list` equal to the open list's key is a mark on that list; any other is history from another list).
+export interface WalkLast { code: WalkCode; on: string; list: string | null }
 export interface WalkVoter {
   person_id: string; name: string; phone: string;
   pri: WalkTally; gen: WalkTally; abs: WalkTally;

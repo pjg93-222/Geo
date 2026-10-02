@@ -1,6 +1,6 @@
 // Walk list text rules: tallies, dates, phones, run headers, totals, result codes and the CSV in and out.
 // Pure, and only `import type` from other files, so node --test can load it directly (same constraint as format.ts).
-import type {WalkArea,WalkCode,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
+import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -103,20 +103,82 @@ const csvField=(value:unknown):string=>`"${csvValue(value).replace(/[\r\n]+/g,' 
 // A spreadsheet reads "4/6" as a date, so the file says "4 of 6"; the registration date stays ISO for the same reason.
 const csvTally=(t:WalkTally|null|undefined):string=>t?`${t.voted} of ${t.eligible}`:'';
 
-/** Result codes by person id as the screen holds them; null is a cleared result. */
+/**
+ * Result codes by person id for the marks on this list, on screen; null is a cleared mark. A voter with no entry has no mark: a result
+ * on file that was recorded on another list is history (WalkHistory), shown dated and apart, and is not a mark on this list.
+ */
 export type WalkResults=Record<string,WalkCode|null>;
-/** The results already on file for a list: each voter's latest code. */
+/** The latest result on file for each voter by person id (null: none). A voter with no entry here shows what the list came with. */
+export type WalkHistory=Record<string,WalkLast|null>;
+/** The latest code on file for each voter of a list, as codes, whichever list it was recorded on. History, not marks: see listMarks. */
 export function initialResults(payload:WalkListPayload):WalkResults{
   const out:WalkResults={};
   for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)if(v.last?.code)out[v.person_id]=v.last.code;
   return out;
 }
+/**
+ * The marks a saved list already has: each voter whose latest result on file was recorded on this very list (`last.list` is the list's
+ * key). They come back selected. A result recorded on another list, such as the list a re-knock list was made from, stays history.
+ */
+export function listMarks(payload:Pick<WalkListPayload,'runs'|'list'>):WalkResults{
+  const key=payload.list?.key,out:WalkResults={};
+  if(!key)return out;   // a list that is not saved has no results of its own
+  for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)if(v.last?.code&&v.last.list===key)out[v.person_id]=v.last.code;
+  return out;
+}
+/** A voter's latest result on file: the fresh look at the list when there is one, else what the list came with. */
+export const lastOf=(v:Pick<WalkVoter,'person_id'|'last'>,history?:WalkHistory):WalkLast|null=>
+  history&&Object.hasOwn(history,v.person_id)?history[v.person_id]:v.last??null;
+/** The latest result on file for every voter of a list as the server sent it (null where there is none). */
+export function historyOf(payload:Pick<WalkListPayload,'runs'>):WalkHistory{
+  const out:WalkHistory={};
+  for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)out[v.person_id]=v.last??null;
+  return out;
+}
+/** "NH 9/30/2026": a result on file with the day it was recorded. */
+export function lastText(last:WalkLast|null|undefined):string{
+  return last?[last.code,fullDate(last.on)].filter(Boolean).join(' '):'';
+}
+/** "Not home on 9/30/2026", for a tooltip. */
+export function lastLabel(last:WalkLast|null|undefined):string{
+  if(!last)return '';
+  const day=fullDate(last.on);
+  return `${CODE_LABEL[last.code]??last.code}${day?` on ${day}`:''}`;
+}
+/** The voters whose mark is a cleared one (null) with no result still on its way: the server has the clearing, so what it holds for them is the history to show. `holds` says a result for the voter is still on its way. */
+export const confirmedClears=(results:WalkResults,holds:(id:string)=>boolean):string[]=>Object.keys(results).filter(id=>results[id]===null&&!holds(id));
+/** The marks without the cleared ones named in `ids` (a voter marked again since stays marked). Returns `results` itself when nothing changes. */
+export function dropCleared(results:WalkResults,ids:readonly string[]):WalkResults{
+  let out:WalkResults|null=null;
+  for(const id of ids)if(results[id]===null){out??={...results};delete out[id];}
+  return out??results;
+}
+
+/** What choosing `code` does to a voter's mark on this list. The code is recorded as a new visit whatever the history on file says (a voter last seen
+ *  Not home who is not home again gets another Not home); choosing the code that is already marked takes the mark back (null). */
+export const markAfterClick=(mark:WalkCode|null|undefined,code:WalkCode):WalkCode|null=>mark===code?null:code;
+/** A result as the walker set it: the code (null clears the result) and the day of the visit, taken when the walker set it. */
+export interface WalkVisit{code:WalkCode|null;on:string}
+/** The day and entries of one request. A request holds one day: the outbox batches by day, and the day is the one taken when the results were set, never today's. */
+export function visitRequest(batch:ReadonlyMap<string,WalkVisit>):{on:string;entries:WalkDispositionEntry[]}{
+  let on='';const entries:WalkDispositionEntry[]=[];
+  for(const [person_id,v] of batch){
+    if(!entries.length)on=v.on;else if(v.on!==on)throw new Error('A request can hold the results of one day only.');
+    entries.push({person_id,code:v.code});
+  }
+  return {on,entries};
+}
+
 /** Most results one request carries (MAX_ENTRIES in walk_views.py). */
 export const MAX_RESULTS_PER_REQUEST=200;
-/** Takes up to `max` waiting results out of `pending`, oldest first, for one request. */
-export function takeResults<K,V>(pending:Map<K,V>,max=MAX_RESULTS_PER_REQUEST):Map<K,V>{
-  const batch=new Map<K,V>();
-  for(const [k,v] of pending){if(batch.size>=max)break;batch.set(k,v);}
+/** Takes up to `max` waiting results out of `pending`, oldest first, for one request. With `group`, a request holds the results of one group, the group of the oldest waiting one; the others wait for a request of their own. */
+export function takeResults<K,V>(pending:Map<K,V>,max=MAX_RESULTS_PER_REQUEST,group?:(value:V)=>string):Map<K,V>{
+  const batch=new Map<K,V>();let first:string|undefined;
+  for(const [k,v] of pending){
+    if(batch.size>=max)break;
+    if(group){const g=group(v);if(first===undefined)first=g;else if(g!==first)continue;}
+    batch.set(k,v);
+  }
   for(const k of batch.keys())pending.delete(k);
   return batch;
 }
@@ -136,30 +198,36 @@ export interface ResultOutbox<K,V>{
   restore(batch:Map<K,V>):void;
   /** True while a result is waiting or travelling in a request that has not been answered. */
   unconfirmed():boolean;
-  /** Forgets the waiting results (another list is on screen); requests already sent count until they are answered. */
+  /** True while a result for this key is waiting or travelling in a request that has not been answered. */
+  holds(key:K):boolean;
+  /** Forgets the waiting results; requests already sent count until they are answered. */
   clear():void;
 }
-export function resultOutbox<K,V>():ResultOutbox<K,V>{
+/** `group` splits the waiting results into requests: one request never holds results of two groups (here, two days of visits). */
+export function resultOutbox<K,V>(group?:(value:V)=>string):ResultOutbox<K,V>{
   const waiting=new Map<K,V>();const sent=new Set<Map<K,V>>();
   return {
     waiting,
     set(key,value){waiting.set(key,value);},
-    take(max=MAX_RESULTS_PER_REQUEST){const batch=takeResults(waiting,max);if(batch.size)sent.add(batch);return batch;},
+    take(max=MAX_RESULTS_PER_REQUEST){const batch=takeResults(waiting,max,group);if(batch.size)sent.add(batch);return batch;},
     confirm(batch){sent.delete(batch);},
     restore(batch){sent.delete(batch);for(const [k,v] of batch)if(!waiting.has(k))waiting.set(k,v);},
     unconfirmed:()=>waiting.size>0||sent.size>0,
+    holds:key=>waiting.has(key)||[...sent].some(b=>b.has(key)),
     clear(){waiting.clear();},
   };
+}
+/** What a drain needs from its caller. */
+export interface DrainIo<K,V>{
+  ready():boolean;                                    // false while no list is on screen
+  send(batch:Map<K,V>):Promise<unknown>;              // saves the list if it is not saved yet, then posts the batch
+  report(state:SaveState,message?:string):void;
 }
 /**
  * Sends the waiting results, one request at a time and at most MAX_RESULTS_PER_REQUEST each, until none are left.
  * False when a request fails: its results go back to waiting and the failure is reported.
  */
-export async function drainResults<K,V>(outbox:ResultOutbox<K,V>,io:{
-  ready():boolean;                                    // false while no list is on screen
-  send(batch:Map<K,V>):Promise<unknown>;              // saves the list if it is not saved yet, then posts the batch
-  report(state:SaveState,message?:string):void;
-}):Promise<boolean>{
+export async function drainResults<K,V>(outbox:ResultOutbox<K,V>,io:DrainIo<K,V>):Promise<boolean>{
   while(io.ready()&&outbox.waiting.size){
     const batch=outbox.take();
     io.report('saving');
@@ -174,22 +242,86 @@ export async function drainResults<K,V>(outbox:ResultOutbox<K,V>,io:{
   }
   return true;
 }
-// A code set on screen wins over the one on file; a cleared one leaves the cell empty.
-const resultCode=(v:WalkVoter,results?:WalkResults):string=>results&&Object.hasOwn(results,v.person_id)?results[v.person_id]??'':v.last?.code??'';
 
-/** One row per voter in walking order. Result holds the code on file, or the one in `results` when the walker has set it. */
-export function walkCsvRows(payload:WalkListPayload,results?:WalkResults):string[][]{
+// --- results that outlive the screen -------------------------------------------------------------------------------------
+/**
+ * The results of one list that the server has not confirmed, with what saving them needs. It belongs to the page, not to the
+ * screen: leaving the walk list with a failed save keeps the entry on the shelf, and coming back sends it again.
+ */
+export interface ListResults<K,V>{
+  readonly box:ResultOutbox<K,V>;
+  /** The saved list; null until the list is saved. */
+  meta:WalkListMeta|null;
+  title:string;
+  readonly query:Record<string,string>;
+  /** The request that saves the list, while one is open: a second ask shares it, so a list is saved once. */
+  saving:Promise<WalkListMeta>|null;
+  /** The latest flush of this list; the next one starts after it, so requests for one list never overlap and stay in order. */
+  chain:Promise<boolean>;
+}
+/** A list's results with the day of each visit: the form the walk screen keeps them in. */
+export type HeldList=ListResults<string,WalkVisit>;
+export interface ResultShelf<K,V>{
+  /** A new, empty entry for a list that has come on screen. It joins the shelf when `keep` is called (the first result does). */
+  open(list:{meta:WalkListMeta|null;title:string;query:Record<string,string>}):ListResults<K,V>;
+  keep(entry:ListResults<K,V>):void;
+  /** The entries that hold results the server has not confirmed. An entry that holds none leaves the shelf. */
+  held():ListResults<K,V>[];
+  /** True while any list holds a result the server has not confirmed. */
+  unconfirmed():boolean;
+}
+export function resultShelf<K,V>(group?:(value:V)=>string):ResultShelf<K,V>{
+  const entries=new Set<ListResults<K,V>>();
+  const held=():ListResults<K,V>[]=>{for(const e of entries)if(!e.box.unconfirmed())entries.delete(e);return [...entries];};
+  return {
+    open:list=>({box:resultOutbox<K,V>(group),meta:list.meta,title:list.title,query:list.query,saving:null,chain:Promise.resolve(true)}),
+    keep:entry=>{entries.add(entry);},
+    held,
+    unconfirmed:()=>held().length>0,
+  };
+}
+/** Sends the waiting results of one list after any flush of that list still open. False when a request fails (the results stay on the entry). */
+export function flushList<K,V>(entry:ListResults<K,V>,io:DrainIo<K,V>):Promise<boolean>{
+  const run=():Promise<boolean>=>drainResults(entry.box,io);
+  return entry.chain=entry.chain.then(run,run);
+}
+
+// --- one answer at a time ------------------------------------------------------------------------------------------------
+export interface LatestJob{readonly signal:AbortSignal;live():boolean;end():void}
+/**
+ * Follows the one job whose answer is still wanted, such as the street matching of the file chosen last. Starting another job, or
+ * cancelling, makes the earlier one stale and aborts its request; a stale job checks `live()` before it changes anything.
+ */
+export function latestJob(){
+  let open:AbortController|null=null;
+  return {
+    start():LatestJob{
+      open?.abort();
+      const mine=open=new AbortController();
+      return {signal:mine.signal,live:()=>open===mine,end(){if(open===mine)open=null;}};
+    },
+    /** True when a job was open. */
+    cancel():boolean{const had=open!==null;open?.abort();open=null;return had;},
+  };
+}
+
+// A mark set on screen wins over the result on file; a cleared mark leaves the cell empty until the screen has asked what is on file.
+const resultCode=(v:WalkVoter,results?:WalkResults,history?:WalkHistory):string=>
+  results&&Object.hasOwn(results,v.person_id)?results[v.person_id]??'':lastOf(v,history)?.code??'';
+
+/** One row per voter in walking order. Result holds the mark in `results` when the walker has set one, else the latest result on file (`history` is a fresher look at what is on file than the list itself). */
+export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory):string[][]{
   const rows:string[][]=[];
   for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)rows.push([
     String(run.stop),run.precinct,run.street,sideLabel(run.side),door.house,door.unit,v.name,phoneText(v.phone),
-    csvTally(v.pri),csvTally(v.gen),csvTally(v.abs),v.party,v.age==null?'':String(v.age),v.gender,v.reg_date,resultCode(v,results),
+    csvTally(v.pri),csvTally(v.gen),csvTally(v.abs),v.party,v.age==null?'':String(v.age),v.gender,v.reg_date,resultCode(v,results,history),
   ]);
   return rows;
 }
 const BOM=String.fromCharCode(0xfeff);
 /** UTF-8 BOM, CRLF rows, every field quoted. */
-export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults):string{
-  const lines=[[...CSV_COLUMNS] as string[],...walkCsvRows(payload,results)].map(r=>r.map(csvField).join(',')+'\r\n');
+export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory):string{
+  const lines=[[...CSV_COLUMNS] as string[],...walkCsvRows(payload,results,history)].map(r=>r.map(csvField).join(',')+'\r\n');
   return BOM+lines.join('');
 }
 

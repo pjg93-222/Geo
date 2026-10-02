@@ -5,7 +5,7 @@ import type {UserOptions} from 'jspdf-autotable';
 import type {WalkListPayload,WalkRun} from '../api/walkTypes';
 import {codeLegend,countText,doorAddress,fullDate,houseSpan,phoneText,regDate,sideLabel,tallyText,totalsLine,walkFileName,areaText} from './walk';
 import {DOOR_SCRIPT,choiceText} from './walkScript';
-import {box4,boxesHit,cleanLine,clipLine,doorPoints,fitFrame,growBounds,isListed,labelPoint,lineLength,listedPrecincts,offsetLine,pointAlong,pointInRing,ringArea,
+import {box4,boxesHit,cleanLine,clipLine,doorPoints,fitFrame,growBounds,inArea,isListed,labelPoint,lineLength,listedPrecincts,offsetLine,pointAlong,
   ringsInBox,runLine,spotAlong,streetKey,thin,viewBounds} from './walkGeo';
 import type {Fit,Frame,XY} from './walkGeo';
 
@@ -247,16 +247,17 @@ function layoutNames(s:Sheet,n:Names):Label[] {
     if(near.some(m=>Math.hypot(m[0]-mid[0],m[1]-mid[1])<Math.max(70,w*1.3)))continue;
     if(put('street',str,w,STREET_FS,true,INK,streetCands(x.line,x.len,w,Number(x.r.lr)||0),true))seen.set(x.r.street_id,[...near,mid]);
   }
-  // precinct codes at the label point of each area, moved aside when the route or a name is in the way
+  // precinct codes at the label point of each area, moved aside when the route or a name is in the way; always inside the area's fill, so
+  // never in a hole where another precinct lies
   const inner:[number,number,number,number]=[geo.view[0]+3/(geo.kx*geo.scale),geo.view[1]+3/geo.scale,geo.view[2]-3/(geo.kx*geo.scale),geo.view[3]-3/geo.scale];
   for(const x of n.areas){
     const {str,w}=text(String(x.a.label||x.a.id||''),AREA_FS,true,100),p=labelPoint(x.a.rings,inner);
     if(!str||!p)continue;
-    const at=px(p),big=x.rings.reduce((m,r)=>Math.abs(ringArea(r))>Math.abs(ringArea(m))?r:m,x.rings[0]);
+    const at=px(p);
     const cands=SPOTS.map(([dx,dy]):Cand=>({c:[at[0]+dx,at[1]+dy],u:[1,0]}));
     put('precinct',str,w,AREA_FS,true,WALK,cands,true,(q,k)=>{
       const xs=q.map(c=>c[0]),ys=q.map(c=>c[1]),x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
-      return pointInRing(k.c,big)&&!n.samples.some(c=>c[0]>=x0&&c[0]<=x1&&c[1]>=y0&&c[1]<=y1);
+      return inArea(k.c,x.rings)&&!n.samples.some(c=>c[0]>=x0&&c[0]<=x1&&c[1]>=y0&&c[1]<=y1);
     });
   }
   // the bigger roads around, once per name at the longest stretch that shows

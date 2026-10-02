@@ -97,29 +97,53 @@ export function clipRing(ring:XY[],[w,s,e,n]:Bounds):XY[]{
   }
   return pts;
 }
-/** Where to write the name of an area: the centre of the biggest piece of it that shows in the box, or the middle of its widest stretch when
- *  that centre falls outside a bent shape. Null when none of the area shows. */
-export function labelPoint(rings:unknown,view:Bounds):XY|null{
-  let best:XY[]|null=null,most=0;
-  for(const raw of Array.isArray(rings)?rings:[]){
-    const ring=clipRing(open(cleanLine(raw)),view),area=Math.abs(ringArea(ring));
-    if(area>most){most=area;best=ring;}
-  }
-  if(!best)return null;
-  const a=ringArea(best);
+/** Is the point in the filled part of an area? A ring inside another is a hole (a ring in a hole is filled again), so a neighbour's enclave is not part of the area. */
+export function inArea(p:XY,rings:readonly XY[][]):boolean{
+  let inside=false;
+  for(const r of rings)if(pointInRing(p,r))inside=!inside;
+  return inside;
+}
+/** The centre of mass of a ring, from its signed area `a`. */
+function ringCentre(r:XY[],a:number):XY{
   let cx=0,cy=0;
-  for(let i=0;i<best.length;i++){const p=best[i],q=best[(i+1)%best.length],k=p[0]*q[1]-q[0]*p[1];cx+=(p[0]+q[0])*k;cy+=(p[1]+q[1])*k;}
-  const centre:XY=[cx/(6*a),cy/(6*a)];
-  if(pointInRing(centre,best))return centre;
+  for(let i=0;i<r.length;i++){const p=r[i],q=r[(i+1)%r.length],k=p[0]*q[1]-q[0]*p[1];cx+=(p[0]+q[0])*k;cy+=(p[1]+q[1])*k;}
+  return [cx/(6*a),cy/(6*a)];
+}
+/** The middle of the widest stretch of fill along the horizontal line `y`, and its width (0 when the line meets no fill). */
+function widestStretch(rings:readonly XY[][],y:number):{at:XY;wide:number}{
   const xs:number[]=[];
-  for(let i=0;i<best.length;i++){
-    const p=best[i],q=best[(i+1)%best.length];
-    if((p[1]>centre[1])!==(q[1]>centre[1]))xs.push(p[0]+(centre[1]-p[1])*(q[0]-p[0])/(q[1]-p[1]));
+  for(const r of rings)for(let i=0;i<r.length;i++){
+    const p=r[i],q=r[(i+1)%r.length];
+    if((p[1]>y)!==(q[1]>y))xs.push(p[0]+(y-p[1])*(q[0]-p[0])/(q[1]-p[1]));
   }
   xs.sort((m,n)=>m-n);
-  let at:XY=centre,wide=0;
-  for(let i=0;i+1<xs.length;i+=2)if(xs[i+1]-xs[i]>wide){wide=xs[i+1]-xs[i];at=[(xs[i]+xs[i+1])/2,centre[1]];}
-  return at;
+  let at:XY=[0,y],wide=0;
+  for(let i=0;i+1<xs.length;i+=2)if(xs[i+1]-xs[i]>wide){wide=xs[i+1]-xs[i];at=[(xs[i]+xs[i+1])/2,y];}
+  return {at,wide};
+}
+/** Where to write the name of an area: inside its fill, never in a hole (a neighbour's enclave), at the centre of the biggest piece of it
+ *  that shows in the box, or the middle of its widest stretch along the line through that centre when the centre falls outside the fill
+ *  (a bent shape, or a ring around an enclave). Null when none of the area shows. */
+export function labelPoint(rings:unknown,view:Bounds):XY|null{
+  let best:XY[][]|null=null,most=0,sign:number[]=[];
+  for(const part of areaParts(rings)){
+    const shown=part.map(r=>clipRing(r,view));
+    if(shown[0].length<3)continue;   // the outer ring is out of view, and so is all of it
+    // a ring inside an even number of the others fills, one inside an odd number cuts a hole
+    const s=part.map((r,i)=>part.reduce((n,o,j)=>n+(i!==j&&pointInRing(r[0],o)?1:0),0)%2===0?1:-1);
+    const area=shown.reduce((sum,r,i)=>sum+(r.length>2?s[i]*Math.abs(ringArea(r)):0),0);
+    if(area>most){most=area;best=shown.filter(r=>r.length>2);sign=s.filter((_,i)=>shown[i].length>2);}
+  }
+  if(!best)return null;
+  let cx=0,cy=0,whole=0;
+  best.forEach((r,i)=>{const a=ringArea(r);if(!a)return;const c=ringCentre(r,a),w=sign[i]*Math.abs(a);cx+=c[0]*w;cy+=c[1]*w;whole+=w;});
+  const centre:XY=[cx/whole,cy/whole];
+  if(inArea(centre,best))return centre;
+  let hit=widestStretch(best,centre[1]);
+  const box=growBounds(null,best.flat());
+  if(box&&hit.wide<=(box[2]-box[0])*0.05)   // the line through the centre only grazes the fill: look along a few others for a wider stretch
+    for(const f of [0.5,0.25,0.75,0.125,0.875]){const other=widestStretch(best,box[1]+(box[3]-box[1])*f);if(other.wide>hit.wide)hit=other;}
+  return hit.wide>0?hit.at:centre;
 }
 /** The rings of an area as polygons [outer, ...holes]: a ring inside a bigger one is its hole, any other ring is a part of its own. */
 export function areaParts(rings:unknown):XY[][][]{

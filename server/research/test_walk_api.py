@@ -993,7 +993,7 @@ class WalkSavedListTests(WalkCase):
         self.results(key, [(person, 'S')], '2026-10-01')
         self.results(key, [(person, 'U')], '2026-10-02')
         Disposition.objects.filter(code='U').update(recorded_at=datetime(2020, 1, 1, tzinfo=timezone.utc))      # a clock set back
-        self.assertEqual(self.last_by_person(key)[person], {'code': 'U', 'on': '2026-10-02'})
+        self.assertEqual(self.last_by_person(key)[person], {'code': 'U', 'on': '2026-10-02', 'list': key})
         self.results(key, [(person, 'NH')], '2026-10-03')
         again = self.posted('/api/v3/walk/lists', {'title': 'Again', 'from': key, 'reknock': True}, 201)
         self.assertEqual([v['person_id'] for v in voters_of(again)], [person])
@@ -1006,16 +1006,16 @@ class WalkSavedListTests(WalkCase):
         self.results(key, [(a, 'S')], '2026-10-01')
         self.results(key, [(c, 'O'), (c, 'MV')], '2026-10-01')                  # later entry of one request wins
         last = self.last_by_person(key)
-        self.assertEqual(last[a], {'code': 'S', 'on': '2026-10-01'})
-        self.assertEqual(last[b], {'code': 'U', 'on': '2026-09-30'})
-        self.assertEqual(last[c], {'code': 'MV', 'on': '2026-10-01'})
+        self.assertEqual(last[a], {'code': 'S', 'on': '2026-10-01', 'list': key})
+        self.assertEqual(last[b], {'code': 'U', 'on': '2026-09-30', 'list': key})
+        self.assertEqual(last[c], {'code': 'MV', 'on': '2026-10-01', 'list': key})
         self.assertEqual(Disposition.objects.filter(walk_list__key=key, person_id=a).count(), 2)       # append-only
         self.results(key, [(a, None)], '2026-10-02')
         self.assertIsNone(self.last_by_person(key)[a])
         self.assertEqual(Disposition.objects.filter(walk_list__key=key, person_id=a).count(), 3)
         self.assertEqual(sum(1 for v in self.last_by_person(key).values() if v), 2)
         self.results(key, [(a, 'U')], '2026-10-03')
-        self.assertEqual(self.last_by_person(key)[a], {'code': 'U', 'on': '2026-10-03'})
+        self.assertEqual(self.last_by_person(key)[a], {'code': 'U', 'on': '2026-10-03', 'list': key})
 
     def test_last_is_the_latest_result_across_lists_and_a_clear_hides_only_its_own(self):
         first = self.saved('%d:both' % self.street_id('Ridgeview Ct'), 'First')
@@ -1023,20 +1023,47 @@ class WalkSavedListTests(WalkCase):
         person = voters_of(first)[0]['person_id']
         self.assertEqual(self.last_by_person(second['list']['key'])[person], None)
         self.results(first['list']['key'], [(person, 'NH')], '2026-09-20')
-        self.assertEqual(self.last_by_person(second['list']['key'])[person], {'code': 'NH', 'on': '2026-09-20'})
+        self.assertEqual(self.last_by_person(second['list']['key'])[person], {'code': 'NH', 'on': '2026-09-20', 'list': first['list']['key']})
         self.results(second['list']['key'], [(person, 'S')], '2026-09-25')
         for key in (first['list']['key'], second['list']['key']):
-            self.assertEqual(self.last_by_person(key)[person], {'code': 'S', 'on': '2026-09-25'})
+            self.assertEqual(self.last_by_person(key)[person], {'code': 'S', 'on': '2026-09-25', 'list': second['list']['key']})
         self.results(second['list']['key'], [(person, None)], '2026-09-26')            # cleared on the second list
         for key in (first['list']['key'], second['list']['key']):
-            self.assertEqual(self.last_by_person(key)[person], {'code': 'NH', 'on': '2026-09-20'})
+            self.assertEqual(self.last_by_person(key)[person], {'code': 'NH', 'on': '2026-09-20', 'list': first['list']['key']})
         self.results(first['list']['key'], [(person, None)], '2026-09-27')
         self.assertIsNone(self.last_by_person(second['list']['key'])[person])
         built = self.json('/api/v3/walk/list?streets=%d:both' % self.street_id('Ridgeview Ct'))
         self.assertTrue(all(v['last'] is None for v in voters_of(built)))
         self.results(first['list']['key'], [(person, 'U')], '2026-09-28')
         built = self.json('/api/v3/walk/list?streets=%d:both' % self.street_id('Ridgeview Ct'))
-        self.assertEqual({v['person_id']: v['last'] for v in voters_of(built)}[person], {'code': 'U', 'on': '2026-09-28'})
+        self.assertEqual({v['person_id']: v['last'] for v in voters_of(built)}[person], {'code': 'U', 'on': '2026-09-28', 'list': first['list']['key']})
+
+    def test_last_names_the_list_the_result_was_recorded_on(self):
+        """`last.list` is the key of the list holding the latest result that stands: on that list the result is a mark, on any
+        other list it is history. Saved lists (GET lists/<key>), built lists (GET list) and re-knock lists all carry it."""
+        first = self.saved('%d:both' % self.street_id('Ridgeview Ct'), 'First')
+        second = self.saved('%d:both,%d:both' % (self.street_id('Ridgeview Ct'), self.street_id('Juniper Ln')), 'Second')
+        one, two = first['list']['key'], second['list']['key']
+        a, b = (v['person_id'] for v in voters_of(first)[:2])
+        self.assertTrue(all(v['last'] is None for v in voters_of(self.json('/api/v3/walk/lists/' + one))))       # nothing recorded: no list either
+        self.results(one, [(a, 'NH'), (b, 'U')], '2026-09-20')
+        self.results(two, [(b, 'S')], '2026-09-25')                                    # b's latest result is now on the second list
+        for key in (one, two):                                                        # GET lists/<key>: the same answer whichever list is open
+            last = self.last_by_person(key)
+            self.assertEqual(last[a], {'code': 'NH', 'on': '2026-09-20', 'list': one})
+            self.assertEqual(last[b], {'code': 'S', 'on': '2026-09-25', 'list': two})
+        built = {v['person_id']: v['last'] for v in voters_of(self.json('/api/v3/walk/list?streets=%d:both' % self.street_id('Ridgeview Ct')))}
+        self.assertEqual((built[a], built[b]), ({'code': 'NH', 'on': '2026-09-20', 'list': one}, {'code': 'S', 'on': '2026-09-25', 'list': two}))   # GET list
+        self.results(two, [(b, None)], '2026-09-26')                                   # cleared on the second list: the first list's result stands again
+        self.assertEqual(self.last_by_person(two)[b], {'code': 'U', 'on': '2026-09-20', 'list': one})
+        again = self.posted('/api/v3/walk/lists', {'title': 'Again', 'from': one, 'reknock': True}, 201)      # a re-knock list is a list of its own
+        self.assertEqual({v['person_id']: v['last'] for v in voters_of(again)}[a], {'code': 'NH', 'on': '2026-09-20', 'list': one})
+        sub = again['list']['key']
+        self.results(sub, [(a, 'NH')], '2026-09-30')                                   # a second visit, recorded on the re-knock list
+        self.assertEqual(self.last_by_person(sub)[a], {'code': 'NH', 'on': '2026-09-30', 'list': sub})
+        self.assertEqual(self.last_by_person(one)[a], {'code': 'NH', 'on': '2026-09-30', 'list': sub})
+        voter_key = WalkList.objects.get(key=one).payload[V.PRIVATE][a]
+        self.assertEqual(V.latest_codes([voter_key])[voter_key], {'code': 'NH', 'on': '2026-09-30', 'list': sub})
 
     def test_reknock_lists_the_voters_whose_latest_result_is_not_home(self):
         saved = self.saved()
@@ -1055,7 +1082,7 @@ class WalkSavedListTests(WalkCase):
         self.assertEqual(again['totals']['voters'], 2)
         self.assertEqual(again['totals']['doors'], len(doors_of(again)))
         self.assertEqual([d['seq'] for d in doors_of(again)], list(range(1, len(doors_of(again)) + 1)))
-        self.assertEqual({v['person_id']: v['last'] for v in voters_of(again)}[nh], {'code': 'NH', 'on': '2026-09-30'})
+        self.assertEqual({v['person_id']: v['last'] for v in voters_of(again)}[nh], {'code': 'NH', 'on': '2026-09-30', 'list': key})
         row = WalkList.objects.get(key=again['list']['key'])
         self.assertEqual((row.kind, row.parent.key), ('reknock', key))
         self.assertEqual(self.json('/api/v3/walk/lists/' + again['list']['key'])['list'], again['list'])
@@ -1099,6 +1126,7 @@ class WalkSavedListTests(WalkCase):
         found = V.latest_codes(keys + keys[:5])
         self.assertEqual(len(found), 1100)
         self.assertEqual((found[keys[0]]['code'], found[keys[1]]['code'], found[keys[1099]]['code']), ('S', 'NH', 'NH'))
+        self.assertTrue(all(item['list'] == parent.key for item in found.values()))                   # the list each result was recorded on
         self.assertEqual(V.latest_codes([]), {})
 
     def test_an_accounts_database_without_the_tables_is_a_503_that_names_the_fix(self):

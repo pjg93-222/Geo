@@ -7,7 +7,7 @@
   - `7f80580` fix(walk): remove time estimates from walk-list output
 - Work branch: `claude/walk-list`. No remote; nothing pushed.
 - Live app on 127.0.0.1:8767 was restarted on the committed code and serves the new **Walk list** tab (8 tabs total).
-- **In progress (uncommitted, separate lane):** fixes for 7 findings from the Codex Astra frontend review (see Open items 1).
+- Follow-up commit on `main`: fixes for the 7 findings from the Codex Astra frontend review (see Open items 1).
 
 ## What the feature does
 
@@ -91,7 +91,7 @@ Dependencies added: `jspdf@4.2.1`, `jspdf-autotable@5.0.8` (pinned; lazy-loaded 
 
 ## Open items
 
-1. **Codex Astra review r3 findings (fix lane running, uncommitted):** HIGH — switching tabs while a result save fails can lose that result; MEDIUM — prior-list results shown as current marks; initial CSV match can land in another list's picker; retried saves record the retry date; precinct label can fall inside an enclave; LOW — focus after Save targets a disabled button; a PDF test skips its stress fixtures. Commit and fast-forward `main` once green.
+1. **Done — Codex Astra review r3 findings fixed** (commit after `9df1158`): unsent results survive leaving the screen (page-level shelf, retry on return); results from other lists show as dated history while this list's own results come back selected (API `last` now carries `list`); initial CSV matching is race-safe; visit date is captured when marked; precinct labels avoid enclave holes; focus returns to Save; the PDF collision test runs all fixtures. Verified: Django 290 OK, walk unittests 119 OK, frontend unit 105/105, build, no-eval, `verify-walk-list.mjs` 14/14 on a synthetic world. Known limitation: `last` is the latest result across all lists, so an older result on this list that another list superseded shows as that other list's history.
 2. Final-review leftovers: re-measure dispersed-street routing p95 on real data; re-knock selects by person id (weaker across rebuilds than `voter_key`); saving a list regenerates it server-side (can differ from screen if the store was rebuilt meanwhile); a refused result batch leaves the screen stuck until reload.
 3. Separate task (own session): contact-sheet CSV export guard only checks the first character for formula injection (`terrier_contacts.py csv_value`).
 4. Codex tooling: the Codex MCP server is older than the bundled CLI, so `gpt-6-astra` works only via `codex exec` (MCP returns a 400 "requires a newer version").
