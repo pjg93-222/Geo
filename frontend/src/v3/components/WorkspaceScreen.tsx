@@ -2,6 +2,7 @@ import {useEffect,useMemo,useState} from 'react';
 import {ArrowUpRight,Bookmark,Download,Search,Trash2} from 'lucide-react';
 import {GROUP_LABEL,GROUPS,type FieldDef} from '../api/fields';
 import {getAreas,localJson} from '../api/client';
+import {csvText} from '../lib/csv';
 import {int,LEVEL_LABEL,type Level} from '../lib/format';
 import {type Route} from '../lib/router';
 import {lastView,readSavedViews,removeView,safeViewPath,saveView,type SavedView} from '../lib/savedViews';
@@ -37,7 +38,7 @@ function FieldAudit({meta,data}:{meta:Meta;data:WorkspaceData}){
   const fields=useMemo(()=>FIELDS.filter(f=>(group==='all'||f.group===group)&&`${f.label} ${f.key}`.toLowerCase().includes(query.trim().toLowerCase())),[FIELDS,group,query]);
   function exportFields(){
     const rows=[['Field','Group','Input','Weight within index','Included in overall standing'],...fields.map(f=>[f.key,GROUP_LABEL[f.group],FORMATS[f.kind],f.group==='lean'?'Not scored':WEIGHT(f.w),f.group==='lean'?'No':'Yes'])];
-    downloadFile('terrier-criteria.csv','text/csv;charset=utf-8',rows.map(row=>row.map(value=>`"${value.replaceAll('"','""')}"`).join(',')).join('\r\n'));
+    downloadFile('terrier-criteria.csv','text/csv;charset=utf-8',csvText(rows));
   }
   return <>
     <p className="work-context"><span className="work-context-dot" aria-hidden="true"/><span><strong>Political views are not scored.</strong> Registration, affiliation and outlook remain separate categories.</span></p>
