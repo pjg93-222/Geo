@@ -9,6 +9,12 @@ const server=createServer(async(req,res)=>{
   try{
     if(!['GET','HEAD'].includes(req.method)){res.writeHead(405);return res.end();}
     const pathname=decodeURIComponent(new URL(req.url,'http://127.0.0.1').pathname);
+    if(pathname==='/_terrier/health'){
+      await stat(resolve(root,'index.html'));
+      const body=JSON.stringify({app:'Terrier',mode:'synthetic',version:1});
+      res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body),'Cache-Control':'no-store'});
+      return res.end(req.method==='HEAD'?undefined:body);
+    }
     if(pathname==='/favicon.ico'){res.writeHead(204);return res.end();}
     if(pathname.startsWith('/api/')||pathname.includes('\\')){res.writeHead(404);return res.end();}
     const route=pathname==='/'||pathname==='/people'||pathname==='/method'||/^\/people\/[^/]+$/.test(pathname);

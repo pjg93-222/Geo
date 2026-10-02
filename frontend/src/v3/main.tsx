@@ -32,7 +32,7 @@ function V3App(){
     const root=document.documentElement;
     root.dataset.demo=demo?'1':'0';
     root.dataset.source=meta?.source??'';
-    document.title='Terrier'+(demo?' · demo':'');
+    document.title='Terrier';
     (window as unknown as {__cuV3?:unknown}).__cuV3={meta,sources,pickPerson};
   },[meta,route]);
   const shell=()=>introDone?<LoadingTerrier/>:null;

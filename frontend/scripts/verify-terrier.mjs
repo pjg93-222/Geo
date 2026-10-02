@@ -16,6 +16,7 @@ try{
   const range=await fetch(base+'/brand/terrier-loading-hq.mp4',{headers:{Range:'bytes=0-31'}});assert.equal(range.status,206);assert.equal((await range.arrayBuffer()).byteLength,32);
   await page.goto(base+'/brand/preview.html?v=automatic');
   await page.waitForURL(base+'/');const video=await readyVideo(page);
+  assert.equal(await page.title(),'Terrier');
   await video.evaluate(v=>v.pause());
   assert.equal(await page.locator('video').count(),1);
   assert.equal(await page.locator('.terrier-startup').innerText(),'');
@@ -29,6 +30,7 @@ try{
   report.desktopQuality=quality;report.checks.push('preview automatically enters root; no captions/controls; one player; app inert underneath; native HQ resolution at DPR2');
   await video.evaluate(v=>v.play());await page.locator('.terrier-startup').waitFor({state:'detached',timeout:12000});
   await page.locator('.railA .rail-title').waitFor();assert.equal(await page.locator('video').count(),0);assert.equal(await page.locator('.app-stage').getAttribute('inert'),null);
+  assert.equal(await page.title(),'Terrier');
   report.checks.push('natural animation completion opens app automatically');
   const mobile=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:3});const mp=await mobile.newPage();
   await mp.goto(base+'/method');const mv=await readyVideo(mp);await mv.evaluate(v=>v.pause());

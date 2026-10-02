@@ -116,3 +116,20 @@ node frontend/scripts/verify-test-demo.mjs --no-screenshots
 ## Debug and Git follow-up
 
 See [DEBUG_2026-10-01.md](DEBUG_2026-10-01.md) for the debug pass and initial local repository commit. Fixed map/People browser-navigation synchronization, handled speculative chunk failures, and made the preview launcher create its own log directory. The previous statement that no Git commit was performed describes the earlier delivery; the requested local commit follows this debug pass.
+
+## Desktop release and merge — 2026-10-01
+
+The Windows desktop app is now named exactly **Terrier**. `Install-TerrierDesktop.ps1` rebuilds the frontend, creates a seven-size Windows icon from the original lossless logo, and installs `Terrier.lnk` on the Desktop. The known Credit Union Geography shortcut was moved to `_build/desktop-backup/20261001-213945/`; original services and databases on ports 8765/8766 were not changed.
+
+- Desktop shortcut: `C:/Users/pgoff/OneDrive/Desktop/Terrier.lnk`
+- Launcher: `Start-Terrier.ps1`; `Start.cmd` uses the same launcher.
+- Windows icon: `assets/terrier.ico` (16, 24, 32, 48, 64, 128, 256 px).
+- App window: Chrome/Edge app mode, window title **Terrier**, isolated profile at `%LOCALAPPDATA%/Terrier/Browser`.
+- Runtime: existing Node.js installation; fixture-only static server on loopback port 8767.
+- Startup: checks the PID, command path, creation time, and `/_terrier/health` identity before reusing a server; uses a mutex and readiness polling; refuses unrelated port owners. Server and launcher helpers stay hidden.
+- `Start-Terrier.ps1 -NoBrowser` validates server startup without opening a window.
+- Build/install: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File Install-TerrierDesktop.ps1`.
+
+Validation passed: production build/compression, all 20 unit tests, desktop icon/shortcut identity, cold launch, warm PID reuse, refusal of an unrelated port owner without terminating it, restored service, exact static/dynamic title, and startup video/error/reduced-motion tests. Actual Desktop shortcut launch produced a Chrome app window titled exactly `Terrier`. Evidence: `_build/desktop-verification/checks.json`, `window.json`, and `_build/terrier-startup-verification/checks.json`.
+
+Git: `main` was created from the prior initial commit `7366030`. This desktop release is committed on `codex/terrier` and merged into local `main` by fast-forward, preserving the earlier app/debug work. No remote is configured and nothing is pushed. The desktop installer is rerun from the merged revision. These scripts make future desktop regeneration repeatable.
