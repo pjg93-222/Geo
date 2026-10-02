@@ -16,6 +16,7 @@ from .models import Snapshot, SavedView, Invitation, LoginAttempt, AuditEvent
 from .bundles import load, import_bundle
 from . import static_files, v3_cache
 from .v3_http import blob_response
+from .terrier_contacts import csv_value
 from tools.measures import MEASURES
 from tools.geography_levels import LEVELS, EXTRA_LEVELS, POLYGON_LEVELS, available as available_levels
 from tools.area_indices import CATALOG as INDEX_CATALOG, BY_ID as INDEX_BY_ID, METHOD as INDEX_METHOD, reference as index_reference, summarize as index_summaries, evaluate as index_evaluate
@@ -228,7 +229,8 @@ def summaries(request):
         'index_method':INDEX_METHOD if metric in INDEX_BY_ID else None,'assignment':snap.manifest.get('hierarchy',{}).get('reconciliation',{}).get(basis,{}).get(level)}
     if request.GET.get('format')=='csv':
         buff=io.StringIO(newline='');w=csv.writer(buff);w.writerow(['snapshot','basis','level','geographic_id','metric','scale','value','index','valid_count','field_coverage','measure_status','count','share','coverage','source_count','status','partial','denominator','source_date','boundary_vintage','component_coverage','components_used','components_total'])
-        for r in rows:w.writerow([snap.key,basis,level,r['id'],metric,scale,r['value'],r['index'],r['valid_count'],r['field_coverage'],r['measure_status'],r['count'],r['share'],r['coverage'],r['source_count'],r['status'],r['partial'],denom,meta['source_date'],meta['boundary_vintage'],r.get('component_coverage'),r.get('components_used'),r.get('components_total')])
+        # Free text such as source_date must not open as a formula; numbers, negatives included, are written as they are.
+        for r in rows:w.writerow([csv_value(v) if isinstance(v,str) else v for v in [snap.key,basis,level,r['id'],metric,scale,r['value'],r['index'],r['valid_count'],r['field_coverage'],r['measure_status'],r['count'],r['share'],r['coverage'],r['source_count'],r['status'],r['partial'],denom,meta['source_date'],meta['boundary_vintage'],r.get('component_coverage'),r.get('components_used'),r.get('components_total')]])
         response=HttpResponse(buff.getvalue(),content_type='text/csv; charset=utf-8');response['Content-Disposition']=f'attachment; filename="{snap.key}-{basis}-{level}-{metric}-{scale}.csv"';return response
     blob=v3_cache.Blob(json.dumps({'meta':meta,'rows':rows},separators=(',',':'),allow_nan=False).encode('utf-8'))
     if len(_summary_blobs)>=256:_summary_blobs.clear()
