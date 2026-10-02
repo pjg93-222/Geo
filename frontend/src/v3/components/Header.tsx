@@ -27,7 +27,7 @@ export function Link(p:{to:string;className?:string;children:React.ReactNode;tit
 function Brand({busy=false}:{busy?:boolean}){
   return <Link to="/" className="brand">
     <span className="brand-mark"><TerrierMark busy={busy}/></span>
-    <span className="brand-copy"><span className="brand-text">Terrier</span><span className="demo-label">Test-dummy preview</span></span>
+    <span className="brand-copy"><span className="brand-text">Terrier</span><span className="demo-label">Local data</span></span>
   </Link>;
 }
 
@@ -42,7 +42,7 @@ function SearchBox({meta}:{meta:Meta|null}){
   useEffect(()=>{
     if(!open||!meta||labels.length)return;
     let live=true;
-    Promise.all(LEVELS.map(l=>getAreas(meta,l).then(a=>a.ids.map((id,i)=>({level:l,id,label:a.labels[i]||areaLabel(l,id),ok:a.status[i]==='ok'}))))).then(all=>{
+    Promise.all(meta.levels.map(l=>getAreas(meta,l).then(a=>a.ids.map((id,i)=>({level:l,id,label:a.labels[i]||areaLabel(l,id),ok:a.status[i]==='ok'}))))).then(all=>{
       if(live)setLabels(all.flat().map(({level,id,label})=>({level,id,label})));
     }).catch(()=>{});
     return ()=>{live=false;};
@@ -103,7 +103,7 @@ function SearchBox({meta}:{meta:Meta|null}){
 
 export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:Group;level:Level;onIndex:(g:Group)=>void;onLevel:(l:Level)=>void}){
   return <header className="topbar map">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Generated test data <span>About this preview ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active="map"/>
     <div className="map-toolbar">
       <div className="seg-slot index"><Segmented variant="index" label="Index" items={INDEX_ITEMS} value={p.index} onChange={p.onIndex}/></div>
@@ -144,7 +144,7 @@ function SectionNav({active}:{active:Section}){
 }
 export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:Section}){
   return <header className="topbar page">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Generated test data <span>About this preview ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active={p.active}/>
   </header>;
 }

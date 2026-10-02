@@ -34,7 +34,7 @@ test('the required static strings are present verbatim', () => {
   const all = files.map(f => readFileSync(f, 'utf8')).join('\n');
   for (const s of ['Terrier', 'Search areas or people', 'Not part of overall standing',
     'Zoom out for block, precinct and tract values.', 'Balanced by registration', 'Next page ready', 'Household mean standing', 'Field evidence', 'Area context', 'Registration mix',
-    'Standing across neighboring', 'Illustrative district indices', 'Share of people in the', 'View profile'])
+    'Standing across neighboring', 'District indices', 'Share of people in the', 'View profile'])
     assert.ok(all.includes(s), `missing: ${s}`);
 });
 
@@ -43,9 +43,11 @@ test('no skew copy', () => {
   for (const w of ['skew', 'republican district', 'undersampled', 'not representative']) assert.ok(!all.includes(w), `found: ${w}`);
 });
 
-test('test-dummy labeling and no-floor legend',()=>{
+test('local dataset labeling replaces the test preview',()=>{
  const header=readFileSync(path.join(root,'components/Header.tsx'),'utf8');
- assert.ok(header.includes('Test-dummy preview'));
+ assert.ok(header.includes('Local dataset'));
+ assert.ok(!header.includes('Test-dummy preview'));
  const legend=readFileSync(path.join(root,'components/MapParts.tsx'),'utf8');
- assert.ok(!legend.includes('under 20 people'));
+ assert.ok(legend.includes('p.floors?.min_n'));
+ assert.ok(legend.includes('Withheld'));
 });

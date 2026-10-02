@@ -45,7 +45,7 @@ function ProfileSkeleton(){
 }
 
 function Body({p}:{p:Profile}){
-  const reg=REG_LABEL[p.registration]??'';
+  const reg=p.registration_label??REG_LABEL[p.registration]??'Unknown';
   const opinions=describeOpinions(p.groups.find(g=>g.id==='lean')?.fields??[]);
   const [open,setOpen]=useState<Record<string,boolean>>({cua:true,part:false,soi:false,lean:false});
   useEffect(()=>{setOpen({cua:true,part:false,soi:false,lean:false});},[p.person_id]);
@@ -54,10 +54,10 @@ function Body({p}:{p:Profile}){
       <div className="p-who">
         <Link to={backTarget()} className="back-link">{'←'} People</Link>
         <Link to={'/contacts?q='+encodeURIComponent(p.person_id)} className="profile-contact">Contact details</Link>
-        <p className="profile-origin">Generated profile · all values are test data</p>
+        <p className="profile-origin">Local record</p>
         <h1 className="person-name" title={p.name}>{p.name}</h1>
         <p className="person-meta">
-          {[p.age!=null?String(p.age):'',`Household of ${p.household_size}`,`Party registration: ${reg}`,blockLabel(p.block),precinctLabel(p.precinct)].filter(Boolean)
+          {[p.age!=null?String(p.age):'',`Household of ${p.household_size}`,`Party registration: ${reg}`,p.block?blockLabel(p.block):'',p.precinct?precinctLabel(p.precinct):''].filter(Boolean)
             .map((t,i)=><span key={i}>{i>0&&<b className="dot">{MIDDOT}</b>}{t}</span>)}
         </p>
       </div>
@@ -85,14 +85,14 @@ function Body({p}:{p:Profile}){
         <h2 className="panel-title">Political views</h2>
         <p>Separate responses · no belief score</p>
         </div>
-        <dl className="opinion-facts"><div><dt>Party registration</dt><dd>{reg}</dd></div><div><dt>Self-described affiliation</dt><dd>{opinions.affiliation}</dd></div><div><dt>Political outlook</dt><dd>{opinions.outlook}</dd></div></dl>
-        <p className="opinion-explanation">Registration describes a party category; affiliation and outlook describe separate opinions. Different responses across these fields can be valid.</p>
+        <dl className="opinion-facts"><div><dt>Party registration</dt><dd>{reg}</dd></div><div><dt>Affiliation</dt><dd>{opinions.affiliation}</dd></div><div><dt>Political outlook</dt><dd>{opinions.outlook}</dd></div></dl>
+        <p className="opinion-explanation">Registration, affiliation and outlook are separate fields. Different responses across these fields can be valid.</p>
       </section>
 
     <div className="p-lower">
       <section className="evidence" aria-label="Field evidence">
         <header className="ev-head"><h2 className="section-title">Field evidence</h2><span className="section-count">{p.groups.reduce((s,g)=>s+g.n_fields,0)} fields</span></header>
-        <p className="evidence-origin">Generated test values. “Observed” means supplied by the dummy generator.</p>
+        <p className="evidence-origin">Field values from the active local dataset.</p>
         <p className="scroll-hint">Scroll sideways for values and contributions.</p>
         <div className="ev-th"><span>Field</span><span>Value</span><span>Source</span><span>Contribution</span></div>
         {p.groups.map(g=><Group key={g.id} g={g} open={!!open[g.id]} onToggle={()=>setOpen(o=>({...o,[g.id]:!o[g.id]}))}/>)}
@@ -152,7 +152,7 @@ function Group({g,open,onToggle}:{g:FieldGroup;open:boolean;onToggle:()=>void}){
       return <div className="ev-row" key={f.field}>
         <span className="field-name">{f.label}</span>
         <span className="field-value"><i className={cx('src-dot',f.status==='observed'?'obs':'est')}/>{f.value}</span>
-        <span className="field-source">{f.status==='observed'?'Observed':f.status==='children_rule'?`Estimated ${MIDDOT} children rule`:`Estimated ${MIDDOT} p ${(f.p??0).toFixed(2)}`}</span>
+        <span className="field-source">{f.status==='observed'?'Observed':f.status==='children_rule'?`Estimated ${MIDDOT} children rule`:f.p==null?'Estimated':`Estimated ${MIDDOT} p ${f.p.toFixed(2)}`}</span>
         <span className="field-contrib">{lean?'—':cText}</span>
         {lean?<span className="opinion-unscored">Not scored</span>:<span className="cbar" role="img" aria-label={`Contribution ${cText}`}>
           {lean
@@ -167,6 +167,7 @@ function Group({g,open,onToggle}:{g:FieldGroup;open:boolean;onToggle:()=>void}){
 }
 
 function ContextRow({a}:{a:AreaRef}){
+  if(!a.id)return <div className="ctx-row"><div className="ctx-text"><div className="ac-row">{a.level==='block'?'Census block':'Precinct'}</div><div className="ac-sub">Not supplied</div></div></div>;
   return <div className="ctx-row">
     <div className="ctx-text">
       <div className="ac-row">{a.label||areaLabel(a.level,a.id)}</div>

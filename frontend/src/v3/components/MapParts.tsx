@@ -4,7 +4,7 @@ import {useEffect,useRef,useState} from 'react';
 import {Minus,Plus} from 'lucide-react';
 import {GradeBox,Sk,Switch,ValueBar,cx} from './ui';
 import {Link,INDEX_NAME} from './Header';
-import type {Group,HouseholdPopover,StreetPayload} from '../types';
+import type {Group,HouseholdPopover,StreetPayload,Meta} from '../types';
 import {ENDASH,MIDDOT,householdLabel,int,round,seconds} from '../lib/format';
 import {useTiming} from '../lib/timing';
 import {uPx} from '../lib/units';
@@ -17,7 +17,7 @@ const RAMP=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)'];
 const LEAN_RAMP=['var(--reg-d)','var(--reg-r)','var(--reg-u)','var(--reg-o)','var(--centre)'];
 const TOP_NAME:Record<Exclude<Group,'lean'>,string>={ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence'};
 
-export function Legend(p:{group:Group;measured:boolean;onMeasured:(v:boolean)=>void;loading:boolean}){
+export function Legend(p:{group:Group;measured:boolean;onMeasured:(v:boolean)=>void;loading:boolean;floors?:Meta['floors']}){
   let title:string,sub:string,labels:string[],ramp:string[];
   if(p.measured){title='% measured';sub='Area mean of % measured';labels=MEASURED_LABELS;ramp=RAMP;}
   else if(p.group==='lean'){title='Registration';sub='Largest registration group; Mixed means a tie';labels=LEAN_LABELS;ramp=LEAN_RAMP;}
@@ -28,6 +28,7 @@ export function Legend(p:{group:Group;measured:boolean;onMeasured:(v:boolean)=>v
     <ul className="legend-swatches">
       {ramp.map((c,i)=><li key={i}><i style={p.loading?undefined:{background:c}} className={cx(p.loading&&'sk')}/><span>{p.loading?'':labels[i]}</span></li>)}
     </ul>
+    <p className="legend-note"><i className="hatch" aria-hidden="true" style={{display:'inline-block',width:14,height:14,marginRight:7,verticalAlign:'middle'}}/>Withheld · under {p.floors?.min_n??20} people or {p.floors?.min_households??10} households</p>
     <Switch className="legend-switch" checked={p.measured} onChange={p.onMeasured} label="% measured" labelClass="legend-note"/>
   </section>;
 }
@@ -104,7 +105,7 @@ export function StreetRail(p:{stats:StreetPayload['stats']|null;truncated?:boole
     </div>
     <hr className="rule s2"/>
     <p className="rail5-note">Zoom out for block, precinct and tract values.</p>
-    {p.truncated&&<p className="rail5-note" role="status">Showing the first {int(s?.households??0)} test households. Zoom in to show a smaller area.</p>}
+    {p.truncated&&<p className="rail5-note" role="status">Showing the first {int(s?.households??0)} households. Zoom in to show a smaller area.</p>}
   </aside>;
 }
 

@@ -1,6 +1,6 @@
 # Terrier — completed handoff
 
-Completed 2026-10-01 in the isolated synthetic preview. The latest UI refinement improves readability, mobile navigation, contact/criteria density and the distinction between generated opinions and scores. People now opens on the full generated population. Earlier releases restored the workspace and repaired contradictory dummy household facts. The caption-free automatic startup and source-resolution media remain intact. See the latest UI refinement section at the end and [the full data audit](DATA_AUDIT_2026-10-01.md).
+**Current release uses the existing local records and stored model outputs: 491,308 people and 343,000 households.** See [the actual-data handoff](ACTUAL_DATA_HANDOFF_2026-10-01.md) for the connection, source checks and validation. The earlier synthetic-preview descriptions below are historical and no longer describe the active data source. The Terrier identity, UI improvements and automatic source-resolution loader are retained.
 
 - App: http://127.0.0.1:8767/
 - Motion preview: http://127.0.0.1:8767/brand/preview.html
@@ -174,7 +174,7 @@ Local receipts (ignored build artifacts):
 
 The Desktop shortcut was regenerated as **Terrier**. Cold launch, warm reuse, icon/shortcut identity and unrelated-port-owner protection passed; the verified fixture server was restored on 8767. Release branch: `codex/terrier-restored-workspace`, fast-forward merged into local `main`. No Git remote is configured. Original services/data on ports 8765/8766 remain outside this release.
 
-## UI refinement — latest release, 2026-10-01
+## UI refinement — historical synthetic release, 2026-10-01
 
 ### Data clarification
 

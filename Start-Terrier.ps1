@@ -4,7 +4,7 @@ $terrierRoot = $PSScriptRoot
 $logDirectory = Join-Path $terrierRoot '_build'
 try {
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-    & (Join-Path $terrierRoot 'Start-test-demo.ps1')
+    & (Join-Path $terrierRoot 'Start-TerrierServer.ps1')
     if (!$NoBrowser) {
         $candidates = @(
             (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),

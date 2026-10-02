@@ -16,7 +16,7 @@ const REG:{id:PeopleQuery['reg'];label:string}[]=[
 const GRADE:{id:PeopleQuery['grade'];label:string}[]=[{id:'ABCD',label:`A${ENDASH}D`},{id:'AB',label:`A${ENDASH}B`}];
 const LEAN:{id:PeopleQuery['lean'];label:string}[]=[
   {id:'all',label:'All'},{id:'-2',label:'Very conservative'},{id:'-1',label:'Somewhat conservative'},{id:'0',label:'Middle outlook'},{id:'1',label:'Somewhat liberal'},
-  {id:'2',label:'Very liberal'},{id:'U',label:'Unknown'}];
+  {id:'2',label:'Very liberal'},{id:'U',label:'Unknown / multiple responses'}];
 const LEAN_KEY:Record<string,string>={'-2':'strong-r','-1':'lean-r','0':'centre','1':'lean-d','2':'strong-d'};
 const STORE='v3.people.query';
 
@@ -102,7 +102,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   // area options load on first interaction
   const loadAreas=useCallback(()=>{
     if(areaOpts||!meta)return;
-    Promise.all(LEVELS.map(l=>getAreas(meta,l).then(a=>a.ids.map((id,i):Opt=>({id:l+':'+id,label:a.labels[i]||areaLabel(l,id),group:LEVEL_LABEL[l]}))
+    Promise.all(meta.levels.map(l=>getAreas(meta,l).then(a=>a.ids.map((id,i):Opt=>({id:l+':'+id,label:a.labels[i]||areaLabel(l,id),group:LEVEL_LABEL[l]}))
       .filter((_o,i)=>a.status[i]==='ok')))).then(all=>setAreaOpts(all.flat())).catch(()=>setAreaOpts([]));
   },[areaOpts,meta]);
   useEffect(()=>{if(q.level&&q.area)loadAreas();},[q.level,q.area,loadAreas]);
@@ -142,18 +142,18 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
         </div>
       </div>
       <div className="people-list-tools">
-        <div className="sample-option"><Switch className="balanced" checked={q.balanced} onChange={v=>change({balanced:v})} label="Balanced by registration" labelClass="balanced-label"/><span>Optional 100-person sample</span></div>
+        <div className="sample-option"><Switch className="balanced" checked={q.balanced} onChange={v=>change({balanced:v})} label="Balanced by registration" labelClass="balanced-label"/><span>Optional registration-balanced view</span></div>
         {(q.reg!=='all'||q.grade!=='ABCD'||q.lean!=='all'||q.area||q.balanced)&&<button type="button" className="clear-people-filters" onClick={()=>change({reg:'all',grade:'ABCD',lean:'all',level:'',area:'',balanced:false})}>Reset filters</button>}
         <span className="pager-text">{pagerText||' '}</span>
         <button type="button" className="pager-btn" aria-label="Previous page" disabled={!page?.prev} onClick={()=>go('prev')}><ChevronLeft strokeWidth={1.75}/></button>
         <button type="button" className="pager-btn" aria-label="Next page" disabled={!page?.next} onClick={()=>go('next')}><ChevronRight strokeWidth={1.75}/></button>
       </div>
-      <p className="people-context">{q.balanced?'Showing matches from a 100-person sample balanced by registration.':'Showing matches from the full generated population.'} Sorted by overall standing. Political responses are unscored.</p>
+      <p className="people-context">{q.balanced?'Showing matches from the registration-balanced selection; ties are retained.':'Showing matches from the full local dataset.'} Sorted by overall standing. Political responses are unscored.</p>
       <p className="scroll-hint">Scroll the table sideways to see all columns.</p>
       <section className="table" aria-label="People ranked by overall standing" aria-busy={busy}>
         <div className="thead">
           <span>Rank</span><span>Name</span><span>Overall standing</span><span className="r">Alignment</span><span className="r">Participation</span>
-          <span className="r">Sphere</span><span>Political outlook</span><span title="Illustrative data coverage grade">Data grade</span><span>Percentile within registration</span>
+          <span className="r">Sphere</span><span>Political outlook</span><span title="Data coverage grade">Data grade</span><span>Percentile within registration</span>
         </div>
         <div className="tbody">
           {error&&<div className="table-empty" role="alert">{error}<button className="retry-people" type="button" onClick={()=>setAttempt(n=>n+1)}>Retry people</button></div>}

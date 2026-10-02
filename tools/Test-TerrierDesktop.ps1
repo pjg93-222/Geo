@@ -5,9 +5,9 @@ Set-StrictMode -Version Latest
 $terrierRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $terrierOrigin = 'http://127.0.0.1:8767'
 $terrierLauncher = Join-Path $terrierRoot 'Start-Terrier.ps1'
-$terrierStop = Join-Path $terrierRoot 'Stop-test-demo.ps1'
-$terrierRecord = Join-Path $terrierRoot '_build\test-demo-pid.json'
-$terrierServer = Join-Path $terrierRoot 'frontend\scripts\test-demo-server.mjs'
+$terrierStop = Join-Path $terrierRoot 'Stop-TerrierServer.ps1'
+$terrierRecord = Join-Path $terrierRoot '_build\terrier-server-pid.json'
+$terrierServer = Join-Path $terrierRoot 'manage.py'
 $terrierReportDir = Join-Path $terrierRoot '_build\desktop-verification'
 $terrierPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $terrierChecks = [Collections.Generic.List[object]]::new()
@@ -35,7 +35,7 @@ function Read-Health {
 }
 
 function Test-Health($Health) {
-    return $null -ne $Health -and $Health.app -eq 'Terrier' -and $Health.mode -eq 'synthetic' -and $Health.version -eq 1
+    return $null -ne $Health -and $Health.app -eq 'Terrier' -and $Health.mode -eq 'recorded' -and $Health.version -eq 2 -and !$Health.names_masked -and $Health.people -gt 0
 }
 
 function Get-OwnedServer {
@@ -43,7 +43,7 @@ function Get-OwnedServer {
     $saved = Get-Content -LiteralPath $terrierRecord -Raw | ConvertFrom-Json
     if ([IO.Path]::GetFullPath([string]$saved.script) -ne $terrierServer) { return $null }
     $running = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$saved.pid) -ErrorAction SilentlyContinue
-    if (-not $running -or $running.Name -ne 'node.exe' -or -not $running.CommandLine.Contains($terrierServer)) { return $null }
+    if (-not $running -or $running.Name -ne 'python.exe' -or -not $running.CommandLine.Contains($terrierServer) -or -not $running.CommandLine.Contains('--port 8767')) { return $null }
     $difference = [math]::Abs((([datetime]$running.CreationDate).ToUniversalTime() - ([datetime]$saved.started).ToUniversalTime()).TotalSeconds)
     if ($difference -ge 1) { return $null }
     return $running

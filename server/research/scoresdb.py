@@ -23,6 +23,12 @@ from tools.demo_names import demo_name
 
 EVIDENCE_LAYOUT = (('values', '<u2', 0), ('status', 'u1', 80), ('p', '<f4', 120), ('exposure', '<f4', 280))
 EVIDENCE_BYTES = 440
+OUTLOOK_FIELDS = ('sci_ct_political_outlk_vconserv', 'sci_ct_political_outlk_swconserv',
+                  'sci_ct_political_outlk_mid', 'sci_ct_political_outlk_swliberal',
+                  'sci_ct_political_outlk_vliberal')
+OUTLOOK_FIDS = tuple(FL.BY_NAME[name]['fid'] for name in OUTLOOK_FIELDS)
+OUTLOOK_LABELS = ('Very conservative', 'Somewhat conservative', 'Middle outlook', 'Somewhat liberal', 'Very liberal')
+OUTLOOK_UNKNOWN, OUTLOOK_MULTIPLE = -3, 3
 
 
 class StoreError(Exception):
@@ -91,6 +97,29 @@ class StoreInfo:
         self.sources_checked = False
         self._balanced = {}
         self._balanced_lock = threading.Lock()
+        self._outlooks = None
+        self._outlook_lock = threading.Lock()
+
+    def outlook_codes(self):
+        """One cached category per stored evidence row; never derive views from the lean score.
+
+        Both observed and stored model-filled values participate. Empty and conflicting flags are retained
+        as separate states, rather than forced into a midpoint or a registration-consistent response.
+        """
+        if self._outlooks is None:
+            with self._outlook_lock:
+                if self._outlooks is None:
+                    conn = _open(self.path)
+                    try:
+                        codes = np.full(self.n, OUTLOOK_UNKNOWN, dtype=np.int8)
+                        for row in conn.execute('SELECT pos, blob FROM evidence ORDER BY pos'):
+                            values = decode_evidence(row['blob'])['values']
+                            codes[row['pos'] - 1] = outlook_code(self, values)
+                    finally:
+                        conn.close()
+                    codes.flags.writeable = False
+                    self._outlooks = codes
+        return self._outlooks
 
     def balanced_mask(self, k=100):
         """Boolean mask of the balanced top-K view: each registration group's rows up to its Hamilton seats, ties
@@ -261,6 +290,20 @@ def decode_evidence(blob):
         raise StoreError('Unexpected evidence record size')
     return {name: np.frombuffer(raw, dtype=dtype, count=S.N_FIELDS, offset=offset)
             for name, dtype, offset in EVIDENCE_LAYOUT}
+
+
+def outlook_code(current, values):
+    selected = [index for index, fid in enumerate(OUTLOOK_FIDS)
+                if current.value_dict.get(fid, {}).get(int(values[fid])) in ('1', '1.0')]
+    return selected[0] - 2 if len(selected) == 1 else OUTLOOK_MULTIPLE if selected else OUTLOOK_UNKNOWN
+
+
+def outlook_fields(code):
+    if code == OUTLOOK_MULTIPLE:
+        return 'U', 'Multiple responses'
+    if code == OUTLOOK_UNKNOWN:
+        return 'U', 'Unknown'
+    return int(code), OUTLOOK_LABELS[int(code) + 2]
 
 
 def contributions(current, exposure, code50):

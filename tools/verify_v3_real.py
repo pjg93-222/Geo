@@ -32,7 +32,7 @@ sys.path.insert(0, str(V3))
 import django                                     # noqa: E402
 
 django.setup()
-from django.test import Client                    # noqa: E402
+from django.test import Client, override_settings # noqa: E402
 
 from server.research import scoresdb               # noqa: E402
 from tools import area_layers as AL               # noqa: E402
@@ -47,6 +47,14 @@ def half_away(x):
     return math.copysign(math.floor(abs(x) + 0.5), x) if x else 0.0
 
 
+def store_hashes():
+    result = {}
+    for name in ('scores', 'contacts', 'street'):
+        with (V3 / '.local' / (name + '.sqlite3')).open('rb') as stream:
+            result[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--full-walk', action='store_true', help='page through the whole ranked list')
@@ -54,6 +62,7 @@ def main():
     parser.add_argument('--out', default=str(V3 / '_build' / 'backend_verification.json'))
     args = parser.parse_args()
     started = time.time()
+    before_hashes = store_hashes()
     client = Client(HTTP_HOST='127.0.0.1')
     report = {'mode': 'demo (CU_DEMO=1)', 'checks': {}}
     ok = report['checks']
@@ -98,21 +107,47 @@ def main():
              ('reg=O', 'SELECT COUNT(*) FROM person WHERE reg_group=3', ()),
              ('grade=AB', "SELECT COUNT(*) FROM person WHERE ovr_grade IN ('A','B')", ()),
              ('grade=D', "SELECT COUNT(*) FROM person WHERE ovr_grade='D'", ()),
-             ('lean=-2', 'SELECT COUNT(*) FROM person WHERE lean_band=-2 AND lean_undet=0', ()),
-             ('lean=0', 'SELECT COUNT(*) FROM person WHERE lean_band=0 AND lean_undet=0', ()),
-             ('lean=2', 'SELECT COUNT(*) FROM person WHERE lean_band=2 AND lean_undet=0', ()),
-             ('lean=U', 'SELECT COUNT(*) FROM person WHERE lean_undet=1', ()),
              ('level=block&area=' + block, 'SELECT COUNT(*) FROM person WHERE reg_block=?', (block,)),
              ('level=tract&area=' + tract, 'SELECT COUNT(*) FROM person WHERE reg_tract=?', (tract,)),
              ('level=zip&area=' + zipc, 'SELECT COUNT(*) FROM person WHERE reg_zip=?', (zipc,)),
              ('level=precinct&area=' + prec, 'SELECT COUNT(*) FROM person WHERE reg_precinct=?', (prec,)),
-             ('reg=R&grade=AB&lean=1&level=zip&area=' + zipc,
-              "SELECT COUNT(*) FROM person WHERE reg_group=1 AND ovr_grade IN ('A','B') AND lean_band=1 AND lean_undet=0 "
+             ('reg=R&grade=AB&level=zip&area=' + zipc,
+              "SELECT COUNT(*) FROM person WHERE reg_group=1 AND ovr_grade IN ('A','B') "
               "AND reg_zip=?", (zipc,))]
     failed = [q for q, sql, args in cases if total(q) != db.execute(sql, args).fetchone()[0]]
     first = client.get('/api/v3/people?basis=registration&demo=1').json()
     record('filter_totals_equal_sql', not failed, cases=len(cases), failed=len(failed), total=first['total'],
            pages=first['pages'], rows_on_first_page=len(first['rows']))
+
+    # Outlook categories come from the five stored field flags, including stored model outputs. The old
+    # numeric lean bands deliberately do not participate; missing and conflicting flags stay unresolved.
+    true_codes = {fid: {code for code, literal in info.value_dict[fid].items() if literal in ('1', '1.0')}
+                  for fid in range(34, 39)}
+    categories = np.full(n, 99, dtype=np.int8)
+    conflicts = 0
+    for pos, blob in db.execute('SELECT pos, blob FROM evidence'):
+        values = np.frombuffer(zlib.decompress(blob), dtype='<u2', count=40)
+        selected = [fid - 36 for fid in range(34, 39) if int(values[fid]) in true_codes[fid]]
+        if len(selected) == 1:
+            categories[pos - 1] = selected[0]
+        elif len(selected) > 1:
+            conflicts += 1
+    category_counts = {str(code): int((categories == code).sum()) for code in (-2, -1, 0, 1, 2)}
+    category_counts['U'] = int((categories == 99).sum())
+    category_bad = [code for code, count in category_counts.items() if total('lean=' + code) != count]
+    record('outlook_filters_equal_stored_categories', not category_bad, counts=category_counts,
+           conflicting_responses=conflicts, missing_responses=category_counts['U'] - conflicts)
+
+    # Real-mode values are compared in memory only. No names or opaque person ids enter the report.
+    with override_settings(DEMO_MODE=False):
+        real = client.get('/api/v3/people?basis=registration').json()
+        contacts = sqlite3.connect((V3 / '.local' / 'contacts.sqlite3').resolve().as_uri() + '?mode=ro', uri=True)
+        names_match = all(row['name'] == scoresdb.title_name(contacts.execute(
+            'SELECT name FROM contacts WHERE id=?', (row['person_id'],)).fetchone()[0]) for row in real['rows'])
+        contacts.close()
+        real_meta = client.get('/api/v3/meta').json()
+        record('real_mode_uses_local_store_and_names', names_match and real_meta['demo'] is False
+               and real_meta['source'] == 'live' and real_meta['people'] == n, checked=len(real['rows']))
 
     # ---- C. page through the whole list ---------------------------------------------------------------------------
     if args.full_walk:
@@ -260,6 +295,8 @@ def main():
            legacy_personal_routes=legacy)
     contacts.close()
     scoresdb.reset()
+    after_hashes = store_hashes()
+    record('source_stores_unchanged', before_hashes == after_hashes, sha256=after_hashes)
 
     report['seconds'] = round(time.time() - started, 1)
     report['all_passed'] = all(c['passed'] for c in ok.values())

@@ -7,7 +7,6 @@ import './styles/map.css';
 import './styles/pages.css';
 import {parseRoute,useRoute} from './lib/router';
 import {getMeta,sources} from './api/client';
-import {pickPerson} from './api/fixtures';
 import type {Meta} from './types';
 import {PageHeader} from './components/Header';
 import {LoadingTerrier} from './components/TerrierMark';
@@ -27,18 +26,18 @@ function V3App(){
   const [error,setError]=useState('');const [attempt,setAttempt]=useState(0);
   const [introDone,setIntroDone]=useState(()=>matchMedia('(prefers-reduced-motion:reduce)').matches);
   const finishIntro=useCallback(()=>setIntroDone(true),[]);
-  useEffect(()=>{let current=true;setError('');getMeta().then(m=>{if(current)setMeta(m);}).catch(()=>{if(current)setError('The test data could not be loaded.');});return ()=>{current=false;};},[attempt]);
+  useEffect(()=>{let current=true;setError('');getMeta().then(m=>{if(current)setMeta(m);}).catch(e=>{if(current)setError(e instanceof Error?e.message:'The local data could not be loaded.');});return ()=>{current=false;};},[attempt]);
   useEffect(()=>{
-    // display demo state is what the server (or the synthetic fixture world) reports, never the URL alone
+    // Data provenance is reported by the connected local service.
     const demo=!!meta?.demo;
     const root=document.documentElement;
     root.dataset.demo=demo?'1':'0';
     root.dataset.source=meta?.source??'';
     document.title='Terrier';
-    (window as unknown as {__cuV3?:unknown}).__cuV3={meta,sources,pickPerson};
+    (window as unknown as {__cuV3?:unknown}).__cuV3={meta,sources};
   },[meta,route]);
   const shell=()=>introDone?<LoadingTerrier/>:null;
-  if(error)return <div className="screen"><PageHeader meta={null} active="map"/><main className="app-error" role="alert"><h1>{error}</h1><p>Check that the local preview is running, then retry.</p><button type="button" onClick={()=>setAttempt(n=>n+1)}>Retry</button></main></div>;
+  if(error)return <div className="screen"><PageHeader meta={null} active="map"/><main className="app-error" role="alert"><h1>{error}</h1><p>Check that the local Terrier data service is running, then retry.</p><button type="button" onClick={()=>setAttempt(n=>n+1)}>Retry</button></main></div>;
   let screen:ReactNode=null;
   if(meta)switch(route.name){
     case 'people':screen=<PeopleScreen meta={meta} route={route}/>;break;
@@ -58,7 +57,7 @@ function V3App(){
 class AppBoundary extends Component<{children:ReactNode},{failed:boolean}>{
   state={failed:false};
   static getDerivedStateFromError(){return {failed:true};}
-  render(){return this.state.failed?<main className="app-error" role="alert"><h1>This view could not open.</h1><p>Reload the test preview to try again.</p><button type="button" onClick={()=>location.reload()}>Reload</button></main>:this.props.children;}
+  render(){return this.state.failed?<main className="app-error" role="alert"><h1>This view could not open.</h1><p>Reload Terrier to try again.</p><button type="button" onClick={()=>location.reload()}>Reload</button></main>:this.props.children;}
 }
 createRoot(document.getElementById('root')!).render(<AppBoundary><V3App/></AppBoundary>);
 

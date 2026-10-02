@@ -40,15 +40,15 @@ try{
   await page.emulateMedia({reducedMotion:'reduce'});await page.goto(base+'/people?lean=-2&balanced=0');await page.locator('.tbody .trow').first().waitFor();assert.equal(await page.locator('video').count(),0);assert.equal(await page.locator('.terrier-startup').count(),0);assert.ok(page.url().includes('lean=-2&balanced=0'));
   report.checks.push('reduced motion skips animation and keeps deep-link query');
   await page.emulateMedia({reducedMotion:'no-preference'});
-  let release;let gate=new Promise(r=>release=r);await page.route('**/fixtures/v3/meta.json',async r=>{await gate;await r.continue();});
-  await page.goto(base+'/method');await readyVideo(page);await endVideo(page);assert.equal(await page.locator('.terrier-startup').count(),1);assert.equal(await page.locator('video').count(),0);release();await page.locator('.terrier-startup').waitFor({state:'detached'});await page.locator('.method').waitFor();await page.unroute('**/fixtures/v3/meta.json');
+  let release;let gate=new Promise(r=>release=r);await page.route('**/api/v3/meta',async r=>{await gate;await r.continue();});
+  await page.goto(base+'/method');await readyVideo(page);await endVideo(page);assert.equal(await page.locator('.terrier-startup').count(),1);assert.equal(await page.locator('video').count(),0);release();await page.locator('.terrier-startup').waitFor({state:'detached'});await page.locator('.method').waitFor();await page.unroute('**/api/v3/meta');
   report.checks.push('slow metadata holds still after one play; automatically dismisses on readiness');
   gate=new Promise(r=>release=r);await page.route('**/assets/MethodScreen-*.js',async r=>{await gate;await r.continue();});
   await page.goto(base+'/method');await endVideo(page);assert.equal(await page.locator('video').count(),0);assert.equal(await page.locator('.terrier-loading').count(),1);release();await page.locator('.method').waitFor();await page.unroute('**/assets/MethodScreen-*.js');
   report.checks.push('slow route chunk never restarts animation');
   expectedFault=true;await page.route('**/brand/terrier-loading-hq.mp4',r=>r.abort());await page.goto(base+'/method');await page.locator('.method').waitFor();await page.locator('.terrier-startup').waitFor({state:'detached'});await page.unroute('**/brand/terrier-loading-hq.mp4');
   report.checks.push('media failure cannot block automatic app entry');
-  await page.route('**/fixtures/v3/meta.json',r=>r.fulfill({status:503,body:'test fault'}));await page.goto(base+'/method');await page.getByRole('button',{name:'Retry',exact:true}).waitFor();assert.equal(await page.locator('.terrier-startup').count(),0);await page.unroute('**/fixtures/v3/meta.json');
+  await page.route('**/api/v3/meta',r=>r.fulfill({status:503,body:'test fault'}));await page.goto(base+'/method');await page.getByRole('button',{name:'Retry',exact:true}).waitFor();assert.equal(await page.locator('.terrier-startup').count(),0);await page.unroute('**/api/v3/meta');
   expectedFault=false;report.checks.push('metadata failure replaces splash with Retry');
   assert.deepEqual(report.errors,[]);
 }catch(e){report.failure=e.stack;throw e;}

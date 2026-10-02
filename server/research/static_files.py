@@ -11,6 +11,7 @@ The content-security policy is the one the app has always sent.
 import gzip
 import mimetypes
 import os
+import re
 import threading
 from email.utils import formatdate
 from pathlib import Path
@@ -102,6 +103,31 @@ def serve(request, path=''):
                 encoding = 'gzip-memory'
     tag = '"%x-%x%s"' % (stat.st_mtime_ns, stat.st_size, '-' + encoding if encoding else '')
     cache_control = IMMUTABLE if is_asset else REVALIDATE
+    # The approved loading clip must retain seeking and native resolution when served by Django.
+    if content_type == 'video/mp4' and request.META.get('HTTP_RANGE'):
+        match = re.fullmatch(r'bytes=(\d*)-(\d*)', request.META['HTTP_RANGE'])
+        start, end = 0, stat.st_size - 1
+        valid = bool(match and (match[1] or match[2]))
+        if valid:
+            if match[1]:
+                start = int(match[1])
+                if match[2]: end = min(int(match[2]), end)
+            else:
+                start = max(0, stat.st_size - int(match[2]))
+            valid = 0 <= start <= end < stat.st_size
+        if not valid:
+            response = HttpResponse(status=416)
+            response['Content-Range'] = 'bytes */%d' % stat.st_size
+        else:
+            with candidate.open('rb') as stream:
+                stream.seek(start)
+                response = HttpResponse(b'' if request.method == 'HEAD' else stream.read(end - start + 1), status=206, content_type=content_type)
+            response['Content-Length'] = str(end - start + 1)
+            response['Content-Range'] = 'bytes %d-%d/%d' % (start, end, stat.st_size)
+        response['Accept-Ranges'] = 'bytes'
+        response['Content-Encoding'] = 'identity'
+        _headers(response, tag, stat.st_mtime, cache_control, False)
+        return response
     if _not_modified(request, tag, stat.st_mtime):
         response = HttpResponse(status=304)
         _headers(response, tag, stat.st_mtime, cache_control, compressible)
@@ -123,5 +149,7 @@ def serve(request, path=''):
         response = FileResponse(candidate.open('rb'), content_type=content_type)
         if not compressible:
             response['Content-Encoding'] = 'identity'     # already compact (fonts, images): keep GZipMiddleware away
+        if content_type == 'video/mp4':
+            response['Accept-Ranges'] = 'bytes'
     _headers(response, tag, stat.st_mtime, cache_control, compressible)
     return response

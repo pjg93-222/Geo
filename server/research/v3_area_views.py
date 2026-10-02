@@ -67,10 +67,15 @@ def meta(request):
     payload = dict(_static_meta(key))
     status, info = store_status(manifest)
     payload['store'] = status
+    payload['source'] = 'live'
+    payload['data_origin'] = 'local-source-and-model-output'
     payload['demo'] = bool(settings.DEMO_MODE or parameters.get('demo') == '1')
     if info is not None:
         payload['people'] = int(info.meta['n_people'])
         payload['households'] = int(info.meta['n_households'])
+        payload['district_registration'] = {
+            group.lower(): info.meta['reg_group_counts'][group] / info.n if info.n else 0
+            for group in ('D', 'R', 'U', 'O')}
         payload['district_rate'] = {g: info.meta['district']['top10_rate'][g] for g in ('ovr', 'cua', 'part', 'soi')}
         payload['district_mean'] = {'score': info.meta['district']['score_mean'],
                                     'measured': info.meta['district']['measured_mean'],

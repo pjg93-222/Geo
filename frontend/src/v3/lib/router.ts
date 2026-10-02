@@ -1,19 +1,18 @@
-// History router for the map, people/profiles, contacts, audit, sources, workspace and method. Demo/source flags are
-// kept on every link so a pseudonymised session stays pseudonymised.
+// History router for the map, people/profiles, contacts, audit, sources, workspace and method.
 import {useEffect,useState} from 'react';
 import {rememberView} from './savedViews';
 
 export type RouteName='map'|'people'|'profile'|'method'|'contacts'|'criteria'|'sources'|'workspace';
 export interface Route{name:RouteName;pid:string;search:URLSearchParams}
 
-const KEEP=['demo','source'];
+const KEEP:string[]=[];
 
 export function parseRoute(loc:Location=location):Route{
   const search=new URLSearchParams(loc.search);
   const path=loc.pathname.replace(/\/+$/,'')||'/';
   if(path==='/people')return {name:'people',pid:'',search};
   const m=/^\/people\/([^/]+)$/.exec(path);
-  if(m){let pid=m[1];try{pid=decodeURIComponent(pid);}catch{/* invalid URI becomes an unknown fixture id */}return {name:'profile',pid,search};}
+  if(m){let pid=m[1];try{pid=decodeURIComponent(pid);}catch{/* invalid URI becomes an unknown person id */}return {name:'profile',pid,search};}
   if(path==='/method')return {name:'method',pid:'',search};
   for(const name of ['contacts','criteria','sources','workspace'] as const){
     if(path==='/'+name)return {name,pid:'',search};

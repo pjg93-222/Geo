@@ -176,9 +176,13 @@ class V3PeopleTests(TestCase):
             self.assertAlmostEqual(row['soi_pct'], r['soi_pct'], places=5)
             self.assertEqual(row['ovr_grade'], r['ovr_grade'])
             self.assertAlmostEqual(row['within_pct'], r['ovr_pct_within_reg'], places=5)
-            expected = 'U' if r['lean_undet'] else r['lean_band']
+            expected = self.stored_outlook(r['pos'])
             self.assertEqual(row['lean_code'], expected)
-            self.assertEqual(row['lean_label'], 'Undetermined' if r['lean_undet'] else FL.LEAN_BAND_LABELS[r['lean_band']])
+            if expected != 'U':
+                self.assertEqual(row['lean_label'], ('Very conservative', 'Somewhat conservative', 'Middle outlook',
+                                                   'Somewhat liberal', 'Very liberal')[expected + 2])
+            else:
+                self.assertIn(row['lean_label'], ('Unknown', 'Multiple responses'))
             self.assertEqual(row['within_group'], FL.REG_GROUP_LABELS[FL.REG_GROUPS[r['reg_group']]])
 
     def test_ties_get_an_equals_prefix(self):
@@ -189,6 +193,7 @@ class V3PeopleTests(TestCase):
             writer.execute('UPDATE person SET ovr_tie_n=2 WHERE pos IN (3, 4)')
             writer.commit()
             scoresdb.reset()
+
             page = self.get('/api/v3/people?basis=registration').json()
             ranks = [r['rank'] for r in page['rows'][:5]]
             self.assertTrue(ranks[2].startswith('=') and ranks[3].startswith('='), ranks)
@@ -199,9 +204,33 @@ class V3PeopleTests(TestCase):
             writer.close()
             scoresdb.reset()
 
+    def test_opinion_categories_preserve_missing_conflicting_and_model_filled_responses(self):
+        from types import SimpleNamespace
+        info = SimpleNamespace(value_dict={fid: {0: '0', 1: '1'} for fid in range(34, 39)})
+        values = np.zeros(40, dtype='<u2')
+        self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), ('U', 'Unknown'))
+        values[34] = 1
+        self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), (-2, 'Very conservative'))
+        values[38] = 1
+        self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), ('U', 'Multiple responses'))
+        # The category reads values only: it does not discard stored model fills or use a numerical lean score.
+        values[34] = 0
+        self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), (2, 'Very liberal'))
+
     # ---- filters, sorts and the balanced view ------------------------------------------------------------------
     def count(self, where='1=1', *args):
         return self.scores.execute('SELECT COUNT(*) FROM person WHERE ' + where, args).fetchone()[0]
+
+    def stored_outlook(self, pos):
+        raw = zlib.decompress(self.scores.execute('SELECT blob FROM evidence WHERE pos=?', (pos,)).fetchone()[0])
+        values = np.frombuffer(raw, dtype='<u2', count=40)
+        selected = []
+        for fid in range(34, 39):
+            literal = self.scores.execute('SELECT literal FROM value_dict WHERE fid=? AND code=?',
+                                         (fid, int(values[fid]))).fetchone()
+            if literal and literal[0] in ('1', '1.0'):
+                selected.append(fid - 36)
+        return selected[0] if len(selected) == 1 else 'U'
 
     def test_filters_match_sql(self):
         def total(query):
@@ -216,8 +245,8 @@ class V3PeopleTests(TestCase):
         self.assertEqual(total('grade=AB'), self.count("ovr_grade IN ('A','B')"))
         self.assertEqual(total('grade=D'), self.count("ovr_grade='D'"))
         for band in (-2, -1, 0, 1, 2):
-            self.assertEqual(total('lean=%d' % band), self.count('lean_band=? AND lean_undet=0', band))
-        self.assertEqual(total('lean=U'), self.count('lean_undet=1'))
+            self.assertEqual(total('lean=%d' % band), sum(self.stored_outlook(pos) == band for pos in range(1, self.n + 1)))
+        self.assertEqual(total('lean=U'), sum(self.stored_outlook(pos) == 'U' for pos in range(1, self.n + 1)))
         self.assertEqual(total('level=tract&area=' + tract), self.count('reg_tract=?', tract))
         self.assertEqual(total('level=zip&area=' + zip_), self.count('reg_zip=?', zip_))
         self.assertEqual(total('level=block&area=' + block), self.count('reg_block=?', block))

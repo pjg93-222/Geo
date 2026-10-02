@@ -80,7 +80,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   // otherwise it is the people-weighted mean of the published areas
   const summary=useMemo(()=>{
     const d=meta?.district_mean;
-    if(d)return {ovr:d.score.ovr,cua:d.score.cua,part:d.score.part,soi:d.score.soi,lean:d.lean,measured:d.measured.ovr,measuredBy:d.measured,people:meta!.people};
+    if(d)return {ovr:d.score.ovr,cua:d.score.cua,part:d.score.part,soi:d.score.soi,lean:d.lean,measured:d.measured.ovr,measuredBy:d.measured,people:meta!.people,mix:meta!.district_registration};
     return areas?districtSummary(areas):null;
   },[meta,areas]);
 
@@ -173,7 +173,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
         {labels.length>0&&pane&&!streetActive&&<AreaLabels items={labels} palette={palette} selectedId={selected} project={(lo,la)=>mapRef.current?.project(lo,la)??null}
           zoom={mapRef.current?.view()?.zoom??0} width={pane.clientWidth} height={pane.clientHeight}/>}
         <ZoomControl onZoom={d=>mapRef.current?.zoomBy(d)}/>
-        {streetActive?<HouseholdLegend/>:<Legend group={group} measured={measured} onMeasured={v=>{begin('map');setMeasured(v);}} loading={!areas}/>}
+        {streetActive?<HouseholdLegend/>:<Legend group={group} measured={measured} onMeasured={v=>{begin('map');setMeasured(v);}} loading={!areas} floors={meta?.floors}/>}
         <Readout/>
         {selHousehold&&popPos&&pane&&<Popover data={pop} x={popPos.x} y={popPos.y} paneW={pane.clientWidth} paneH={pane.clientHeight}
           onClose={()=>{setSelHousehold(null);setPop(null);}}/>}

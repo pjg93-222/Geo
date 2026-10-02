@@ -88,12 +88,6 @@ def rank_text(rank, tie_n):
     return ('=' if tie_n and tie_n > 1 else '') + '{:,}'.format(int(rank))
 
 
-def lean_fields(band, undetermined):
-    if undetermined:
-        return 'U', FL.LEAN_UNDETERMINED_LABEL
-    return int(band), FL.LEAN_BAND_LABELS[int(band)]
-
-
 def registration_label(code):
     return FL.REG_GROUP_LABELS[FL.REG_GROUPS[int(code)]]
 
@@ -117,9 +111,9 @@ def list_mask(info, q):
     if q['grade'] != 'ABCD':
         both(np.isin(info.columns['grade'], [S.GRADE_LETTERS.index(g) for g in q['grade']]))
     if q['lean'] == 'U':
-        both(info.columns['lean_undet'] == 1)
+        both(np.abs(info.outlook_codes()) == 3)
     elif q['lean'] != 'all':
-        both((info.columns['lean_band'] == int(q['lean'])) & (info.columns['lean_undet'] == 0))
+        both(info.outlook_codes() == int(q['lean']))
     if q['area']:
         column = AREA_LEVELS[q['basis']][q['level']]
         code = info.area_codes['a_' + column].get(q['area'])
@@ -215,10 +209,12 @@ def people(request, demo):
         found = {r['pos']: r for r in conn.execute(
             'SELECT %s FROM person WHERE pos IN (%s)' % (PEOPLE_COLUMNS, marks), [p + 1 for p in positions])}
         ordered = [found[p + 1] for p in positions]
+        evidence = {r['pos']: DB.decode_evidence(r['blob'])['values'] for r in conn.execute(
+            'SELECT pos, blob FROM evidence WHERE pos IN (%s)' % marks, [p + 1 for p in positions])}
         names = DB.names(conn, info, ordered, demo)
         rank_column, tie_column = RANK_COLUMNS[q['sort']]
         for r in ordered:
-            code, label = lean_fields(r['lean_band'], r['lean_undet'])
+            code, label = DB.outlook_fields(DB.outlook_code(info, evidence[r['pos']]))
             rows.append({
                 'rank': rank_text(r[rank_column], r[tie_column] if tie_column else 0),
                 'person_id': r['person_id'], 'name': names.get(r['person_id'], ''),
@@ -363,6 +359,7 @@ def person(request, demo):
     return {
         'person_id': ident, 'name': names.get(ident, ''), 'age': r['age'], 'household_size': r['hh_size'],
         'registration': FL.REG_GROUPS[r['reg_group']], 'block': r['reg_block'] or '', 'precinct': r['reg_precinct'] or '',
+        'registration_label': FL.PARTY_CODES.get(r['party'], 'Code ' + str(r['party'])) if r['party'] else 'Unknown',
         'header': {'pct': DB.number(r['ovr_pct']), 'lo': DB.number(r['ovr_pct_lo90']),
                    'hi': DB.number(r['ovr_pct_hi90']), 'grade': r['ovr_grade'],
                    'measured_pct': DB.number(r['ovr_measured_pct']), 'within_pct': DB.number(r['ovr_pct_within_reg']),

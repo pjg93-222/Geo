@@ -86,7 +86,7 @@ function RailA(p:AreaRailProps){
     caption=`in the ${topName(g)} top 10%, shrunk toward the ${p.level==='block'?'tract':'district'}`;
     likely=`Likely ${shareText(s.lo)}${ENDASH}${shareText(s.hi)}% ${MIDDOT} district rate ${rateText(rate??0.1)}%`;
   }
-  const eyebrow=summary?'Illustrative district indices':`Illustrative ${p.level==='block'?'block':'area'} indices`;
+  const eyebrow=summary?'District indices':`${p.level==='block'?'Block':'Area'} indices`;
   const lean=summary?{mean:p.summary?.lean??0}:v!.lean;
   const facts={
     people:summary?meta.people:v!.n,households:summary?meta.households:v!.households,

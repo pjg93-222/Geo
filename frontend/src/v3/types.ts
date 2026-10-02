@@ -9,6 +9,9 @@ export type Source='live'|'fixture';
 export interface Meta{
   schema:'v3-meta-1';snapshot:string;demo:boolean;source?:Source;
   people:number;households:number;district_label:string;
+  store?:{status:string;note:string};
+  data_origin?:string;
+  district_registration?:{d:number;r:number;u:number;o:number};
   district_rate:Record<'ovr'|'cua'|'part'|'soi',number>;
   share_breaks:number[];lean_cuts:[number,number];measured_breaks:number[];household_breaks:number[];
   weights:{cua:number;part:number;soi:number};
@@ -73,6 +76,7 @@ export interface AreaRef{level:Level;id:string;label:string;pct:number|null;top1
 export interface Profile{
   person_id:string;name:string;age:number|null;household_size:number;
   registration:'D'|'R'|'U'|'O';block:string;precinct:string;
+  registration_label?:string;
   header:{pct:number;lo:number;hi:number;grade:Grade;measured_pct:number;within_pct:number;within_group:string};
   cards:{cua:IndexCard;part:IndexCard;soi:IndexCard;lean:{lean:number;grade:Grade;undetermined:boolean}};
   groups:FieldGroup[];

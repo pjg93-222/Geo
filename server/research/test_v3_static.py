@@ -33,6 +33,8 @@ class StaticFileTests(SimpleTestCase):
         (dist / 'assets' / 'app-abc123.js.gz').write_bytes(gzip.compress(cls.script))
         (dist / 'assets' / 'font-1.woff2').write_bytes(b'wOF2' + os.urandom(4000))
         (dist / 'assets' / 'plain-9.css').write_bytes(b'body{margin:0}' * 300)
+        (dist / 'brand').mkdir()
+        (dist / 'brand' / 'loading.mp4').write_bytes(bytes(range(256)))
         # a sibling older than its source must be ignored
         (dist / 'assets' / 'stale-1.js').write_bytes(b'var a=1;' * 300)
         old = dist / 'assets' / 'stale-1.js.gz'
@@ -63,6 +65,17 @@ class StaticFileTests(SimpleTestCase):
         self.assertEqual(self.fetch('/some/spa/route')['Cache-Control'], 'no-cache')    # falls back to the shell
         self.assertIn("default-src 'self'", shell['Content-Security-Policy'])
         self.assertEqual(shell['X-Content-Type-Options'], 'nosniff')
+
+    def test_loading_video_byte_ranges(self):
+        clip = self.fetch('/brand/loading.mp4', HTTP_RANGE='bytes=10-31')
+        self.assertEqual(clip.status_code, 206)
+        self.assertEqual(clip.content, bytes(range(10, 32)))
+        self.assertEqual(clip['Content-Range'], 'bytes 10-31/256')
+        self.assertEqual(clip['Content-Encoding'], 'identity')
+        suffix = self.fetch('/brand/loading.mp4', HTTP_RANGE='bytes=-8')
+        self.assertEqual(suffix.content, bytes(range(248, 256)))
+        self.assertEqual(self.fetch('/brand/loading.mp4', HTTP_RANGE='bytes=999-').status_code, 416)
+        self.assertEqual(self.fetch('/brand/loading.mp4', HTTP_RANGE='bytes=-0').status_code, 416)
 
     def test_brotli_then_gzip_siblings_are_chosen_by_accept_encoding(self):
         br = self.fetch('/assets/app-abc123.js', HTTP_ACCEPT_ENCODING='br, gzip')
@@ -146,6 +159,19 @@ class AggregatePayloadTests(TestCase):
 
     def url(self, kind, *parts):
         return '/api/v3/%s/%s/%s' % (kind, self.key, '/'.join(parts))
+
+    def test_meta_uses_store_totals_and_registration_counts(self):
+        response = self.client.get('/api/v3/meta')
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        info = scoresdb.info()
+        self.assertEqual(body['source'], 'live')
+        self.assertEqual(body['data_origin'], 'local-source-and-model-output')
+        self.assertFalse(body['demo'])
+        self.assertEqual(body['people'], info.n)
+        self.assertEqual(body['households'], info.meta['n_households'])
+        for code in ('D', 'R', 'U', 'O'):
+            self.assertEqual(body['district_registration'][code.lower()], info.meta['reg_group_counts'][code] / info.n)
 
     def test_levels_are_immutable_gzipped_and_etagged(self):
         for basis, levels in AL.BASIS_LEVELS.items():

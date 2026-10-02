@@ -1,4 +1,3 @@
-// Method page (not rendered in the approved set; tokens only). Plain neutral text of what the screens show.
 import {PageHeader} from './Header';
 import type {Meta} from '../types';
 import {int} from '../lib/format';
@@ -9,33 +8,14 @@ export function MethodScreen({meta}:{meta:Meta|null}){
     <PageHeader meta={meta} active="method"/>
     <main className="method">
       <h1 className="page-title">Method</h1>
-      <p className="demo-note">Test-dummy preview. People, scores, households and household positions are generated. Public geographic boundaries and road lines provide map context.</p>
-      <p className="page-sub">{meta?`${int(meta.people)} people ${'·'} ${int(meta.households)} households`:' '}</p>
-      <section>
-        <h2 className="section-title">Overall standing</h2>
-        <p>Overall standing combines three indices: {w?.cua??40}% Credit Union Alignment, {w?.part??35}% Participation and {w?.soi??25}% Sphere of Influence. Sphere of Influence is 45% giving, 45% volunteering and 10% household. Recession sensitivity counts as a positive.</p>
-      </section>
-      <section>
-        <h2 className="section-title">Likely ranges</h2>
-        <p>Each standing carries a likely range, shown as a band on a 0 to 100 track with a tick at the standing. Area statistics are generated independently and do not summarize the displayed individual profiles. Their likely ranges use the synthetic spread. They are not estimates about residents.</p>
-      </section>
-      <section>
-        <h2 className="section-title">Political views</h2>
-        <p>Registration, affiliation and outlook are separate categorical responses. They are not combined into a displayed belief score, standardized, ranked, or included in overall standing. The Outlook filter uses the original response. The registration map shows the largest registration group, with category proportions in the detail panel; Mixed means a tie.</p>
-        <p>Test responses come from authored categorical scenarios, with occasional crossovers between registration, affiliation and outlook. These fixture choices are not population estimates. Missing or conflicting categories display as Unknown or Multiple responses; no missing response is assigned a middle position. Ethical beliefs are not collected or scored in this preview. The other three indices retain their synthetic score and percentile conventions.</p>
-      </section>
-      <section>
-        <h2 className="section-title">Measured and estimated</h2>
-        <p>Each person has 40 framework fields: 12 in Credit Union Alignment, 10 in Participation, 7 in Sphere of Influence and 11 in Political views. A field is observed or estimated; estimated values are shown with their probability. Opinion fields display their original responses without score contributions. % measured is an illustrative evidence indicator in this test data.</p>
-      </section>
-      <section>
-        <h2 className="section-title">Household consistency</h2>
-        <p>Every fixture household has an adult-only roster, so its adult count equals its listed size and its child count is zero. Household members share tenure and dwelling facts. These facts are fixed before the remaining illustrative index inputs are generated; a target outside their feasible range is adjusted to keep contributions and displayed standings consistent.</p>
-      </section>
-      <section>
-        <h2 className="section-title">Areas</h2>
-        <p>Blocks, tracts and ZIPs use public Census boundary context. Preview precincts are generated block partitions, not official election precincts. Areas are built on the registration basis. Every synthetic area is shown, including areas containing one test person. No minimum-count floor applies to these generated fixtures. Grades exist for each person and each index; they are not given to areas.</p>
-      </section>
+      <p className="demo-note">Terrier reads the active local dataset. Missing fields remain unavailable; the application does not create replacement people, contacts or responses.</p>
+      <p className="page-sub">{meta?`${int(meta.people)} people · ${int(meta.households)} households`:' '}</p>
+      <section><h2 className="section-title">Overall standing</h2><p>Overall standing combines three indices: {w?.cua??40}% Credit Union Alignment, {w?.part??35}% Participation and {w?.soi??25}% Sphere of Influence. Sphere of Influence is 45% giving, 45% volunteering and 10% household. Recession sensitivity counts as a positive. The existing local scores and field values are included.</p></section>
+      <section><h2 className="section-title">Standings and ranges</h2><p>Standings are percentiles within the stored population. Person ranges come from the local score store. Area values aggregate the active snapshot and use its stored uncertainty. Area shares are shrunk toward the parent tract or district where the framework specifies it.</p></section>
+      <section><h2 className="section-title">Political views</h2><p>Registration, affiliation and outlook remain separate categorical fields. They are not combined into a displayed belief score, standardized, ranked, or included in overall standing. The Outlook filter uses stored outlook responses. The registration map shows the largest registration group, with category proportions in the detail panel; Mixed means a tie.</p><p>Missing categories display as Unknown and conflicting positive responses as Multiple responses. No missing opinion is assigned a middle position. Differences between registration, affiliation and outlook are preserved. Ethical beliefs are not part of this framework.</p></section>
+      <section><h2 className="section-title">Field evidence</h2><p>The framework has 40 fields: 12 in Credit Union Alignment, 10 in Participation, 7 in Sphere of Influence and 11 political categories. Profiles retain the stored values and their available evidence details. Political fields show no score contribution. Data grades and measured percentages summarize field coverage.</p></section>
+      <section><h2 className="section-title">Households</h2><p>Household membership and locations come from the local household store. Listed members are people in the dataset, which may not contain every household resident. Supplied household facts are preserved; membership is not rewritten to force them to agree.</p></section>
+      <section><h2 className="section-title">Areas</h2><p>The map uses the active snapshot’s registration geography, public boundaries and local road data. Areas with fewer than {meta?.floors.min_n??20} people or {meta?.floors.min_households??10} households are withheld. Grades belong to people and indices, not areas.</p></section>
     </main>
   </div>;
 }
