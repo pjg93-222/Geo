@@ -40,11 +40,12 @@ export type RangeVariant='railA'|'profile'|'table'|'railB';
 /** Likely range: track 0..100, segment lo..hi, tick at the value. Never a fill from the left edge. */
 export function RangeBar(p:{value:number|null;lo?:number|null;hi?:number|null;variant:RangeVariant;className?:string}){
   const has=p.value!==null&&p.value!==undefined;
+  const hasRange=p.lo!=null&&p.hi!=null&&Number.isFinite(p.lo)&&Number.isFinite(p.hi);
   const lo=has&&p.lo!=null?Math.max(0,Math.min(100,p.lo)):0;
   const hi=has&&p.hi!=null?Math.max(lo,Math.min(100,p.hi)):0;
   return <div className={cx('rbar','v-'+p.variant,p.className)} role="img"
-    aria-label={has?`Standing ${Math.round(p.value!)}, likely ${Math.round(lo)} to ${Math.round(hi)}`:'Not available'}>
-    {has&&hi>lo&&<i className="rbar-seg" style={{left:`${lo}%`,width:`${hi-lo}%`}}/>}
+    aria-label={has?`Standing ${Math.round(p.value!)}${hasRange?`, likely ${Math.round(lo)} to ${Math.round(hi)}`:''}`:'Not available'}>
+    {has&&hasRange&&hi>lo&&<i className="rbar-seg" style={{left:`${lo}%`,width:`${hi-lo}%`}}/>}
     {has&&<i className="rbar-tick" style={{left:`${Math.max(0,Math.min(100,p.value!))}%`}}/>}
   </div>;
 }
