@@ -120,7 +120,7 @@ const tabs:{id:Section;label:string;to:string}[]=[
   {id:'map',label:'Map',to:'/'},{id:'people',label:'People',to:'/people'},
   {id:'contacts',label:'Contact sheet',to:'/contacts'},{id:'criteria',label:'Criteria audit',to:'/criteria'},
   {id:'sources',label:'Data & sources',to:'/sources'},{id:'workspace',label:'Team & snapshots',to:'/workspace'},
-  {id:'method',label:'Method',to:'/method'},
+  {id:'method',label:'Method',to:'/method'},{id:'walk',label:'Walk list',to:'/walk'},
 ];
 function SectionNav({active}:{active:Section}){
   const [viewPath,setViewPath]=useState(()=>location.pathname+location.search);

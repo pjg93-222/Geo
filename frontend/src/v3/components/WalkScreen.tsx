@@ -1,0 +1,556 @@
+// Walk list: pick an area and streets, build the route, work through it door by door, record results (autosaved), export.
+// The page address mirrors the picker (ss, sh, precinct, streets) and the open saved list (list), so a reload rebuilds the same list.
+import {Component,Fragment,Suspense,lazy,memo,useCallback,useEffect,useRef,useState} from 'react';
+import type {ReactNode} from 'react';
+import {Check,ChevronDown,Route as RouteIcon,Search,Upload,X} from 'lucide-react';
+import {PageHeader} from './Header';
+import {Segmented,cx} from './ui';
+import type {WalkShade} from './WalkMap';
+import {replaceQuery,type Route} from '../lib/router';
+import type {Meta} from '../types';
+import {downloadFile} from '../lib/download';
+import {ApiError} from '../api/client';
+import {getWalkList,getWalkLists,getWalkOptions,getWalkSavedList,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,searchWalkStreets} from '../api/walk';
+import type {WalkArea,WalkCode,WalkDoor,WalkLevel,WalkListPayload,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkVoter} from '../api/walkTypes';
+import {
+  CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,countText,defaultListTitle,doorAddress,doorsOnSide,drainResults,fullDate,historyKey,initialResults,
+  leftOutNote,listLabel,localToday,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,regDate,resultOutbox,runHeader,
+  savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,walkFileName,
+  type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkPick,type WalkResults,
+} from '../lib/walk';
+import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
+import {exportWalkPdf} from '../lib/walkPdf';
+import '../styles/walk.css';
+
+// MapLibre loads only once a list exists, so opening this screen stays light.
+const WalkMap=lazy(()=>import('./WalkMap').then(m=>({default:m.WalkMap})));
+
+type Area=Required<WalkArea>;
+const LEVELS:{level:WalkLevel;label:string;aria:string}[]=[
+  {level:'ss',label:'Senate',aria:'Senate district'},{level:'sh',label:'House',aria:'House district'},{level:'precinct',label:'Precinct',aria:'Precinct'},
+];
+const AUTOSAVE_MS=600;
+const COLUMNS=['Address','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Reg. date','Result'];
+const noArea=(a:Area)=>!a.ss&&!a.sh&&!a.precinct;
+
+// --- area: Senate, House and Precinct, each optional; a parent change resets what lies below it ------------------------------
+function useOptions(level:WalkLevel,area:Area){
+  const [state,setState]=useState<{options:WalkOption[];error:boolean;loading:boolean}>({options:[],error:false,loading:true});
+  const [attempt,setAttempt]=useState(0);
+  const parent=level==='ss'?'':level==='sh'?area.ss:`${area.ss}|${area.sh}`;
+  useEffect(()=>{
+    const ac=new AbortController();
+    setState(s=>({...s,loading:true,error:false}));
+    getWalkOptions(level,area,ac.signal).then(p=>setState({options:p.options,error:false,loading:false})).catch(()=>{if(!ac.signal.aborted)setState({options:[],error:true,loading:false});});
+    return ()=>ac.abort();
+  },[level,parent,attempt]);
+  return {...state,retry:()=>setAttempt(n=>n+1)};
+}
+function AreaField(p:{level:WalkLevel;label:string;aria:string;value:string;area:Area;onChange:(v:string)=>void}){
+  const {options,loading,error,retry}=useOptions(p.level,p.area);
+  const off=loading||error;
+  const shown=loading?'Loading…':error?'Unavailable':p.value?options.find(o=>o.id===p.value)?.label??p.value:'All';
+  return <div className="walk-field">
+    <label className={cx('select','walk-select',off&&'is-off')}>
+      <span className="select-text" aria-hidden="true"><span className="walk-k">{p.label}:</span> {shown}</span>
+      <ChevronDown className="select-chev" strokeWidth={1.75} aria-hidden="true"/>
+      <select aria-label={p.aria} value={p.value} disabled={off} onChange={e=>p.onChange(e.target.value)}>
+        <option value="">All</option>
+        {p.value&&!options.some(o=>o.id===p.value)&&<option value={p.value}>{p.value}</option>}
+        {options.map(o=><option key={o.id} value={o.id}>{`${o.label} · ${countText(o.doors,'door')}`}</option>)}
+      </select>
+    </label>
+    {error&&<p className="walk-field-error" role="alert">{p.label} choices could not be loaded. <button type="button" className="walk-link" onClick={retry}>Retry</button></p>}
+  </div>;
+}
+
+// --- streets: search combobox ----------------------------------------------------------------------------------------------
+function StreetSearch({area,onAdd}:{area:Area;onAdd:(s:WalkStreet)=>void}){
+  const [q,setQ]=useState('');const [open,setOpen]=useState(false);const [active,setActive]=useState(0);
+  const [hits,setHits]=useState<WalkStreet[]>([]);const [busy,setBusy]=useState(false);const [error,setError]=useState('');
+  const box=useRef<HTMLDivElement>(null);const input=useRef<HTMLInputElement>(null);
+  const text=q.trim();const areaKey=`${area.ss}|${area.sh}|${area.precinct}`;
+  useEffect(()=>{
+    setHits([]);setActive(0);setError('');
+    if(text.length<2){setBusy(false);return;}
+    setBusy(true);
+    const ac=new AbortController();
+    const t=setTimeout(()=>{
+      searchWalkStreets(text,area,ac.signal).then(r=>{setBusy(false);setHits(r.streets.slice(0,30));}).catch(()=>{if(!ac.signal.aborted){setBusy(false);setError('Search unavailable. Try again.');}});
+    },160);
+    return ()=>{clearTimeout(t);ac.abort();};
+  },[text,areaKey]);
+  useEffect(()=>{
+    const close=(e:MouseEvent)=>{if(box.current&&!box.current.contains(e.target as Node))setOpen(false);};
+    document.addEventListener('mousedown',close);return ()=>document.removeEventListener('mousedown',close);
+  },[]);
+  const show=open&&text.length>=2;const listed=show&&hits.length>0;
+  useEffect(()=>{if(listed)document.getElementById(`walk-street-hit-${active}`)?.scrollIntoView({block:'nearest'});},[active,listed]);
+  function pick(s:WalkStreet){onAdd(s);setQ('');setOpen(false);input.current?.focus();}
+  return <div className="walk-find" ref={box}>
+    <Search size={16} strokeWidth={1.75} aria-hidden="true"/>
+    <input ref={input} type="search" role="combobox" aria-autocomplete="list" aria-expanded={listed} aria-controls={listed?'walk-street-results':undefined}
+      aria-activedescendant={listed&&hits[active]?`walk-street-hit-${active}`:undefined} aria-label="Add a street" placeholder="Add a street" autoComplete="off" spellCheck={false} value={q}
+      onFocus={()=>setOpen(true)} onChange={e=>{setQ(e.target.value);setOpen(true);}}
+      onKeyDown={e=>{
+        if(e.key==='Escape')setOpen(false);
+        else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();setOpen(true);setActive(i=>Math.max(0,Math.min(hits.length-1,i+(e.key==='ArrowDown'?1:-1))));}
+        else if(e.key==='Enter'&&listed&&hits[active]){e.preventDefault();pick(hits[active]);}
+      }}/>
+    {show&&!hits.length&&<div className="walk-find-pop walk-find-empty" role="status">{busy?'Searching…':error||'No match'}</div>}
+    {listed&&<div id="walk-street-results" className="walk-find-pop" role="listbox" aria-label="Streets">
+      {hits.map((s,i)=><button key={s.id} id={`walk-street-hit-${i}`} type="button" role="option" aria-selected={i===active} onMouseEnter={()=>setActive(i)} onMouseDown={e=>e.preventDefault()} onClick={()=>pick(s)}>
+        <span className="walk-hit-name">{s.label}</span><span className="walk-hit-sub">{[s.city,countText(s.doors,'door')].filter(Boolean).join(' · ')}</span>
+      </button>)}
+    </div>}
+  </div>;
+}
+
+// --- streets: the chips, and the uploaded list's match report -----------------------------------------------------------------
+function Chips(p:{picks:WalkPick[];onSide:(id:number)=>void;onRemove:(id:number)=>void}){
+  const names=chipNames(p.picks);
+  if(!p.picks.length)return <p className="walk-hint">No streets yet. Search above or upload a CSV.</p>;
+  return <>
+    <ul className="walk-chips" aria-label="Streets in this walk list">
+      {p.picks.map((s,i)=>{
+        const name=names[i];
+        return <li key={s.id} className="walk-chip">
+          <button type="button" className="walk-chip-main" onClick={()=>p.onSide(s.id)} aria-label={`${name}, ${sideWords(s.side)}. Change side`} title="Change side">
+            {name}{s.side!=='both'&&<span className="walk-chip-side"> · {s.side}</span>}
+          </button>
+          <button type="button" className="walk-chip-x" onClick={()=>p.onRemove(s.id)} aria-label={`Remove ${name}`}><X size={12} strokeWidth={2} aria-hidden="true"/></button>
+        </li>;
+      })}
+    </ul>
+    <p className="walk-hint">Select a street to switch between both sides, even and odd.</p>
+  </>;
+}
+
+interface UploadRow{input:WalkMatchInput;row:WalkMatchRow;chosen:number|null;skipped:boolean;busy:boolean}
+// Each file on screen has its own id: an answer is applied only while the upload it was asked about is still the one shown.
+interface Upload{id:number;name:string;count:number;rows:UploadRow[]}
+type RowState='ok'|'pick'|'left'|'none'|'busy';
+const rowLive=(r:UploadRow,picks:WalkPick[])=>r.chosen!=null&&picks.some(p=>p.id===r.chosen);
+function rowState(r:UploadRow,picks:WalkPick[]):RowState{
+  if(r.busy)return 'busy';
+  if(r.row.status==='none')return 'none';
+  if(r.row.status==='matched'||r.chosen!=null)return rowLive(r,picks)?'ok':'left';
+  return r.skipped?'left':'pick';
+}
+const rowName=(r:UploadRow)=>`${r.row.input||r.input.street}${r.row.side!=='both'?` (${r.row.side})`:''}`;
+
+function UploadReport(p:{upload:Upload;picks:WalkPick[];onChoose:(i:number,c:WalkStreet)=>void;onSkip:(i:number)=>void;onRematch:(i:number,text:string)=>void}){
+  return <div className="walk-matches" role="region" tabIndex={0} aria-label="Uploaded streets">
+    <ul>
+      {p.upload.rows.map((r,i)=>{
+        const state=rowState(r,p.picks);const name=rowName(r);
+        const cand=r.row.candidates.find(c=>c.id===r.chosen)??(r.row.status==='matched'?r.row.candidates[0]:undefined);
+        return <li key={i} className={cx('walk-match',`is-${state}`)}>
+          <div className="walk-match-line">
+            <span className="walk-match-name">{name}</span>
+            {state==='ok'&&<span className="walk-match-ok"><Check size={13} strokeWidth={2.25} aria-hidden="true"/><span className="walk-sr">Matched: </span>{cand?countText(doorsOnSide(cand,r.row.side),'door'):'Matched'}</span>}
+            {state==='left'&&<span className="walk-match-muted">Left out</span>}
+            {state==='pick'&&<span className="walk-match-pick">Pick a place</span>}
+            {state==='busy'&&<span className="walk-match-muted" role="status">Matching…</span>}
+            {state==='none'&&<span className="walk-match-muted walk-match-none">No match{r.row.suggestions.length>0&&' ·'}
+              {r.row.suggestions.slice(0,3).map(s=><Fragment key={s}>{' '}<button type="button" className="walk-link" onClick={()=>p.onRematch(i,s)}>{s}?</button></Fragment>)}</span>}
+          </div>{' '}
+          {r.row.status==='pick'&&<div className="walk-places" role="group" aria-label={`Places for ${name}`}>
+            {r.row.candidates.map(c=><button key={c.id} type="button" className="walk-place" aria-pressed={r.chosen===c.id&&rowLive(r,p.picks)} onClick={()=>p.onChoose(i,c)}>{`${c.city||c.zip||'Street'} · ${doorsOnSide(c,r.row.side)}`}</button>)}
+            {state==='pick'&&<button type="button" className="walk-link" onClick={()=>p.onSkip(i)}>Leave out</button>}
+          </div>}
+        </li>;
+      })}
+    </ul>
+  </div>;
+}
+
+// --- results: five toggle buttons per voter ------------------------------------------------------------------------------------
+const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:WalkCode|null|undefined;onMark:(id:string,code:WalkCode|null)=>void}){
+  const refs=useRef<(HTMLButtonElement|null)[]>([]);
+  const tab=p.value?WALK_CODES.indexOf(p.value):0;
+  const go=(i:number)=>{const n=(i+WALK_CODES.length)%WALK_CODES.length;refs.current[n]?.focus();p.onMark(p.id,WALK_CODES[n]);};
+  return <div className="walk-res" role="radiogroup" aria-label={`Result for ${p.name}`}>
+    {WALK_CODES.map((c,i)=><button key={c} ref={el=>{refs.current[i]=el;}} type="button" role="radio" aria-checked={p.value===c} aria-label={`${CODE_LABEL[c]} (${c})`} title={CODE_LABEL[c]} tabIndex={i===tab?0:-1}
+      onClick={()=>p.onMark(p.id,p.value===c?null:c)}
+      onKeyDown={e=>{
+        if(e.key==='ArrowRight'||e.key==='ArrowDown'){e.preventDefault();go(i+1);}
+        else if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault();go(i-1);}
+        else if(e.key==='Home'){e.preventDefault();go(0);}
+        else if(e.key==='End'){e.preventDefault();go(WALK_CODES.length-1);}
+      }}>{c}</button>)}
+  </div>;
+});
+
+const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean;value:WalkCode|null|undefined;onMark:(id:string,code:WalkCode|null)=>void}){
+  const {v,door,first}=p;
+  return <tr className={first?undefined:'cont'}>
+    <td className="walk-addr">{first
+      ?<>{doorAddress(door)}{door.placed_by==='interpolated'&&<span title="Placed by house number"><span aria-hidden="true"> ≈</span><span className="walk-sr">, placed by house number</span></span>}</>
+      :<span className="walk-sr">{doorAddress(door)}</span>}</td>
+    <td className="walk-name" title={v.name}>{v.name}</td>
+    <td>{phoneText(v.phone)}</td>
+    <td>{tallyText(v.pri)}</td><td>{tallyText(v.gen)}</td><td>{tallyText(v.abs)}</td>
+    <td>{v.party}</td><td>{v.age??''}</td><td>{v.gender}</td><td>{regDate(v.reg_date)}</td>
+    <td className="walk-res-cell"><ResultRadios id={v.person_id} name={v.name} value={p.value} onMark={p.onMark}/></td>
+  </tr>;
+});
+
+const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkResults;onMark:(id:string,code:WalkCode|null)=>void}){
+  const {run}=p;
+  const title=`${run.street} (${sideLabel(run.side)})`;
+  return <section className="walk-run" id={`walk-run-${run.stop}`} aria-labelledby={`walk-run-title-${run.stop}`}>
+    <header className="walk-run-head">
+      {run.precinct&&<span className="walk-run-precinct">Precinct {run.precinct}</span>}
+      <h2 className="walk-run-title" id={`walk-run-title-${run.stop}`}>{title}</h2>
+      <span className="walk-run-meta">{runHeader(run,p.total)}</span>
+    </header>
+    <div className="walk-table-wrap" role="region" tabIndex={0} aria-label={`Stop ${run.stop}, ${title}: voters`}>
+      <table className="walk-table">
+        <colgroup>{COLUMNS.map(h=><col key={h}/>)}</colgroup>
+        <thead><tr>{COLUMNS.map(h=><th key={h} scope="col">{h}</th>)}</tr></thead>
+        <tbody>{run.doors.flatMap(door=>door.voters.map((v,i)=>
+          <VoterRow key={`${door.seq}-${v.person_id}`} v={v} door={door} first={i===0} value={Object.hasOwn(p.results,v.person_id)?p.results[v.person_id]:v.last?.code} onMark={p.onMark}/>))}</tbody>
+      </table>
+    </div>
+    {run.doors.some(d=>d.placed_by==='interpolated')&&<p className="walk-run-foot">“≈” = placed by house number (no geocode)</p>}
+  </section>;
+});
+
+// --- door script -------------------------------------------------------------------------------------------------------------------
+function DoorScript(){
+  const [me,setMe]=useState('');const [campaign,setCampaign]=useState('');
+  const values={'your name':me,campaign} as const;
+  return <details className="walk-script">
+    <summary>Door script</summary>
+    <div className="walk-script-body">
+      <div className="walk-script-fill">
+        <label>Your name<input value={me} onChange={e=>setMe(e.target.value)} maxLength={60} autoComplete="off"/></label>
+        <label>Campaign<input value={campaign} onChange={e=>setCampaign(e.target.value)} maxLength={60} autoComplete="off"/></label>
+      </div>
+      <ol className="walk-steps">{DOOR_SCRIPT.map(step=><li key={step.id}>
+        <strong>{step.title}</strong>
+        <p className="walk-say">“{fillScript(step.line,values)}”</p>
+        {step.choices.length>0&&<ul>{step.choices.map(c=><li key={c.say}>{choiceText(c)}</li>)}</ul>}
+      </li>)}</ol>
+    </div>
+  </details>;
+}
+
+// The map only adds to the list, so a map that fails to load leaves a note and nothing else.
+class MapGuard extends Component<{children:ReactNode},{failed:boolean}>{
+  state={failed:false};
+  static getDerivedStateFromError(){return {failed:true};}
+  render(){return this.state.failed?<p className="walk-map-fail" role="status">The map could not be loaded. The list below has every stop.</p>:this.props.children;}
+}
+
+// --- screen ---------------------------------------------------------------------------------------------------------------------------
+export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
+  const [init]=useState(()=>readWalkAddress(route.search));
+  const [area,setArea]=useState<Area>(init.area);
+  const [picks,setPicks]=useState<WalkPick[]>(init.picks);const picksRef=useRef(picks);picksRef.current=picks;
+  const [upload,setUpload]=useState<Upload|null>(null);const uploadRef=useRef<Upload|null>(null);const uploadSeq=useRef(0);const uploadAbort=useRef<AbortController|null>(null);
+  const [uploadError,setUploadError]=useState('');const [skipped,setSkipped]=useState<WalkCsvProblem[]>([]);const [matching,setMatching]=useState(false);
+  const [payload,setPayload]=useState<WalkListPayload|null>(null);const payloadRef=useRef<WalkListPayload|null>(null);
+  const [listKey,setListKey]=useState(init.list);
+  const [loading,setLoading]=useState(false);const [loadError,setLoadError]=useState<{message:string;retry:()=>void}|null>(null);
+  const [note,setNote]=useState('');const [actionNote,setActionNote]=useState<{text:string;alert:boolean}|null>(null);const [announce,setAnnounce]=useState('');
+  const [shade,setShade]=useState<WalkShade>('doors');
+  const [results,setResults]=useState<WalkResults>({});
+  const [saveState,setSaveState]=useState<SaveState>('idle');const [saveError,setSaveError]=useState('');
+  const [saveOpen,setSaveOpen]=useState(false);const [saveTitle,setSaveTitle]=useState('');const [busy,setBusy]=useState<''|'save'|'pdf'>('');
+  const [lists,setLists]=useState<WalkSavedList[]>([]);const [listsError,setListsError]=useState(false);
+  const outbox=useRef(resultOutbox<string,WalkCode|null>()).current;const timer=useRef<ReturnType<typeof setTimeout>>(undefined);
+  const chain=useRef<Promise<boolean>>(Promise.resolve(true));const saving=useRef<{base:WalkListPayload;job:Promise<string>}|null>(null);
+  const gen=useRef(0);const genAbort=useRef<AbortController|null>(null);
+  const main=useRef<HTMLElement>(null);const saveButton=useRef<HTMLButtonElement>(null);const fileInput=useRef<HTMLInputElement>(null);const search=useRef<HTMLDivElement>(null);
+
+  // ---- saved lists ---------------------------------------------------------------------------------------------------------------
+  const refreshLists=useCallback(async()=>{
+    try{setLists((await getWalkLists()).lists??[]);setListsError(false);}catch{setListsError(true);}
+  },[]);
+
+  // A list is frozen on the server the first time it is saved, by the Save button or by the first result recorded.
+  const ensureSaved=useCallback((title?:string):Promise<string>=>{
+    const base=payloadRef.current;
+    if(!base)return Promise.reject(new Error('There is no list to save.'));
+    if(base.list.key)return Promise.resolve(base.list.key);
+    if(saving.current?.base===base)return saving.current.job;   // only this list's own save: another list's key would take these results
+    const job:Promise<string>=saveWalkList(title?.trim()||defaultListTitle(base),base.query).then(saved=>{
+      const key=saved.list?.key;
+      if(!key)throw new Error('The list could not be saved.');
+      if(payloadRef.current===base){const next={...base,list:saved.list};payloadRef.current=next;setPayload(next);setListKey(key);}
+      void refreshLists();
+      return key;
+    }).finally(()=>{if(saving.current?.job===job)saving.current=null;});
+    saving.current={base,job};return job;
+  },[refreshLists]);
+
+  // Results are sent after 600 ms of quiet, at most 200 a request; one request at a time, in order. A failure keeps the batch for Retry.
+  // The outbox counts a batch as unsaved until its request is answered, so closing the page is warned about while one is in flight.
+  const flush=useCallback((): Promise<boolean>=>{
+    clearTimeout(timer.current);
+    const run=():Promise<boolean>=>drainResults(outbox,{
+      ready:()=>!!payloadRef.current,
+      send:async batch=>{
+        const key=await ensureSaved();
+        await saveWalkDispositions(key,localToday(),[...batch].map(([person_id,code])=>({person_id,code})));
+      },
+      report:(state,message)=>{if(state==='saving')setSaveError('');else if(state==='error')setSaveError(message??'');setSaveState(state);},
+    });
+    chain.current=chain.current.then(run,run);
+    return chain.current;
+  },[ensureSaved,outbox]);
+  const mark=useCallback((id:string,code:WalkCode|null)=>{
+    setResults(r=>({...r,[id]:code}));
+    outbox.set(id,code);setSaveState('pending');
+    clearTimeout(timer.current);timer.current=setTimeout(()=>void flush(),AUTOSAVE_MS);
+  },[flush,outbox]);
+
+  // ---- build a list --------------------------------------------------------------------------------------------------------------
+  const show=useCallback((p:WalkListPayload,adopt:boolean)=>{
+    payloadRef.current=p;setPayload(p);setResults(initialResults(p));outbox.clear();clearTimeout(timer.current);
+    setSaveState('idle');setSaveError('');setSaveOpen(false);setActionNote(null);setListKey(p.list?.key??'');
+    const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
+    const from=adopt?pickerOf(p):null;   // a re-knock list (either query shape) and a list with no picker settings leave the picker as it is
+    if(from){
+      setArea(from.area);
+      const next=parseStreetsParam(from.streets).map((s):WalkPick=>({...s,label:names.get(s.id)??'',city:''}));picksRef.current=next;setPicks(next);
+      putUpload(null);setSkipped([]);
+    }else{
+      const next=picksRef.current.map(s=>s.label?s:{...s,label:names.get(s.id)??''});picksRef.current=next;setPicks(next);
+    }
+    setAnnounce(`Walk list ready. ${totalsLine(p.totals)}.`);
+  },[]);
+  const load=useCallback(async(job:(signal:AbortSignal)=>Promise<WalkListPayload>,done:(p:WalkListPayload)=>void,opts:{fail?:()=>void;say?:(message:string)=>void}={}):Promise<void>=>{
+    if(!(await flush())){setNote('Some results are not saved yet. Use Retry beside the list actions, then try again.');return;}
+    const id=++gen.current;
+    genAbort.current?.abort();const ac=genAbort.current=new AbortController();
+    setLoading(true);setLoadError(null);setNote('');setAnnounce('Building the walk list.');
+    if(matchMedia('(max-width:900px)').matches)requestAnimationFrame(()=>main.current?.scrollIntoView({block:'start',behavior:'smooth'}));
+    try{
+      const p=await job(ac.signal);
+      if(id!==gen.current)return;
+      done(p);
+    }catch(e){
+      if(id!==gen.current||ac.signal.aborted)return;
+      opts.fail?.();
+      if(e instanceof ApiError&&(e.status===400||e.status===422))(opts.say??setNote)(e.message);   // a limit or a bad pick: said beside the button that was used
+      else setLoadError({message:e instanceof Error&&e.message?e.message:'The walk list could not be built.',retry:()=>void load(job,done,opts)});
+    }finally{if(id===gen.current)setLoading(false);}
+  },[flush]);
+
+  function generate(){
+    const waiting=(upload?.rows??[]).filter(r=>rowState(r,picks)==='pick');
+    if(waiting.length){
+      const names=waiting.slice(0,2).map(rowName).join(' and ')+(waiting.length>2?` and ${waiting.length-2} more`:'');
+      setNote(`Choose a place for ${names}, or leave ${waiting.length===1?'it':'them'} out.`);return;
+    }
+    if(!picks.length&&noArea(area)){setNote('Pick an area or add a street first.');return;}
+    const streets=streetsParam(picks),where={...area};
+    void load(sig=>getWalkList(streets,where,sig),p=>show(p,false));
+  }
+  const openSaved=useCallback((key:string)=>{
+    setListKey(key);
+    void load(sig=>getWalkSavedList(key,sig),p=>show(p,true),{fail:()=>setListKey('')});
+  },[load,show]);
+  function reknock(){
+    const p=payloadRef.current;
+    if(!p?.list.key){setActionNote({text:'Save this list first. Then record results and use Not home again to list the doors where nobody answered.',alert:false});return;}
+    const key=p.list.key,title=`Not home again · ${p.list.title}`.slice(0,120);setActionNote(null);
+    void load(sig=>reknockWalkList(title,key,sig),q=>{show(q,false);void refreshLists();},{say:text=>setActionNote({text,alert:true})});
+  }
+  async function save(title:string){
+    setBusy('save');setActionNote(null);
+    try{await ensureSaved(title);setSaveOpen(false);setAnnounce('List saved.');saveButton.current?.focus();void flush();}
+    catch(e){setActionNote({text:e instanceof Error&&e.message?e.message:'The list could not be saved.',alert:true});}
+    finally{setBusy('');}
+  }
+
+  // ---- exports -------------------------------------------------------------------------------------------------------------------
+  async function exportPdf(){
+    const p=payloadRef.current;if(!p)return;
+    setBusy('pdf');setActionNote(null);
+    try{await exportWalkPdf(p,{area:listLabel(p)});}catch{setActionNote({text:'The PDF could not be created. Try again.',alert:true});}
+    finally{setBusy('');}
+  }
+  function exportCsv(){
+    const p=payloadRef.current;if(!p)return;
+    downloadFile(walkFileName(listLabel(p),p.generated_on,'csv'),'text/csv;charset=utf-8',buildWalkCsv(p,results));
+  }
+
+  // ---- streets: chips and upload -------------------------------------------------------------------------------------------------
+  function addPicks(add:WalkPick[]){
+    let next=picksRef.current;for(const a of add)next=mergePick(next,a);
+    if(next.length>MAX_WALK_STREETS){next=next.slice(0,MAX_WALK_STREETS);setNote(`A walk list can have up to ${MAX_WALK_STREETS} streets.`);}
+    picksRef.current=next;setPicks(next);
+  }
+  const removePick=(id:number)=>{setNote('');const s=picksRef.current.find(p=>p.id===id);setPicks(picksRef.current=picksRef.current.filter(p=>p.id!==id));if(s)setAnnounce(`${pickName(s)} removed.`);search.current?.querySelector('input')?.focus();};
+  function cycleSide(id:number){
+    const next=picksRef.current.map(p=>p.id===id?{...p,side:nextSide(p.side)}:p);picksRef.current=next;setPicks(next);
+    const s=next.find(p=>p.id===id);if(s)setAnnounce(`${pickName(s)}: ${sideWords(s.side)}.`);
+  }
+  const fromStreet=(s:WalkStreet,side:WalkPick['side']='both'):WalkPick=>({id:s.id,side,label:s.label,city:s.city});
+  // The upload on screen lives in uploadRef as well as in state; replacing or clearing it cancels the requests still open for the old one.
+  function putUpload(next:Upload|null){
+    if(next?.id!==uploadRef.current?.id){uploadAbort.current?.abort();uploadAbort.current=next?new AbortController():null;}
+    uploadRef.current=next;setUpload(next);
+  }
+  function patchRow(id:number,i:number,patch:Partial<UploadRow>){putUpload(patchUploadRow(uploadRef.current,id,i,patch));}
+  function choose(i:number,c:WalkStreet){
+    const u=uploadRef.current,r=u?.rows[i];if(!u||!r)return;setNote('');
+    if(r.chosen!=null&&r.chosen!==c.id)setPicks(picksRef.current=picksRef.current.filter(p=>p.id!==r.chosen));
+    patchRow(u.id,i,{chosen:c.id,skipped:false});addPicks([fromStreet(c,r.row.side)]);
+  }
+  function skip(i:number){setNote('');const u=uploadRef.current;if(u)patchRow(u.id,i,{skipped:true});}
+  async function rematch(i:number,text:string){
+    const u=uploadRef.current,r=u?.rows[i];if(!u||!r)return;
+    const id=u.id,signal=uploadAbort.current?.signal;
+    const current=()=>uploadRef.current?.id===id;   // false once this upload was replaced or cleared: the answer is dropped before anything changes
+    patchRow(id,i,{busy:true});
+    try{
+      const input:WalkMatchInput={...r.input,street:text};
+      const res=(await matchWalkStreets([input],area,signal)).rows[0];
+      if(!current())return;
+      if(!res){patchRow(id,i,{busy:false});return;}
+      const chosen=res.status==='matched'?res.candidates[0]?.id??null:null;
+      patchRow(id,i,{input,row:res,chosen,skipped:false,busy:false});
+      if(chosen!=null&&res.candidates[0])addPicks([fromStreet(res.candidates[0],res.side)]);
+    }catch(e){
+      if(!current())return;
+      patchRow(id,i,{busy:false});setUploadError(e instanceof Error&&e.message?e.message:'The street could not be matched.');
+    }
+  }
+  async function onFile(file:File){
+    setUploadError('');setSkipped([]);setNote('');
+    let read:WalkCsvRead;
+    try{read=readWalkCsv(await file.text());}catch(e){setUploadError(e instanceof Error?e.message:'That file could not be read.');return;}
+    setSkipped(read.problems);   // rows with a value the server would refuse are reported and left out; the rest go on
+    const inputs=read.rows;
+    if(!inputs.length){if(!read.problems.length)setUploadError('No streets found in that file. Add a column named street.');return;}
+    setMatching(true);
+    try{
+      const res=await matchWalkStreets(inputs,area);
+      const rows=res.rows.map((row,i):UploadRow=>({input:inputs[i]??{street:row.input},row,chosen:row.status==='matched'?row.candidates[0]?.id??null:null,skipped:false,busy:false}));
+      putUpload({id:++uploadSeq.current,name:file.name,count:inputs.length,rows});
+      addPicks(rows.flatMap(r=>r.row.status==='matched'&&r.row.candidates[0]?[fromStreet(r.row.candidates[0],r.row.side)]:[]));
+      setAnnounce(`${countText(rows.length,'row')} matched against the street list.`);
+    }catch(e){setUploadError(e instanceof Error&&e.message?e.message:'The streets could not be matched.');}
+    finally{setMatching(false);}
+  }
+
+  // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
+  const setLevel=(level:WalkLevel,v:string)=>{setNote('');setArea(a=>level==='ss'?{ss:v,sh:'',precinct:''}:level==='sh'?{...a,sh:v,precinct:''}:{...a,precinct:v});};
+  useEffect(()=>{
+    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,list:listKey||null});
+  },[area,picks,listKey]);
+  const started=useRef(false);
+  useEffect(()=>{
+    if(started.current)return;started.current=true;
+    void refreshLists();
+    const plan=startPlan(init);   // the address names a saved list, or streets and/or an area to build a list from
+    if(plan==='saved')openSaved(init.list);else if(plan==='build')generate();
+  },[]);
+  useEffect(()=>{
+    const warn=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||saving.current){e.preventDefault();e.returnValue='';}};
+    const hidden=()=>{if(document.visibilityState==='hidden')void flush();};
+    window.addEventListener('beforeunload',warn);document.addEventListener('visibilitychange',hidden);
+    return ()=>{window.removeEventListener('beforeunload',warn);document.removeEventListener('visibilitychange',hidden);void flush();genAbort.current?.abort();};
+  },[flush]);
+  const goToStop=useCallback((stop:number)=>{
+    const el=document.getElementById(`walk-run-${stop}`);if(!el)return;
+    el.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'});
+    el.querySelector<HTMLElement>('.walk-table-wrap')?.focus({preventScroll:true});
+  },[]);
+
+  const saved=!!payload?.list.key;
+  const leftOut=leftOutNote(skipped);
+  const total=payload?.totals?.stops||payload?.runs.length||0;
+  return <div className="screen walk-screen">
+    <PageHeader meta={meta} active="walk"/>
+    <main className="walk-body">
+      <aside className="walk-rail" aria-label="Walk list builder">
+        <p className="walk-eyebrow">Walk list</p>
+        <h1 className="walk-title">Build a walk list</h1>
+        <p className="walk-sub">Pick an area, add streets, generate.</p>
+
+        <h2 className="walk-lab">Area</h2>
+        {LEVELS.map(l=><AreaField key={l.level} level={l.level} label={l.label} aria={l.aria} area={area} value={area[l.level]} onChange={v=>setLevel(l.level,v)}/>)}
+
+        <h2 className="walk-lab">Streets</h2>
+        <div ref={search}><StreetSearch area={area} onAdd={s=>{setNote('');addPicks([fromStreet(s)]);setAnnounce(`${s.label} added.`);}}/></div>
+        <Chips picks={picks} onSide={cycleSide} onRemove={removePick}/>
+        <div className="walk-upload">
+          <input ref={fileInput} type="file" accept=".csv,text/csv" hidden aria-label="Upload a CSV of streets" onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void onFile(f);}}/>
+          <button type="button" className="walk-button" onClick={()=>fileInput.current?.click()} disabled={matching}><Upload size={15} strokeWidth={1.75} aria-hidden="true"/>{matching?'Matching…':'Upload CSV'}</button>
+          {upload&&<span className="walk-file">{upload.name} · {countText(upload.count,'row')} <button type="button" className="walk-link" onClick={()=>{putUpload(null);setSkipped([]);}}>Clear</button></span>}
+        </div>
+        {uploadError&&<p className="walk-note" role="alert">{uploadError}</p>}
+        {leftOut&&<div className="walk-note" role="alert"><p>{leftOut.headline}</p><ul>{leftOut.reasons.map(t=><li key={t}>{t}</li>)}</ul></div>}
+        {upload&&<UploadReport upload={upload} picks={picks} onChoose={choose} onSkip={skip} onRematch={(i,t)=>void rematch(i,t)}/>}
+
+        <button type="button" className="walk-generate" onClick={generate} disabled={loading} aria-busy={loading}>{loading?'Building…':'Generate walk list'}</button>
+        {note&&<p className="walk-note" role="alert">{note}</p>}
+
+        <h2 className="walk-lab">Saved lists</h2>
+        {lists.length>0
+          ?<label className="select walk-select"><span className="select-text" aria-hidden="true"><span className="walk-k">Saved lists:</span> {lists.find(l=>l.key===payload?.list.key)?.title??'Open one'}</span>
+            <ChevronDown className="select-chev" strokeWidth={1.75} aria-hidden="true"/>
+            <select aria-label="Saved lists" value={lists.some(l=>l.key===payload?.list.key)?payload?.list.key??'':''} onChange={e=>{if(e.target.value)openSaved(e.target.value);}}>
+              <option value="">Open a saved list</option>
+              {lists.map(l=><option key={l.key} value={l.key}>{`${l.title} · ${countText(l.doors,'door')}${l.kind==='reknock'?' · re-knock':''}${fullDate(l.created_at)?` · ${fullDate(l.created_at)}`:''}`}</option>)}
+            </select></label>
+          :<p className="walk-hint" role={listsError?'alert':undefined}>{listsError?'Saved lists could not be loaded.':'No saved lists yet.'} {listsError&&<button type="button" className="walk-link" onClick={()=>void refreshLists()}>Retry</button>}</p>}
+      </aside>
+
+      <section className="walk-main" ref={main} aria-label="Walk list" aria-busy={loading}>
+        <p className="walk-sr" role="status">{announce}</p>
+        {loading?<div className="walk-wait" aria-hidden="true">
+            <span className="sk walk-sk" style={{width:'62%',height:16}}/>
+            <span className="sk walk-sk" style={{width:'46%',height:36,marginTop:14}}/>
+            <span className="sk walk-sk" style={{width:'100%',height:260,marginTop:14}}/>
+            <span className="sk walk-sk" style={{width:'100%',height:150,marginTop:14}}/>
+          </div>
+        :loadError?<div className="walk-empty is-error" role="alert"><h2>The walk list could not be built</h2><p>{loadError.message}</p><button type="button" className="walk-button" onClick={loadError.retry}>Retry</button></div>
+        :payload?<>
+          {saved&&<p className="walk-saved-line">{savedLine(payload,lists)}</p>}
+          <div className="walk-summary-row">
+            <p className="walk-summary">{totalsLine(payload.totals)}</p>
+            {payload.runs.length>0&&<div className="walk-seg"><Segmented variant="index" label="Map shading" items={[{id:'doors',label:'Doors'},{id:'party',label:'Party'}]} value={shade} onChange={setShade}/></div>}
+          </div>
+          {payload.runs.length>0&&<div className="walk-actions">
+            <button type="button" className="walk-button walk-primary" onClick={()=>void exportPdf()} disabled={busy==='pdf'} aria-busy={busy==='pdf'}>{busy==='pdf'?'Preparing PDF…':'Export PDF'}</button>
+            <button type="button" className="walk-button" onClick={exportCsv}>Download CSV</button>
+            <button type="button" ref={saveButton} className={cx('walk-button',saved&&'is-off')} aria-disabled={saved||undefined} onClick={()=>{if(saved)return;setSaveTitle(defaultListTitle(payload));setSaveOpen(o=>!o);}} disabled={busy==='save'} aria-expanded={saved?undefined:saveOpen} title={saved?'This list is saved':undefined}>Save</button>
+            <button type="button" className={cx('walk-button',!saved&&'is-off')} aria-disabled={!saved||undefined} title={saved?undefined:'Save this list first'} onClick={reknock}>Not home again</button>
+            <span className="walk-status">
+              {saveState==='error'
+                ?<span role="alert" className="is-error">Results not saved. {saveError} <button type="button" className="walk-link" onClick={()=>void flush()}>Retry</button></span>
+                :<span role="status">{saveState==='pending'||saveState==='saving'?'Saving…':saveState==='saved'?'Saved':''}</span>}
+            </span>
+          </div>}
+          {saveOpen&&!saved&&<form className="walk-save-form" onSubmit={e=>{e.preventDefault();void save(saveTitle);}} onKeyDown={e=>{if(e.key==='Escape'){setSaveOpen(false);saveButton.current?.focus();}}}>
+            <label>List name<input value={saveTitle} onChange={e=>setSaveTitle(e.target.value)} maxLength={120} required autoFocus autoComplete="off"/></label>
+            <button type="submit" className="walk-button walk-primary" disabled={busy==='save'}>Save list</button>
+            <button type="button" className="walk-button" onClick={()=>{setSaveOpen(false);saveButton.current?.focus();}}>Cancel</button>
+          </form>}
+          {actionNote&&<p className="walk-note" role={actionNote.alert?'alert':'status'}>{actionNote.text}</p>}
+          {payload.runs.length>0?<>
+            <div className="walk-map-slot">
+              <MapGuard><Suspense fallback={<div className="walk-map-wait sk" role="status" aria-label="Loading the map"/>}><WalkMap payload={payload} shade={shade} onStop={goToStop}/></Suspense></MapGuard>
+            </div>
+            <DoorScript/>
+            <p className="walk-key">{historyKey(payload.window)} {codeLegend()}.</p>
+            {payload.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} onMark={mark}/>)}
+          </>:<div className="walk-empty"><h2>No doors found</h2><p>These streets have no voters on file. Try another street or a wider area.</p></div>}
+        </>
+        :<div className="walk-empty">
+          <RouteIcon size={26} strokeWidth={1.5} aria-hidden="true"/>
+          <h2>Your walk list will appear here</h2>
+          <p>Pick an area and add the streets you plan to walk, then choose Generate walk list. You get the route on a map and the voters at each door in walking order, with a place to record every result.</p>
+          <p>To add many streets at once, upload a CSV with a column named street.</p>
+        </div>}
+      </section>
+    </main>
+  </div>;
+}

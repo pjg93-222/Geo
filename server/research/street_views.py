@@ -36,29 +36,57 @@ def response(payload, status=200):
     return result
 
 
+def local_denied(request):
+    """The 403 response unless this is a direct loopback request of the signed-in local administrator, else None."""
+    try:
+        loopback = ip_address(request.META.get("REMOTE_ADDR", "")).is_loopback
+    except ValueError:
+        loopback = False
+    forwarded = any(request.META.get(key) for key in (
+        "HTTP_FORWARDED", "HTTP_X_FORWARDED_FOR", "HTTP_X_FORWARDED_HOST", "HTTP_X_FORWARDED_PROTO"))
+    if (getattr(request, "local_admin_access", False) is not True or not loopback
+            or forwarded or not getattr(getattr(request, "user", None), "is_authenticated", False)
+            or settings.HOSTED or not settings.LOCAL_ADMIN_ACCESS):
+        return response({"error": "Direct local administrator access is required."}, 403)
+    return None
+
+
 def local_only(function):
     @wraps(function)
-    def wrapped(request):
-        try:
-            loopback = ip_address(request.META.get("REMOTE_ADDR", "")).is_loopback
-        except ValueError:
-            loopback = False
-        forwarded = any(request.META.get(key) for key in (
-            "HTTP_FORWARDED", "HTTP_X_FORWARDED_FOR", "HTTP_X_FORWARDED_HOST", "HTTP_X_FORWARDED_PROTO"))
-        if (getattr(request, "local_admin_access", False) is not True or not loopback
-                or forwarded or not getattr(getattr(request, "user", None), "is_authenticated", False)
-                or settings.HOSTED or not settings.LOCAL_ADMIN_ACCESS):
-            return response({"error": "Direct local administrator access is required."}, 403)
+    def wrapped(request, *args, **kwargs):
+        denied = local_denied(request)
+        if denied is not None:
+            return denied
         if request.method != "GET":
             result = response({"error": "GET is required."}, 405)
             result["Allow"] = "GET"
             return result
         try:
-            return function(request)
+            return function(request, *args, **kwargs)
         except (ValueError, TypeError, KeyError, OverflowError):
             return response({"error": "Invalid street lookup parameters."}, 400)
         except (sqlite3.Error, OSError):
             return response({"error": "The local street directory is unavailable."}, 503)
+    return wrapped
+
+
+def local_only_post(function):
+    """local_only for POST endpoints: the same loopback gate, POST required. CSRF stays with Django's middleware."""
+    @wraps(function)
+    def wrapped(request, *args, **kwargs):
+        denied = local_denied(request)
+        if denied is not None:
+            return denied
+        if request.method != "POST":
+            result = response({"error": "POST is required."}, 405)
+            result["Allow"] = "POST"
+            return result
+        try:
+            return function(request, *args, **kwargs)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return response({"error": "Invalid request."}, 400)
+        except (sqlite3.Error, OSError):
+            return response({"error": "The local data is unavailable."}, 503)
     return wrapped
 
 

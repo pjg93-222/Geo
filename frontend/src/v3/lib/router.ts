@@ -1,8 +1,8 @@
-// History router for the map, people/profiles, contacts, audit, sources, workspace and method.
+// History router for the map, people/profiles, contacts, audit, sources, workspace, walk list and method.
 import {useEffect,useState} from 'react';
 import {rememberView} from './savedViews';
 
-export type RouteName='map'|'people'|'profile'|'method'|'contacts'|'criteria'|'sources'|'workspace';
+export type RouteName='map'|'people'|'profile'|'method'|'contacts'|'criteria'|'sources'|'workspace'|'walk';
 export interface Route{name:RouteName;pid:string;search:URLSearchParams}
 
 const KEEP:string[]=[];
@@ -14,7 +14,7 @@ export function parseRoute(loc:Location=location):Route{
   const m=/^\/people\/([^/]+)$/.exec(path);
   if(m){let pid=m[1];try{pid=decodeURIComponent(pid);}catch{/* invalid URI becomes an unknown person id */}return {name:'profile',pid,search};}
   if(path==='/method')return {name:'method',pid:'',search};
-  for(const name of ['contacts','criteria','sources','workspace'] as const){
+  for(const name of ['contacts','criteria','sources','workspace','walk'] as const){
     if(path==='/'+name)return {name,pid:'',search};
   }
   return {name:'map',pid:'',search};

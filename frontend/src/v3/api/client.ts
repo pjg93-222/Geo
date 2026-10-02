@@ -34,3 +34,25 @@ export function getProfile(id:string,signal?:AbortSignal):Promise<Profile>{retur
 export function getHousehold(id:string,signal?:AbortSignal):Promise<HouseholdPopover>{return localJson(endpoint('/api/v3/household',{id,basis:'registration'}),signal);}
 export function getStreet(bbox:[number,number,number,number],zoom:number,signal?:AbortSignal):Promise<StreetPayload>{return localJson(endpoint('/api/v3/street',{basis:'registration',bbox:bbox.join(','),zoom:Math.floor(zoom)}),signal);}
 export function searchPeople(text:string,signal?:AbortSignal):Promise<SearchResult>{return localJson(endpoint('/api/v3/search',{q:text.trim().slice(0,80)}),signal);}
+
+// Writes carry the CSRF token the session endpoint hands out (same header and field as the legacy client). It is fetched once and kept.
+let csrfToken='';
+async function csrf(fresh:boolean,signal?:AbortSignal):Promise<string>{
+  if(csrfToken&&!fresh)return csrfToken;
+  const session=await localJson<{csrf?:string}>('/api/auth/session',signal);
+  csrfToken=typeof session.csrf==='string'?session.csrf:'';
+  return csrfToken;
+}
+export async function postJson<T>(url:string,body:unknown,signal?:AbortSignal):Promise<T>{
+  const send=async(fresh:boolean)=>fetch(url,{method:'POST',credentials:'same-origin',signal,cache:'no-store',headers:{Accept:'application/json','Content-Type':'application/json','X-CSRFToken':await csrf(fresh,signal)},body:JSON.stringify(body)});
+  const cached=!!csrfToken;
+  let response=await send(false);
+  if(response.status===403&&cached)response=await send(true); // a kept token can go stale; ask once more with a fresh one
+  let data:unknown;
+  try{data=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
+  if(!response.ok){
+    const message=data&&typeof data==='object'&&'error' in data&&typeof data.error==='string'?data.error:'The request could not be completed.';
+    throw new ApiError(message,response.status);
+  }
+  return data as T;
+}

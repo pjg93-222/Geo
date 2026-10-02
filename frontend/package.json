@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test:e2e": "playwright test",
-    "test:unit": "node --test tests/v3/format.test.ts tests/v3/copy.test.ts tests/v3/opinions.test.ts tests/v3/savedViews.test.ts tests/v3/liveClient.test.ts"
+    "test:unit": "node --test tests/v3/format.test.ts tests/v3/copy.test.ts tests/v3/opinions.test.ts tests/v3/savedViews.test.ts tests/v3/liveClient.test.ts tests/v3/walk.test.ts"
   },
   "dependencies": {
+    "jspdf": "4.2.1",
+    "jspdf-autotable": "5.0.8",
     "lucide-react": "^0.468.0",
     "maplibre-gl": "^6.11.2",
     "react": "^19.1.0",

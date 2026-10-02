@@ -9,20 +9,20 @@ const report={checks:[],errors:[],apiRequests:[],screenshots:[]};
 page.on('pageerror',e=>report.errors.push(e.message));
 page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))report.apiRequests.push(r.url());});
 const base='http://127.0.0.1:8767';
-const sections=[['Map','/','.railA'],['People','/people','.trow:not(.sk-row)'],['Contact sheet','/contacts','.contact-person'],['Criteria audit','/criteria','.work-table tbody tr'],['Data & sources','/sources','.work-facts dd'],['Team & snapshots','/workspace','.work-save-form'],['Method','/method','.method']];
+const sections=[['Map','/','.railA'],['People','/people','.trow:not(.sk-row)'],['Contact sheet','/contacts','.contact-person'],['Criteria audit','/criteria','.work-table tbody tr'],['Data & sources','/sources','.work-facts dd'],['Team & snapshots','/workspace','.work-save-form'],['Method','/method','.method'],['Walk list','/walk','.walk-screen']];
 async function capture(name){if(!process.argv.includes('--screenshots'))return;await page.screenshot({path:out+name+'.png',fullPage:false});report.screenshots.push(name+'.png');}
 try{
   await page.goto(base);await page.locator('.railA').waitFor();await page.waitForFunction(()=>window.__cuMap?.isStyleLoaded());
   await capture('map-desktop');
   for(const [label,path,ready] of sections){
-    const nav=page.getByRole('navigation',{name:'Sections'});assert.equal(await nav.getByRole('link').count(),7);
+    const nav=page.getByRole('navigation',{name:'Sections'});assert.equal(await nav.getByRole('link').count(),8);
     await nav.getByRole('link',{name:label,exact:true}).click();await page.locator(ready).first().waitFor();
     assert.equal(new URL(page.url()).pathname,path);assert.equal(await nav.locator('[aria-current="page"]').innerText(),label);
     const response=await page.reload();assert.equal(response.status(),200);await page.locator(ready).first().waitFor();
     assert.equal(await page.title(),'Terrier');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     if(['People','Contact sheet','Criteria audit','Team & snapshots'].includes(label))await capture(path.slice(1)+'-desktop');
   }
-  report.checks.push('all seven sections reachable, direct reloadable, correctly highlighted and named Terrier');
+  report.checks.push('all eight sections reachable, direct reloadable, correctly highlighted and named Terrier');
   await page.goto(base+'/people');await page.locator('.trow:not(.sk-row)').first().waitFor();await page.locator('a.trow').first().click();await page.locator('.person-name').waitFor();const profilePath=new URL(page.url()).pathname;
   assert.ok((await page.locator('.opinion-facts').innerText()).includes('Self-described affiliation'));await capture('profile-desktop');
   await page.getByRole('link',{name:'Contact details',exact:true}).click();await page.locator('.contact-person').first().waitFor();assert.equal(await page.locator('.contact-person').count(),1);
@@ -44,7 +44,7 @@ try{
     if(['People','Contact sheet','Criteria audit','Map'].includes(label))await capture((path==='/'?'map':path.slice(1))+'-mobile');
   }
   await page.goto(base+profilePath);await page.locator('.person-name').waitFor();await capture('profile-mobile');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
-  report.checks.push('all seven sections accessible from the mobile section selector; pages fit390px');
+  report.checks.push('all eight sections accessible from the mobile section selector; pages fit390px');
   assert.deepEqual(report.errors,[]);assert.deepEqual(report.apiRequests,[]);
   await writeFile(out+'checks.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }finally{await browser.close();}

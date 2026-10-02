@@ -19,6 +19,7 @@ const ProfileScreen=lazy(()=>import('./components/ProfileScreen').then(m=>({defa
 const MethodScreen=lazy(()=>import('./components/MethodScreen').then(m=>({default:m.MethodScreen})));
 const ContactsScreen=lazy(()=>import('./components/ContactsScreen').then(m=>({default:m.ContactsScreen})));
 const WorkspaceScreen=lazy(()=>import('./components/WorkspaceScreen').then(m=>({default:m.WorkspaceScreen})));
+const WalkScreen=lazy(()=>import('./components/WalkScreen').then(m=>({default:m.WalkScreen})));
 
 function V3App(){
   const route=useRoute();
@@ -45,6 +46,7 @@ function V3App(){
     case 'method':screen=<MethodScreen meta={meta}/>;break;
     case 'contacts':screen=<ContactsScreen meta={meta} route={route}/>;break;
     case 'criteria':case 'sources':case 'workspace':screen=<WorkspaceScreen meta={meta} route={route}/>;break;
+    case 'walk':screen=<WalkScreen meta={meta} route={route}/>;break;
     default:screen=<MapScreen meta={meta} route={route}/>;
   }
   const booting=!introDone||!meta;

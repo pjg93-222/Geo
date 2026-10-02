@@ -3,6 +3,7 @@ import {ArrowUpRight,Bookmark,Download,Search,Trash2} from 'lucide-react';
 import {GROUP_LABEL,GROUPS,type FieldDef} from '../api/fields';
 import {getAreas,localJson} from '../api/client';
 import {int,LEVEL_LABEL,type Level} from '../lib/format';
+import {downloadFile} from '../lib/download';
 import {type Route} from '../lib/router';
 import {lastView,readSavedViews,removeView,safeViewPath,saveView,type SavedView} from '../lib/savedViews';
 import {Link,PageHeader} from './Header';
@@ -16,14 +17,9 @@ const FORMATS:Record<FieldDef['kind'],string>={yn:'Yes / No',score:'0–100 inpu
 const LAYER_LABELS:Record<string,string>={people:'People & households',areas:'Area values',block:'Census blocks',tract:'Census tracts',precinct:'Precincts',zip:'ZIP areas',district:'District',roads:'Roads'};
 const WEIGHT=(n:number)=>`${Number((n*100).toFixed(2))}%`;
 
-function downloadFile(name:string,type:string,content:string){
-  const url=URL.createObjectURL(new Blob([content],{type}));const link=document.createElement('a');
-  link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
-
 function viewDestination(path:string){
   const url=new URL(path,'https://terrier.invalid');
-  const title=url.pathname==='/'?'Map':url.pathname.startsWith('/people/')?'Person profile':({people:'People',contacts:'Contact sheet',criteria:'Criteria audit',sources:'Data & sources',method:'Method'} as Record<string,string>)[url.pathname.slice(1)]??'Terrier page';
+  const title=url.pathname==='/'?'Map':url.pathname.startsWith('/people/')?'Person profile':({people:'People',contacts:'Contact sheet',criteria:'Criteria audit',sources:'Data & sources',method:'Method',walk:'Walk list'} as Record<string,string>)[url.pathname.slice(1)]??'Terrier page';
   return `${title}${url.search?' · saved filters':''}`;
 }
 
