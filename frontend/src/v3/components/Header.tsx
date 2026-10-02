@@ -103,7 +103,7 @@ function SearchBox({meta}:{meta:Meta|null}){
 
 export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:Group;level:Level;onIndex:(g:Group)=>void;onLevel:(l:Level)=>void}){
   return <header className="topbar map">
-    <div className="masthead"><Brand busy={p.busy}/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Generated test data <span>About this preview ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active="map"/>
     <div className="map-toolbar">
       <div className="seg-slot index"><Segmented variant="index" label="Index" items={INDEX_ITEMS} value={p.index} onChange={p.onIndex}/></div>
@@ -140,11 +140,11 @@ function SectionNav({active}:{active:Section}){
   },[active]);
   return <div className="section-bar"><nav ref={nav} className="tabs" aria-label="Sections">
     {tabs.map(t=><Link key={t.id} to={t.to} className={cx('tab',t.id===active&&'on')} aria-current={t.id===active?'page':undefined}>{t.label}</Link>)}
-  </nav>{(active==='map'||active==='people')&&<a className="save-view-link" href={withKept('/workspace?from='+encodeURIComponent(viewPath))} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey||e.button!==0)return;e.preventDefault();navigate('/workspace?from='+encodeURIComponent(location.pathname+location.search));}}>Save view</a>}</div>;
+  </nav><label className="mobile-section"><span>Section</span><select aria-label="Open section" value={active} onChange={e=>navigate(tabs.find(t=>t.id===e.target.value)!.to)}>{tabs.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}</select></label>{(active==='map'||active==='people')&&<a className="save-view-link" href={withKept('/workspace?from='+encodeURIComponent(viewPath))} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey||e.button!==0)return;e.preventDefault();navigate('/workspace?from='+encodeURIComponent(location.pathname+location.search));}}>Save view</a>}</div>;
 }
 export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:Section}){
   return <header className="topbar page">
-    <div className="masthead"><Brand busy={p.busy}/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Generated test data <span>About this preview ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active={p.active}/>
   </header>;
 }

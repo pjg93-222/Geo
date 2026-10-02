@@ -4,6 +4,8 @@ Local synthetic geography and profile demo with the Terrier loading animation an
 
 The persistent navigation includes Map, People, Contact sheet, Criteria audit, Data & sources, Team & snapshots, and Method. Contacts support search, filters, profile/map links and matching CSV export. Team & snapshots stores local saved views and exports the bundled snapshot summary; team accounts and imports require the separate full backend.
 
+People opens on the full generated population. The optional **Balanced by registration** switch selects a 100-person sample and is preserved in saved URLs. Profiles separate registration, self-described affiliation and political outlook from scored indices. These are synthetic responses; differences among those categories can be valid. The fixture audit did not audit or modify original imported person records.
+
 ## Desktop app
 
 ```powershell
@@ -44,6 +46,7 @@ node frontend/scripts/verify-contacts.mjs
 node frontend/scripts/verify-contacts-ui.mjs
 node frontend/scripts/verify-workspace.mjs
 node frontend/scripts/verify-restored-navigation.mjs
+node frontend/scripts/verify-ui-refinements.mjs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/Test-TerrierDesktop.ps1
 ```
 

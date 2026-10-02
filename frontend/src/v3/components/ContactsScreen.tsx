@@ -35,11 +35,11 @@ export function ContactsScreen({meta,route}:{meta:Meta|null;route:Route}){
   return <div className="screen contacts-screen">
     <PageHeader meta={meta} active="contacts"/>
     <main className="contacts-main">
-      <div className="contacts-heading"><div><p className="contacts-eyebrow">Directory</p><h1 className="page-title">Contact sheet</h1><p className="page-sub">Find a person, review their details, and open their profile or area.</p></div>
-        <button type="button" className="contact-button contact-export" onClick={download} disabled={!data||!data.total||exporting}><Download size={17} aria-hidden="true"/>{exporting?'Preparing CSV…':'Export matching CSV'}</button></div>
-      <p className="contacts-notice">Synthetic contact details · example.test emails and fictional 555 numbers.</p>
+      <div className="contacts-heading"><div><h1 className="page-title">Contact sheet</h1><p className="page-sub">Find a person and review their contact details.</p></div>
+        <button type="button" className="contact-button contact-export" aria-label={exporting?'Preparing CSV…':'Export matching CSV'} onClick={download} disabled={!data||!data.total||exporting}><Download size={17} aria-hidden="true"/>{exporting?'Preparing…':'Export CSV'}</button></div>
+      <p className="contacts-notice"><span>Synthetic records</span> Fictional names, example.test emails and 555 numbers.</p>
       <div className="contact-summary" aria-label="Contact coverage">
-        <Summary label="People in directory" value={data?.coverage.records??meta?.people}/><Summary label="With email" value={data?.coverage.email}/><Summary label="With phone" value={data?.coverage.phone}/><Summary label="With wireless" value={data?.coverage.wireless}/>
+        <Summary label="people" value={data?.coverage.records??meta?.people}/><Summary label="with email" value={data?.coverage.email}/><Summary label="with phone" value={data?.coverage.phone}/><Summary label="with wireless" value={data?.coverage.wireless}/>
       </div>
       <div className="contacts-tools">
         <form className="contact-search" onSubmit={event=>{event.preventDefault();change({text:draft.trim()});}}>
@@ -49,7 +49,7 @@ export function ContactsScreen({meta,route}:{meta:Meta|null;route:Route}){
         <label className="contact-filter">Contact availability<select value={query.channel} onChange={event=>change({channel:event.target.value as ContactChannel})}><option value="all">All records</option><option value="email">Has email</option><option value="phone">Has a phone number</option><option value="none">No contact channels</option></select></label>
         {(query.text||query.channel!=='all')&&<button className="contact-clear" type="button" onClick={()=>change({text:'',channel:'all'})}>Clear filters</button>}
       </div>
-      <div className="contact-result-line"><p role="status">{error?'Contact sheet unavailable':!data?'Loading the contact sheet…':`${int(data.total)} ${data.total===1?'record':'records'}${query.text?` matching “${query.text}”`:''}`}</p><p role="status">{exportNote}</p></div>
+      <div className="contact-result-line"><p role="status">{error?'Contact sheet unavailable':!data?'Loading the contact sheet…':`${int(data.total)} ${data.total===1?'record':'records'}${query.text?` matching “${query.text}”`:''}`}</p>{exportNote&&<p role="status">{exportNote}</p>}<span className="contact-scroll-hint">Scroll across for contact details</span></div>
       {error?<div className="contact-empty" role="alert"><p>{error}</p><button className="contact-button" type="button" onClick={()=>setRetry(value=>value+1)}>Retry contact sheet</button></div>:<>
         <div ref={table} className="contacts-table-wrap" role="region" tabIndex={0} aria-label="Contact sheet table; scroll for all rows and columns" aria-busy={!data}>
           <table className="contacts-table"><thead><tr><th scope="col">Person / {query.basis==='registration'?'registration':'residential'} address</th><th scope="col">Email</th><th scope="col">Phone</th><th scope="col">Wireless</th><th scope="col">Open</th></tr></thead>
@@ -60,7 +60,7 @@ export function ContactsScreen({meta,route}:{meta:Meta|null;route:Route}){
         </div>
         {data&&<div className="contact-pagination"><span>{int(data.first)}–{int(data.last)} of {int(data.total)} <span className="contact-page-count">· Page {int(data.page)} of {int(data.pages)}</span></span><div><button className="contact-button" type="button" disabled={data.page<=1} onClick={()=>change({page:data.page-1})}><ChevronLeft size={16} aria-hidden="true"/>Previous</button><button className="contact-button" type="button" disabled={data.page>=data.pages} onClick={()=>change({page:data.page+1})}>Next<ChevronRight size={16} aria-hidden="true"/></button></div></div>}
       </>}
-      <p className="contact-footnote">“Registration address” means an address field, not a political affiliation. Missing fields remain “Not supplied.” Map links show the person’s synthetic census block.</p>
+      <p className="contact-footnote">Addresses and contact details are generated for this preview. “Not supplied” means the synthetic record has no value.</p>
     </main>
     <dialog ref={dialog} className="contact-detail-dialog" aria-labelledby="contact-detail-title" onClose={()=>setSelected(null)}>
       {selected&&<><div className="contact-dialog-heading"><div><p className="contacts-eyebrow">Synthetic contact</p><h2 id="contact-detail-title">{selected.name}</h2></div><form method="dialog"><button className="contact-close" autoFocus aria-label="Close contact details"><X size={21}/></button></form></div>
@@ -70,4 +70,4 @@ export function ContactsScreen({meta,route}:{meta:Meta|null;route:Route}){
   </div>;
 }
 function ContactValue({value}:{value:string|null}){return value?<span>{value}</span>:<span className="contact-missing">Not supplied</span>;}
-function Summary({label,value}:{label:string;value:number|undefined}){return <div><span>{label}</span><strong>{value===undefined?'—':int(value)}</strong></div>;}
+function Summary({label,value}:{label:string;value:number|undefined}){return <div><strong>{value===undefined?'—':int(value)}</strong><span>{label}</span></div>;}

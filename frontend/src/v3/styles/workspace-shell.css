@@ -44,10 +44,4 @@
   .map-toolbar .seg-item{font-size:11px;padding:0 11px}
   .map-toolbar .seg-slot.index{width:100%}
   .profile-contact{font-size:13px}
-  .contacts-heading{gap:12px}
-  .contacts-heading .contact-export{min-height:34px;padding:7px 11px}
-  .contacts-notice{margin-top:16px;padding:7px 11px;font-size:11px}
-  .contact-summary{margin-top:16px}
-  .contact-summary>div{padding:10px 13px;gap:4px}
-  .contact-summary strong{font-size:22px}
 }

@@ -18,7 +18,7 @@ try {
   await page.waitForFunction(()=>!new URLSearchParams(location.search).has('f'));assert.equal(new URL(page.url()).searchParams.get('index'),'cua');
   report.checks.push('map Back/Forward restores layer, selected area and index; repeated search preserves index');
   await page.goto(base+'/people?lean=-2&balanced=0');await page.locator('.tbody .trow').first().waitFor();assert.equal(await page.getByLabel('Outlook',{exact:true}).inputValue(),'-2');
-  await page.getByRole('link',{name:'People',exact:true}).click();await page.waitForFunction(()=>document.querySelector('select[aria-label="Outlook"]').value==='all');await page.waitForFunction(()=>document.querySelector('[role="switch"]')?.getAttribute('aria-checked')==='true');
+  await page.getByRole('link',{name:'People',exact:true}).click();await page.waitForFunction(()=>document.querySelector('select[aria-label="Outlook"]').value==='all');await page.waitForFunction(()=>document.querySelector('[role="switch"]')?.getAttribute('aria-checked')==='false');
   await page.goBack();await page.waitForFunction(()=>document.querySelector('select[aria-label="Outlook"]').value==='-2');await page.waitForFunction(()=>document.querySelector('[role="switch"]')?.getAttribute('aria-checked')==='false');
   await page.goForward();await page.waitForFunction(()=>document.querySelector('select[aria-label="Outlook"]').value==='all');
   await page.getByLabel('Outlook',{exact:true}).selectOption('2');await page.waitForFunction(()=>new URLSearchParams(location.search).get('lean')==='2');assert.equal(await page.getByLabel('Outlook',{exact:true}).inputValue(),'2');

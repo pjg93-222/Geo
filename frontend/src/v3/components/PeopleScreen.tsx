@@ -25,7 +25,7 @@ function fromRoute(q:URLSearchParams):PeopleQuery{
   const level=q.get('level') as Level|null;
   return {
     reg:reg&&REG.some(r=>r.id===reg)?reg:'all',grade:grade==='AB'?'AB':'ABCD',lean:lean&&LEAN.some(l=>l.id===lean)?lean:'all',
-    level:level&&LEVELS.includes(level)?level:'',area:level?q.get('area')??'':'',balanced:q.get('balanced')!=='0',after:q.get('after')??'',dir:q.get('dir')==='prev'?'prev':'next',
+    level:level&&LEVELS.includes(level)?level:'',area:level?q.get('area')??'':'',balanced:q.get('balanced')==='1',after:q.get('after')??'',dir:q.get('dir')==='prev'?'prev':'next',
   };
 }
 
@@ -36,6 +36,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   const [page,setPage]=useState<PeoplePage|null>(null);
   const [busy,setBusy]=useState(true);
   const [error,setError]=useState('');
+  const [attempt,setAttempt]=useState(0);
   const [ready,setReady]=useState<string|null>(null);   // cursor of the prefetched next page
   const cache=useRef(new Map<string,PeoplePage>());
   const [areaOpts,setAreaOpts]=useState<Opt[]|null>(null);
@@ -55,7 +56,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   useEffect(()=>{
     const s=new URLSearchParams();
     if(q.reg!=='all')s.set('reg',q.reg);if(q.grade!=='ABCD')s.set('grade',q.grade);if(q.lean!=='all')s.set('lean',q.lean);
-    if(q.level&&q.area){s.set('level',q.level);s.set('area',q.area);}if(!q.balanced)s.set('balanced','0');
+    if(q.level&&q.area){s.set('level',q.level);s.set('area',q.area);}s.set('balanced',q.balanced?'1':'0');
     replaceQuery({reg:s.get('reg'),grade:s.get('grade'),lean:s.get('lean'),level:s.get('level'),area:s.get('area'),balanced:s.get('balanced'),after:q.after||null,dir:q.after?q.dir:null});
     try{sessionStorage.setItem(STORE,location.search);}catch{/* storage may be unavailable */}
   },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir]);
@@ -85,7 +86,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
       setError((e as Error).message||'The list could not be loaded.');setBusy(false);
     });
     return ()=>ac.abort();
-  },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir]);   // eslint-disable-line react-hooks/exhaustive-deps
+  },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir,attempt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const change=(patch:Partial<PeopleQuery>)=>{
     cache.current.clear();setReady(null);setClearOnLoad(true);setPage(null);
@@ -115,7 +116,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   return <div className="screen people-screen">
     <PageHeader meta={meta} active="people"/>
     <main className="people">
-      <h1 className="page-title">Overall standing</h1>
+      <h1 className="page-title">People</h1>
       <p className="page-sub">{meta?sub:<Sk w={520} h={16}/>}</p>
       <div className="filters">
         <Select label="Registration" shown={REG.find(r=>r.id===q.reg)!.label} value={q.reg} options={REG} onChange={v=>change({reg:v as PeopleQuery['reg']})}/>
@@ -139,19 +140,23 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
             </select>
           </label>
         </div>
-        <Switch className="balanced" checked={q.balanced} onChange={v=>change({balanced:v})} label="Balanced by registration" labelClass="balanced-label"/>
+      </div>
+      <div className="people-list-tools">
+        <div className="sample-option"><Switch className="balanced" checked={q.balanced} onChange={v=>change({balanced:v})} label="Balanced by registration" labelClass="balanced-label"/><span>Optional 100-person sample</span></div>
+        {(q.reg!=='all'||q.grade!=='ABCD'||q.lean!=='all'||q.area||q.balanced)&&<button type="button" className="clear-people-filters" onClick={()=>change({reg:'all',grade:'ABCD',lean:'all',level:'',area:'',balanced:false})}>Reset filters</button>}
         <span className="pager-text">{pagerText||' '}</span>
         <button type="button" className="pager-btn" aria-label="Previous page" disabled={!page?.prev} onClick={()=>go('prev')}><ChevronLeft strokeWidth={1.75}/></button>
         <button type="button" className="pager-btn" aria-label="Next page" disabled={!page?.next} onClick={()=>go('next')}><ChevronRight strokeWidth={1.75}/></button>
       </div>
+      <p className="people-context">{q.balanced?'Showing matches from a 100-person sample balanced by registration.':'Showing matches from the full generated population.'} Sorted by overall standing. Political responses are unscored.</p>
       <p className="scroll-hint">Scroll the table sideways to see all columns.</p>
       <section className="table" aria-label="People ranked by overall standing" aria-busy={busy}>
         <div className="thead">
           <span>Rank</span><span>Name</span><span>Overall standing</span><span className="r">Alignment</span><span className="r">Participation</span>
-          <span className="r">Sphere</span><span>Outlook</span><span>Grade</span><span>Within registration</span>
+          <span className="r">Sphere</span><span>Political outlook</span><span title="Illustrative data coverage grade">Data grade</span><span>Percentile within registration</span>
         </div>
         <div className="tbody">
-          {error&&<div className="table-empty" role="alert">{error}</div>}
+          {error&&<div className="table-empty" role="alert">{error}<button className="retry-people" type="button" onClick={()=>setAttempt(n=>n+1)}>Retry people</button></div>}
           {!error&&page&&page.rows.length===0&&<div className="table-empty">No people match these filters.</div>}
           {!error&&(page?.rows??[]).map(r=><Row key={r.person_id} r={r}/>)}
           {!error&&!page&&clearOnLoad&&Array.from({length:8}).map((_,i)=><SkeletonRow key={i}/>)}

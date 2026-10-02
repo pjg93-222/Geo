@@ -1,6 +1,6 @@
 # Terrier — completed handoff
 
-Completed 2026-10-01 in the isolated synthetic preview. The latest release restores the full navigation and contact sheet, repairs contradictory dummy household facts, and improves political fixture coherence. It also retains the caption-free automatic startup and source-resolution media. See the latest release section below and [the full data audit](DATA_AUDIT_2026-10-01.md).
+Completed 2026-10-01 in the isolated synthetic preview. The latest UI refinement improves readability, mobile navigation, contact/criteria density and the distinction between generated opinions and scores. People now opens on the full generated population. Earlier releases restored the workspace and repaired contradictory dummy household facts. The caption-free automatic startup and source-resolution media remain intact. See the latest UI refinement section at the end and [the full data audit](DATA_AUDIT_2026-10-01.md).
 
 - App: http://127.0.0.1:8767/
 - Motion preview: http://127.0.0.1:8767/brand/preview.html
@@ -134,7 +134,7 @@ Validation passed: production build/compression, all 20 unit tests, desktop icon
 
 Git: `main` was created from the prior initial commit `7366030`. This desktop release is committed on `codex/terrier` and merged into local `main` by fast-forward, preserving the earlier app/debug work. No remote is configured and nothing is pushed. The desktop installer is rerun from the merged revision. These scripts make future desktop regeneration repeatable.
 
-## Restored workspace and data coherence — latest release, 2026-10-01
+## Restored workspace and data coherence — 2026-10-01
 
 The desktop shortcut had switched from the older full application to a standalone preview containing only Map, People and Method. The current release restores persistent navigation to **Map, People, Contact sheet, Criteria audit, Data & sources, Team & snapshots, and Method**. Direct route reloads work in the production server. Every section is reachable from the map and other pages, including mobile horizontal navigation.
 
@@ -173,3 +173,36 @@ Local receipts (ignored build artifacts):
 - `_build/desktop-verification/checks.json`
 
 The Desktop shortcut was regenerated as **Terrier**. Cold launch, warm reuse, icon/shortcut identity and unrelated-port-owner protection passed; the verified fixture server was restored on 8767. Release branch: `codex/terrier-restored-workspace`, fast-forward merged into local `main`. No Git remote is configured. Original services/data on ports 8765/8766 remain outside this release.
+
+## UI refinement — latest release, 2026-10-01
+
+### Data clarification
+
+The audited person records are generated test data. Household size, adult counts and shared-tenure disagreements were errors in the dummy generator. A conservative Democrat or someone registered unaffiliated who identifies with Democrats can be valid; those combinations alone are not contradictions. The prior change reduced the unusually frequent crossovers produced by independent random draws, using authored fixture scenarios. It is not an empirical finding about real people. Original imported person records were neither audited nor modified. Public boundary geometry supplies the geographic context.
+
+This UI release changes no fixture generation or score calculations. Political responses remain categorical and unscored; ethical beliefs are not collected.
+
+### Interface changes
+
+- **People:** full population by default, explicit optional 100-person sample, descriptive result scope, larger rows and text, reset filters and error retry. URLs preserve `balanced=1` for a sample and `balanced=0` for the full population.
+- **Profiles:** clearer generated-data label, readable evidence text, three score cards, and a separate political response section explaining registration, affiliation and outlook. “Observed” evidence is explicitly identified as supplied by the dummy generator.
+- **Navigation:** all seven desktop sections remain visible; a native section selector makes every destination accessible on mobile. A desktop source-context link identifies generated test data.
+- **Contacts:** compact coverage summary, larger useful record area, visible desktop pagination, sticky column headings, pinned mobile identity column, and search/filter controls that bring the first records into the initial phone viewport.
+- **Criteria and workspace:** dictionary and saved views appear before explanatory material; totals use compact summaries. Criteria/source rows reflow for phones. Saved views show readable destinations.
+- **Map:** larger controls and labels; the mobile legend sits below the map instead of covering it. Performance instrumentation is hidden from the interface.
+
+The Mentat palette, approved logo and loading animation are unchanged. No new media was generated or re-encoded in this refinement. The preceding Higgsfield study remains the design reference.
+
+### Validation and local release
+
+Production TypeScript/Vite build and compression passed, as did all **26 unit tests**. Browser checks passed for the full/sample list default and URL persistence, separate political responses, contact search/export/dialog/retry, workspace exports and bookmarks, all seven desktop/mobile routes, map and profile interactions, Back/Forward, loader fallback and reduced motion. The browser suites recorded no unexpected page errors or live API requests. Desktop and 390px mobile layouts were inspected, including the fully rendered mobile map. A separate agent reviewed the final UI diff and found no concrete blockers.
+
+Current receipts:
+
+- `_build/ui-refinement/checks.json` and `map-mobile.png`
+- `_build/restored-workspace/checks.json` and desktop/mobile screen captures (use the map image above for the fully rendered mobile map)
+- `_build/contact-verification/contacts-ui-checks.json`
+- `_build/workspace-verification/checks.json`
+- `_build/debug-verification/` and `_build/test-dummy-verification/browser-functional-final.json`
+
+Release branch: `codex/terrier-ui-refinement`, fast-forward merged into local `main`. The already verified frontend build is used to regenerate the **Terrier** desktop shortcut and icon with `Install-TerrierDesktop.ps1 -SkipBuild`. The open browser preview is refreshed. No remote is configured. The full-cohort data audit and desktop cold/port-owner tests documented above belong to the prior release; those unchanged subsystems were not re-audited in this UI-only round.

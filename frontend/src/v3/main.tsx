@@ -64,3 +64,4 @@ createRoot(document.getElementById('root')!).render(<AppBoundary><V3App/></AppBo
 
 import './styles/completion.css';
 import './styles/workspace-shell.css';
+import './styles/ui-refinements.css';

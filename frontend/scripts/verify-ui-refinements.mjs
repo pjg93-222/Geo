@@ -1,0 +1,37 @@
+import {chromium} from '@playwright/test';
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+const out=new URL('../../_build/ui-refinement/',import.meta.url);await mkdir(out,{recursive:true});
+const browser=await chromium.launch({channel:'chrome',headless:true,args:['--enable-unsafe-swiftshader']});
+const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
+const report={checks:[],errors:[],apiRequests:[]};const base='http://127.0.0.1:8767';
+page.on('pageerror',e=>report.errors.push(e.message));page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))report.apiRequests.push(r.url());});
+try{
+ await page.goto(base+'/people');await page.locator('a.trow').first().waitFor();
+ assert.ok((await page.locator('.pager-text').innerText()).includes('109,150'));assert.equal(await page.getByRole('switch',{name:'Balanced by registration'}).getAttribute('aria-checked'),'false');
+ assert.ok((await page.locator('.people-context').innerText()).includes('full generated population'));
+ assert.ok(await page.locator('.c-name').first().evaluate(e=>parseFloat(getComputedStyle(e).fontSize)>=14));
+ await page.getByRole('switch',{name:'Balanced by registration'}).click();await page.waitForFunction(()=>document.querySelector('.pager-text')?.textContent==='1–50 of 100');
+ assert.ok((await page.locator('.people-context').innerText()).includes('100-person sample'));assert.equal(new URL(page.url()).searchParams.get('balanced'),'1');
+ await page.reload();await page.waitForFunction(()=>document.querySelector('.pager-text')?.textContent==='1–50 of 100');
+ await page.getByRole('button',{name:'Reset filters',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.pager-text')?.textContent?.includes('109,150'));
+ report.checks.push('full population by default;100-person sample explicit, persists reload, resets correctly; readable14px names');
+ await page.locator('a.trow').first().click();await page.locator('.person-name').waitFor();
+ assert.ok((await page.locator('.profile-origin').innerText()).includes('all values are test data'));
+ assert.equal(await page.locator('.p-cards .card').count(),3);assert.equal(await page.locator('.p-cards .opinion-facts').count(),0);
+ assert.ok((await page.getByRole('region',{name:'Political responses'}).innerText()).includes('Different responses across these fields can be valid'));
+ report.checks.push('generated profile label and separate unscored political responses');
+ await page.goto(base+'/contacts');await page.locator('.contact-person').first().waitFor();
+ assert.ok(await page.locator('.contact-pagination').evaluate(e=>e.getBoundingClientRect().bottom<=innerHeight));
+ report.checks.push('desktop contact pagination is visible without scrolling the page');
+ await page.setViewportSize({width:390,height:844});await page.goto(base+'/');await page.waitForFunction(()=>window.__cuMap?.isStyleLoaded()&&window.__cuMap?.queryRenderedFeatures({layers:['fill-a','fill-b']}).length>0);
+ const bounds=await page.evaluate(()=>({canvas:document.querySelector('.map-canvas').getBoundingClientRect().toJSON(),legend:document.querySelector('.legend').getBoundingClientRect().toJSON()}));
+ assert.ok(bounds.legend.y>=bounds.canvas.bottom-1);assert.ok(bounds.canvas.height>=300);
+ await page.screenshot({path:fileURLToPath(new URL('map-mobile.png',out)),fullPage:false});
+ await page.getByLabel('Open section',{exact:true}).selectOption('contacts');await page.locator('.contact-person').first().waitFor();
+ assert.ok(await page.locator('.contact-person').first().evaluate(e=>e.getBoundingClientRect().top<innerHeight-30));
+ assert.ok(await page.locator('.contacts-table-wrap').evaluate(e=>e.scrollHeight>e.clientHeight));
+ report.checks.push('mobile legend below unobstructed map; discoverable section navigation; contact records visible in first viewport');
+ assert.deepEqual(report.errors,[]);assert.deepEqual(report.apiRequests,[]);
+}catch(e){report.failure=e.stack;throw e;}finally{await writeFile(new URL('checks.json',out),JSON.stringify(report,null,2));console.log(JSON.stringify(report));await browser.close();}

@@ -54,6 +54,7 @@ function Body({p}:{p:Profile}){
       <div className="p-who">
         <Link to={backTarget()} className="back-link">{'←'} People</Link>
         <Link to={'/contacts?q='+encodeURIComponent(p.person_id)} className="profile-contact">Contact details</Link>
+        <p className="profile-origin">Generated profile · all values are test data</p>
         <h1 className="person-name" title={p.name}>{p.name}</h1>
         <p className="person-meta">
           {[p.age!=null?String(p.age):'',`Household of ${p.household_size}`,`Party registration: ${reg}`,blockLabel(p.block),precinctLabel(p.precinct)].filter(Boolean)
@@ -78,16 +79,20 @@ function Body({p}:{p:Profile}){
       <IndexPanel title={GROUP_LABEL.cua} card={p.cards.cua}/>
       <IndexPanel title={GROUP_LABEL.part} card={p.cards.part}/>
       <IndexPanel title={GROUP_LABEL.soi} card={p.cards.soi}/>
-      <section className="card lean">
-        <h2 className="panel-title">Political views</h2>
-        <dl className="opinion-facts"><div><dt>Party registration</dt><dd>{reg}</dd></div><div><dt>Self-described affiliation</dt><dd>{opinions.affiliation}</dd></div><div><dt>Political outlook</dt><dd>{opinions.outlook}</dd></div></dl>
-        <p className="lean-note">Separate responses. No belief score.</p>
-      </section>
     </div>
+      <section className="opinion-panel" aria-label="Political responses">
+        <div className="opinion-heading">
+        <h2 className="panel-title">Political views</h2>
+        <p>Separate responses · no belief score</p>
+        </div>
+        <dl className="opinion-facts"><div><dt>Party registration</dt><dd>{reg}</dd></div><div><dt>Self-described affiliation</dt><dd>{opinions.affiliation}</dd></div><div><dt>Political outlook</dt><dd>{opinions.outlook}</dd></div></dl>
+        <p className="opinion-explanation">Registration describes a party category; affiliation and outlook describe separate opinions. Different responses across these fields can be valid.</p>
+      </section>
 
     <div className="p-lower">
       <section className="evidence" aria-label="Field evidence">
         <header className="ev-head"><h2 className="section-title">Field evidence</h2><span className="section-count">{p.groups.reduce((s,g)=>s+g.n_fields,0)} fields</span></header>
+        <p className="evidence-origin">Generated test values. “Observed” means supplied by the dummy generator.</p>
         <p className="scroll-hint">Scroll sideways for values and contributions.</p>
         <div className="ev-th"><span>Field</span><span>Value</span><span>Source</span><span>Contribution</span></div>
         {p.groups.map(g=><Group key={g.id} g={g} open={!!open[g.id]} onToggle={()=>setOpen(o=>({...o,[g.id]:!o[g.id]}))}/>)}
