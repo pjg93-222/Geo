@@ -33,7 +33,7 @@ The startup animation plays once, then opens the application automatically. Redu
 
 ## Walk list
 
-The **Walk list** tab (`/walk`) turns a set of streets into a door-knocking route you can print. Choose an area (state senate district, state house district or precinct), add streets by search or from a CSV, and Terrier orders the street sides into one walking route: doors in walking order with the voters at each door, a map of the route, the walking distance and an estimated time (2 minutes per door plus walking at 80 metres per minute). A list holds up to 40 streets and 1,500 voters. A saved list keeps its route, results can be recorded for its voters, and **Not home again** builds a new list over only the doors whose voters were marked NH (not home). The walk endpoints answer on loopback only.
+The **Walk list** tab (`/walk`) turns a set of streets into a door-knocking route you can print. Choose an area (state senate district, state house district or precinct), add streets by search or from a CSV, and Terrier orders the street sides into one walking route: doors in walking order with the voters at each door, a map of the route and the walking distance. The summary line and the printed list give streets, stops, doors, voters and kilometres; they show no time estimate. A list holds up to 40 streets and 1,500 voters. A saved list keeps its route, results can be recorded for its voters, and **Not home again** builds a new list over only the doors whose voters were marked NH (not home). The walk endpoints answer on loopback only.
 
 **Street CSV.** The first row is a header. `street` is required; `side`, `city` and `zip` are optional columns.
 

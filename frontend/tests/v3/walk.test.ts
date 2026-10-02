@@ -2,9 +2,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type {WalkDoor, WalkListPayload, WalkRun, WalkVoter} from '../../src/v3/api/walkTypes.ts';
+import * as walkLib from '../../src/v3/lib/walk.ts';
 import {
   CODE_LABEL, CSV_COLUMNS, MAX_UPLOAD_ROWS, WALK_CODES, areaText, buildWalkCsv, codeLegend, countText, csvValue, distanceText, doorAddress,
-  durationText, fullDate, houseSpan, isWalkCode, parseWalkCsv, phoneText, regDate, runHeader, sideFromText, sideLabel, splitCsv, tallyText,
+  fullDate, houseSpan, isWalkCode, parseWalkCsv, phoneText, regDate, runHeader, sideFromText, sideLabel, splitCsv, tallyText,
   totalsLine, unitText, walkCsvRows, walkFileName
 } from '../../src/v3/lib/walk.ts';
 import {DOOR_SCRIPT, choiceText, fillScript, stepById, stepNumber} from '../../src/v3/lib/walkScript.ts';
@@ -57,14 +58,15 @@ test('run header: stop, house span and door count', () => {
   assert.equal(houseSpan({from_house: '', to_house: ''}), ''); assert.equal(houseSpan({from_house: '9', to_house: ''}), '9');
 });
 
-test('totals line, distance and time', () => {
-  assert.equal(totalsLine({streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900, minutes: 160}), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km · about 2 h 40 min');
-  assert.equal(totalsLine({streets: 1, stops: 1, doors: 1, voters: 1, walk_m: 60, minutes: 2}), '1 street · 1 stop · 1 door · 1 voter · 0.1 km · about 5 min');
-  assert.equal(totalsLine({streets: 12, stops: 30, doors: 1200, voters: 1500, walk_m: 14000, minutes: 3000}), '12 streets · 30 stops · 1,200 doors · 1,500 voters · 14.0 km · about 50 h');
+test('totals line and distance: counts and kilometres, with no time estimate', () => {
+  // The totals still carry the server's `minutes`; the line leaves it out whatever it holds.
+  assert.equal(totalsLine({streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900, minutes: 160}), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km');
+  assert.equal(totalsLine({streets: 1, stops: 1, doors: 1, voters: 1, walk_m: 60, minutes: 2}), '1 street · 1 stop · 1 door · 1 voter · 0.1 km');
+  assert.equal(totalsLine({streets: 12, stops: 30, doors: 1200, voters: 1500, walk_m: 14000, minutes: 3000}), '12 streets · 30 stops · 1,200 doors · 1,500 voters · 14.0 km');
+  for (const minutes of [0, 2, 160, 3000, -3, NaN]) assert.equal(totalsLine({streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900, minutes}), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km', String(minutes));
+  assert.ok(!('durationText' in walkLib), 'no walking-time formatter is left to call');
   assert.equal(distanceText(2850), '2.9 km'); assert.equal(distanceText(2849), '2.8 km'); assert.equal(distanceText(0), '0.0 km'); assert.equal(distanceText(1000), '1.0 km');
   assert.equal(distanceText(NaN), '0.0 km'); assert.equal(distanceText(-50), '0.0 km');
-  const want: [number, string][] = [[0, '0 min'], [-3, '0 min'], [1, 'about 5 min'], [47, 'about 45 min'], [60, 'about 1 h'], [62, 'about 1 h'], [63, 'about 1 h 5 min'], [125, 'about 2 h 5 min']];
-  for (const [m, s] of want) assert.equal(durationText(m), s, String(m));
   assert.equal(countText(1, 'door'), '1 door'); assert.equal(countText(0, 'door'), '0 doors'); assert.equal(countText(2, 'street'), '2 streets');
 });
 
@@ -326,6 +328,29 @@ test('PDF: landscape letter, a header on every list page, (cont.) only after the
   assert.ok(pages[1].includes('Street: N Cedar Heights Dr (Even)') && pages[1].includes('Precinct: 02012'));
   assert.deepEqual(pages.map(t => t.includes('(cont.)')), [false, false, ...Array(n - 3).fill(true), false]);
   assert.ok(pages[n - 1].includes('Street: Short St (Even)'));
+});
+
+test('no time estimate in any output: totals line, run header, CSV and every PDF string have no minutes, hours or "about"', async () => {
+  // The totals carry the server's `minutes` (160 here); nothing the walker reads or prints may turn it into "about 2 h 40 min" or the like.
+  const ESTIMATE = /\babout\s+\d|\b\d+\s*(?:h|hrs?|hours?|mins?|minutes?)\b|\bminutes?\b|\bmins?\b|\bhours?\b|\bestimated time\b|\bwalking time\b|\bETA\b/i;
+  const ABOUT = /\babout\b/i;
+  const totals = {streets: 1, stops: 2, doors: 2, voters: 2, walk_m: 2900, minutes: 160}, line = '1 street · 2 stops · 2 doors · 2 voters · 2.9 km';
+  const runs = [run({doors: [door(1, '4102', [voter()])]}), run({stop: 2, street_id: 9, street: 'Short St', doors: [door(2, '5', [voter({person_id: 'p2'})])]})];
+  const p = {...payload(runs), totals};
+  const clean = (label: string, texts: string[]) => assert.deepEqual(texts.filter(t => ESTIMATE.test(t) || ABOUT.test(t)), [], label);
+  assert.equal(totalsLine(totals), line);
+  clean('totals line', [totalsLine(totals), totalsLine({...totals, minutes: 0}), totalsLine({...totals, minutes: 3000})]);
+  clean('run headers', runs.map(r => runHeader(r, 2)));
+  clean('CSV columns', [...CSV_COLUMNS]);
+  clean('CSV rows', walkCsvRows(p).flat().concat(buildWalkCsv(p).split('\r\n')));
+  // The door script on the cover says "neighbors about the coming election": that copy is exempt, every other PDF string is not.
+  const flat = (s: string) => s.replace(/[“”]/g, '').replace(/\s+/g, ' ').trim();
+  const script = flat(DOOR_SCRIPT.flatMap(s => [s.title, s.line, ...s.choices.map(choiceText)]).join(' '));
+  const {doc} = await buildWalkPdf(p), strings = pdfPages(doc).flat();
+  assert.ok(pdfTexts(doc, 1).includes(line), 'the cover shows the totals line as it is');
+  assert.ok(strings.length > 50, 'the whole document was read');
+  assert.deepEqual(strings.filter(t => ESTIMATE.test(t)), [], 'PDF time estimates');
+  assert.deepEqual(strings.filter(t => ABOUT.test(t) && !script.includes(flat(t))), [], 'PDF "about" outside the door script');
 });
 
 test('PDF: accents print as they are, missing glyphs fall back, nothing turns into garbage', async () => {
