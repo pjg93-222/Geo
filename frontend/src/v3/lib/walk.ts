@@ -71,15 +71,9 @@ export function runHeader(run:WalkRun,total:number):string{
 }
 
 export function distanceText(meters:number):string{return `${(Math.round((Number.isFinite(meters)?Math.max(0,meters):0)/100)/10).toFixed(1)} km`;}
-/** Walking time to the nearest five minutes: "about 2 h 40 min". */
-export function durationText(minutes:number):string{
-  if(!(minutes>0))return '0 min';
-  const m=Math.max(5,Math.round(minutes/5)*5);const h=Math.floor(m/60),r=m%60;
-  return `about ${[h?`${h} h`:'',r?`${r} min`:''].filter(Boolean).join(' ')}`;
-}
-/** "4 streets · 6 stops · 58 doors · 104 voters · 2.9 km · about 2 h 40 min" */
+/** "4 streets · 6 stops · 58 doors · 104 voters · 2.9 km". The list carries a `minutes` figure from the server; no walk-list output shows it. */
 export function totalsLine(t:WalkTotals):string{
-  return [countText(t.streets,'street'),countText(t.stops,'stop'),countText(t.doors,'door'),countText(t.voters,'voter'),distanceText(t.walk_m),durationText(t.minutes)].join(DOT);
+  return [countText(t.streets,'street'),countText(t.stops,'stop'),countText(t.doors,'door'),countText(t.voters,'voter'),distanceText(t.walk_m)].join(DOT);
 }
 
 /** Area words from the list query, for the printed title and file name when the caller has no label of its own. */
