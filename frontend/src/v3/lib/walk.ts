@@ -1,6 +1,7 @@
 // Walk list text rules: tallies, dates, phones, run headers, totals, result codes and the CSV in and out.
-// Pure, and only `import type` from other files, so node --test can load it directly (same constraint as format.ts).
+// Pure, so node --test can load it directly: value imports name the .ts file, types come in with `import type`.
 import type {WalkArea,WalkCode,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
+import {csvValue} from './csv.ts';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -98,13 +99,7 @@ export function walkFileName(area:string,isoDate:string,ext:'pdf'|'csv'):string{
 // --- CSV out ---------------------------------------------------------------------------------------------------------
 export const CSV_COLUMNS=['Stop','Precinct','Street','Side','Address','Unit','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Reg. Date','Result'] as const;
 
-// A formula character counts after leading spaces, control characters and invisible marks too.
-const FORMULA=/^(?:[\t\r\n]|[\s\u0000-\u001f\u007f-\u009f\u{200b}-\u{200f}\u{2060}]*[=+\-@])/u;
-/** Keeps a value from turning into a formula when the file opens in a spreadsheet (csv_value in terrier_contacts.py, plus leading spaces). */
-export function csvValue(value:unknown):string{
-  const text=value==null?'':String(value);
-  return FORMULA.test(text)?`'${text}`:text;
-}
+export {csvValue};
 const csvField=(value:unknown):string=>`"${csvValue(value).replace(/[\r\n]+/g,' ').replace(/"/g,'""')}"`;
 // A spreadsheet reads "4/6" as a date, so the file says "4 of 6"; the registration date stays ISO for the same reason.
 const csvTally=(t:WalkTally|null|undefined):string=>t?`${t.voted} of ${t.eligible}`:'';
