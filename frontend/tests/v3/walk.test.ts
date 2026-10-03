@@ -927,7 +927,7 @@ test('walk screen wiring (round 4): the shelf outlives the screen, a file is mat
 });
 // --- a refused batch: the server will not take it however often it is sent, so it must not hold up the screen, nor erase what the walker saw ---
 import {
-  ResultsRefused, addRefusal, clearRefused, doorsByPerson, keepRefused, listIdentity, marksWithRefused, refusalCount, refusalHeadline, refusalOf, refusedStatus, unsavedText
+  ResultsRefused, addRefusal, clearRefused, doorsByPerson, keepRefused, listIdentity, marksWithRefused, refusalBarText, refusalCount, refusalHeadline, refusalOf, refusedStatus, unsavedText
 } from '../../src/v3/lib/walk.ts';
 import type {RefusalNote, RefusedMarks} from '../../src/v3/lib/walk.ts';
 import {ApiError} from '../../src/v3/api/client.ts';
@@ -1237,4 +1237,20 @@ test('walk screen wiring (round 2): re-knock losses told, refused marks describe
   const phone = css.slice(css.indexOf('@media(max-width:640px)'));
   assert.ok(/\.walk-res button\{[^}]*height:44px/.test(phone) && /\.walk-table-wrap\{overflow-x:visible\}/.test(phone), 'phone: 44 px buttons, no sideways table');
   assert.ok(!/@media[^{]*print/.test(css), 'the printed list is the PDF, not this stylesheet');
+});
+
+test('refusal bar on phones: a count that matches the note, a labelled region that is not a live region, View focuses the note, shown only at 640 px and below', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  const css = readFileSync(path.join(import.meta.dirname, '../../src/v3/styles/walk.css'), 'utf8');
+  const note = (n: number) => { let r: RefusalNote | null = null; for (let i = 0; i < n; i++) r = addRefusal(r, 'List', new Map([[`p${i}`, visit('S')]]), {[`p${i}`]: `${i + 1} Oak St`}, 'why'); return r; };
+  assert.equal(refusalBarText(note(1)), '1 result not saved'); assert.equal(refusalBarText(note(3)), '3 results not saved');
+  assert.equal(refusalBarText(note(2)).split(' ')[0], String(refusalCount(note(2))), 'the same count as the note');
+  const bar = /\{refusal&&<div className="walk-refused-bar"[^>]*>[\s\S]*?<\/button><\/div>\}/.exec(src)?.[0] ?? '';
+  assert.ok(/role="region" aria-label="Results not saved"/.test(bar) && !/role="(alert|status)"|aria-live/.test(bar), 'findable, but the note is the only announcement');
+  assert.ok(/refusedNote\.current/.test(bar) && /\.scrollIntoView\(/.test(bar) && /\.focus\(\{preventScroll:true\}\)/.test(bar) && />View<\/button>/.test(bar), 'View scrolls to the note and focuses it');
+  assert.ok(/className="walk-note walk-refused" role="alert" tabIndex=\{-1\} ref=\{refusedNote\}/.test(src) && /refusal&&'has-refusal'/.test(src), 'the note can take focus; the page knows the bar is up');
+  assert.ok(/\n\.walk-refused-bar\{display:none\}/.test(css), 'hidden unless the phone block shows it');
+  const phone = css.slice(css.lastIndexOf('@media(max-width:640px)'));
+  assert.ok(/\.walk-refused-bar\{position:fixed;[^}]*bottom:0;[^}]*display:flex[^}]*env\(safe-area-inset-bottom\)/.test(phone) && /\.walk-refused-bar button\{[^}]*min-height:44px/.test(phone), 'phone: fixed to the bottom, 44 px button, safe area kept');
+  assert.ok(/\.walk-screen\.has-refusal\{padding-bottom:calc\(\d+px \+ env\(safe-area-inset-bottom\)\)\}/.test(phone), 'room under the last card');
 });

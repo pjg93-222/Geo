@@ -15,7 +15,7 @@ import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkList
 import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
   lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
-  addRefusal,clearRefused,doorsByPerson,keepRefused,listIdentity,marksWithRefused,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
+  addRefusal,clearRefused,doorsByPerson,keepRefused,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyRefused,rekeyed,seenBy,splitOffRoster,
   type HeldList,type RefusalNote,type RefusedMarks,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkVisit,
 } from '../lib/walk';
@@ -323,7 +323,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const entryRef=useRef<HeldList|null>(null);const timer=useRef<ReturnType<typeof setTimeout>>(undefined);   // the shelf entry of the list on screen
   const saving=useRef<{base:WalkListPayload;job:Promise<string>}|null>(null);const resume=useRef<(()=>void)|null>(null);
   const gen=useRef(0);const genAbort=useRef<AbortController|null>(null);const matchJobs=useRef(latestJob()).current;const refocusSave=useRef(false);
-  const main=useRef<HTMLElement>(null);const saveButton=useRef<HTMLButtonElement>(null);const fileInput=useRef<HTMLInputElement>(null);const search=useRef<HTMLDivElement>(null);
+  const main=useRef<HTMLElement>(null);const refusedNote=useRef<HTMLDivElement>(null);const saveButton=useRef<HTMLButtonElement>(null);const fileInput=useRef<HTMLInputElement>(null);const search=useRef<HTMLDivElement>(null);
 
   // ---- saved lists ---------------------------------------------------------------------------------------------------------------
   const refreshLists=useCallback(async()=>{
@@ -611,7 +611,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const saved=!!payload?.list.key;
   const leftOut=leftOutNote(skipped);
   const total=payload?.totals?.stops||payload?.runs.length||0;
-  return <div className="screen walk-screen">
+  return <div className={cx('screen walk-screen',refusal&&'has-refusal')}>
     <PageHeader meta={meta} active="walk"/>
     <main className="walk-body">
       <aside className="walk-rail" aria-label="Walk list builder">
@@ -638,7 +638,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         {note&&<p className="walk-note" role="alert">{note}</p>}
         {earlier&&<div className="walk-note" role="alert"><p>Results from earlier are not saved yet. {earlier.message}</p>
           <p><button type="button" className="walk-link" onClick={()=>void retryEarlier()}>Retry</button></p></div>}
-        {refusal&&<div className="walk-note walk-refused" role="alert"><p>{refusalHeadline(refusal)}</p>
+        {refusal&&<div className="walk-note walk-refused" role="alert" tabIndex={-1} ref={refusedNote}><p>{refusalHeadline(refusal)}</p>
           {refusal.lists.map(l=><p key={l.title}><strong>{l.title}:</strong> {Object.values(l.doors).join(', ')}</p>)}
           {refusal.reasons.length>0&&<p>{refusal.reasons.join(' ')}</p>}
           <p><button type="button" className="walk-link" onClick={()=>{refusalNote=null;showRefusal(null);}}>Dismiss</button></p></div>}
@@ -704,5 +704,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         </div>}
       </section>
     </main>
+    {refusal&&<div className="walk-refused-bar" role="region" aria-label="Results not saved">
+      <span><span aria-hidden="true">!</span> {refusalBarText(refusal)}</span>
+      <button type="button" onClick={()=>{const el=refusedNote.current;if(!el)return;el.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'});el.focus({preventScroll:true});}}>View</button></div>}
   </div>;
 }

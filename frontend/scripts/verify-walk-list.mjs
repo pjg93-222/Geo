@@ -546,9 +546,46 @@ try{
       assert.deepEqual(cards.bad,[],'every name and result button is in view, below its name, buttons 44 px tall');
       assert.equal(await page.getByRole('table').count(),shown.runs.length,'each stop is still a table to a screen reader');
       assert.equal(await groups().count(),flat(shown).length,'each voter still has its named result group');
+      const first=page.waitForResponse(r=>isPost(r,'/api/v3/walk/dispositions'));
       await choose(groups().first(),'NH');                                 // a tap records the result without any sideways scrolling
+      assert.equal((await first).status(),200,'the first result was saved before any refusal');
       await shot('mobile-list.png');
-      return `At ${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept`;
+      // a refusal far above the cards: a bar fixed to the bottom of the screen says so, points at the note, and stays clear of the last card
+      const isSave=url=>url.pathname==='/api/v3/walk/dispositions';
+      const refuse=route=>route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Some of those voters are not on this list.'})});
+      const note=page.locator('.walk-refused'),bar=page.getByRole('region',{name:'Results not saved',exact:true});
+      const inView=r=>r.top>=0&&r.bottom<=innerHeight+0.5&&r.width>0;
+      await page.route(isSave,refuse);
+      try{
+        await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));
+        await choose(groups().last(),'O');
+        await note.waitFor();
+        await bar.waitFor();
+        assert.equal(text(await bar.innerText()),'! 1 result not saved View','the bar names the count of the note');
+        assert.equal(await bar.getAttribute('aria-live'),null);assert.equal(await bar.evaluate(el=>el.closest('[role=alert],[role=status],[aria-live]')),null,'the bar is not a live region');
+        await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));
+        const fixed=await bar.evaluate(el=>{const r=el.getBoundingClientRect(),b=el.querySelector('button').getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,view:innerHeight,position:getComputedStyle(el).position,button:b.height};});
+        assert.ok(fixed.position==='fixed'&&fixed.bottom<=fixed.view+0.5&&fixed.top>=0,'the bar is fixed within the screen');
+        assert.ok(fixed.button>=44,'the View button is 44 px tall');
+        const clear=await groups().last().evaluate((g,barTop)=>{const r=g.getBoundingClientRect();return {bottom:r.bottom,barTop,top:r.top};},fixed.top);
+        assert.ok(clear.top>=0&&clear.bottom<=fixed.top-0.5,`the bar covers the last card's result buttons (buttons end ${Math.round(clear.bottom)}, bar starts ${Math.round(fixed.top)})`);
+        assert.equal(await note.evaluate(el=>{const r=el.getBoundingClientRect();return r.bottom>0&&r.top<innerHeight;}),false,'the note is out of sight at the bottom of the page');
+        await bar.getByRole('button',{name:'View',exact:true}).click();
+        await until(()=>note.evaluate((el)=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&document.activeElement===el;}),'the note to come into view with focus');
+        await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));
+        await page.setViewportSize(DESKTOP);                                 // wide again with the note up: no bar
+        await note.waitFor();
+        assert.equal(await page.locator('.walk-refused-bar').evaluate(el=>getComputedStyle(el).display),'none','no bar on a desktop');
+        assert.equal(await bar.count(),0,'the hidden bar is not offered to a screen reader');
+        await page.setViewportSize(PHONE);
+        await bar.waitFor();
+        await note.scrollIntoViewIfNeeded();
+        await note.getByRole('button',{name:'Dismiss',exact:true}).click();
+        await note.waitFor({state:'detached'});
+        await bar.waitFor({state:'detached'});
+        assert.equal(await page.locator('.walk-refused-bar').count(),0,'dismissing the note removes the bar');
+      }finally{await page.unroute(isSave,refuse);}
+      return `At ${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept; a refusal shows a bottom bar ("! 1 result not saved") clear of the last card, View brings the note into view with focus, Dismiss removes both, a desktop shows no bar`;
     }finally{await page.setViewportSize(DESKTOP);}
   });
 

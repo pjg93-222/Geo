@@ -483,6 +483,9 @@ export function refusalHeadline(note:RefusalNote|null):string{
   return `The server refused ${countText(n,'result')}, so ${n===1?'it was':'they were'} not saved. Record ${n===1?'that door':'these doors'} again:`;
 }
 
+/** The phone bar that points at the note: "1 result not saved". */
+export const refusalBarText=(note:RefusalNote|null):string=>`${countText(refusalCount(note),'result')} not saved`;
+
 // A mark set on screen wins over the result on file; a cleared mark leaves the cell empty until the screen has asked what is on file. A mark
 // the server refused keeps its code, flagged: the CSV is the walker's copy of what was seen at the door.
 const resultCode=(v:WalkVoter,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>):string=>
