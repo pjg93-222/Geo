@@ -2,7 +2,7 @@
 
 ## Status
 
-- **`main` is fast-forwarded to `fc671d4`** (plus this handoff update). Commits, in order:
+- **`main` is fast-forwarded to `fde78d4`** (plus this handoff update). Commits, in order:
   - `e5bf03e` feat(walk): add Walk list tab for canvass walk lists
   - `7f80580` fix(walk): remove time estimates from walk-list output
   - `9df1158` docs(walk): add walk list handoff for 2026-10-02
@@ -12,9 +12,11 @@
   - `a6f68cf` docs(walk): update handoff for b672820 and the live restart
   - `290eddf` fix(walk): show a bottom bar on phones while results are not saved
   - `fc671d4` fix(walk): drop the unused minutes figure from list totals
-- Work branch: `claude/walk-list`. No remote; nothing pushed.
-- Live app on 127.0.0.1:8767 was restarted on 2026-10-03 at 17:07 on `fc671d4` (PID 55544) and serves the **Walk list** tab (8 tabs total). It runs the backend that accepts `fingerprint` on save and no longer sends `minutes`. Fingerprints changed with the `minutes` removal, so a tab opened before this restart shows the "voter data was updated" note once on its next save; reloading avoids it. (Earlier restart: 2026-10-02 22:13 on `b672820`.)
-- **`fingerprint` is now required on a list save** (`walk_views.py`, `api/walk.ts`, `WalkScreen.tsx`, tests, `verify-walk-list.mjs`, this file). **A server restart is needed for it to take effect** on the live app (8767, still on `fc671d4`); tabs open before the restart keep working, since the page always sent it. The rest is committed. See Open items 1 for what each fix commit changed.
+  - `0650b33` docs(walk): record the 2026-10-03 live restart on fc671d4
+  - `fde78d4` fix(walk): require the shown list's fingerprint on save
+- Work branch: `claude/walk-list`. No remote; nothing pushed. Everything is committed. See Open items 1 for what each fix commit changed.
+- Live app on 127.0.0.1:8767 was restarted on 2026-10-03 at 17:40 on `fde78d4` (PID 82300) and serves the **Walk list** tab (8 tabs total). It requires `fingerprint` on a plain list save and no longer sends `minutes`. Tabs opened since the 2026-10-02 22:13 restart already send the fingerprint; an older tab gets "This page is out of date. Reload it, then save the list again." with its marks kept and flagged "not saved".
+- The previous live server (PID 55544, started 17:07 on `fc671d4`) had already exited before the 17:40 restart (`Stop-TerrierServer.ps1`: "Recorded process is absent"), so the app may have been down for part of that window. Cause not investigated. Earlier restarts: 2026-10-03 17:07 on `fc671d4`; 2026-10-02 22:13 on `b672820`.
 
 ## What the feature does
 
