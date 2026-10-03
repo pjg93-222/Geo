@@ -59,7 +59,6 @@ PICK_MIN = 0.80             # readings this close are offered as a choice when t
 NEAR_EQUAL = 0.05           # a street within this of the best reading is as likely as it
 MAX_SUGGESTIONS = 3
 LISTS_SHOWN = 50
-MINUTES_PER_DOOR, METRES_PER_MINUTE = 2, 80
 CODES = ('S', 'U', 'O', 'NH', 'MV')
 AREA = r'[0-9A-Za-z._-]{1,24}'
 QUERY_KEYS = {'streets', 'ss', 'sh', 'precinct'}
@@ -426,8 +425,7 @@ def plan_payload(store, rows, query):
         'list': {'key': None, 'title': '', 'kind': 'standard', 'created_at': None}, 'query': query,
         'window': dict(N.WINDOW),
         'totals': {'streets': len({run['street_id'] for run in runs}), 'stops': len(runs), 'doors': n_doors,
-                   'voters': len(rows), 'walk_m': plan.total_m,
-                   'minutes': n_doors * MINUTES_PER_DOOR + plan.total_m / METRES_PER_MINUTE},
+                   'voters': len(rows), 'walk_m': plan.total_m},
         'bbox': bounds(runs), 'runs': runs}
     keys = {row['person_id']: row['voter_key'] for row in rows}
     payload['fingerprint'] = fingerprint(payload, keys)

@@ -44,7 +44,7 @@ export interface WalkRun {
   approach: [number, number][];  // shortest path from the previous run's end ([] for stop 1)
   doors: WalkDoor[];
 }
-export interface WalkTotals { streets: number; stops: number; doors: number; voters: number; walk_m: number; minutes: number }
+export interface WalkTotals { streets: number; stops: number; doors: number; voters: number; walk_m: number }
 export interface WalkListMeta { key: string | null; title: string; kind: WalkListKind; created_at: string | null }
 export interface WalkWindow { primaries: string[]; generals: string[]; abs_rule: string }
 // Geographic overlay around the list (computed per response, never stored with saved lists).

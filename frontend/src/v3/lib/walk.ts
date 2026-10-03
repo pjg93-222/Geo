@@ -70,7 +70,7 @@ export function runHeader(run:WalkRun,total:number):string{
 }
 
 export function distanceText(meters:number):string{return `${(Math.round((Number.isFinite(meters)?Math.max(0,meters):0)/100)/10).toFixed(1)} km`;}
-/** "4 streets · 6 stops · 58 doors · 104 voters · 2.9 km". The list carries a `minutes` figure from the server; no walk-list output shows it. */
+/** "4 streets · 6 stops · 58 doors · 104 voters · 2.9 km". Lists saved before `minutes` was dropped still carry it; it is ignored. */
 export function totalsLine(t:WalkTotals):string{
   return [countText(t.streets,'street'),countText(t.stops,'stop'),countText(t.doors,'door'),countText(t.voters,'voter'),distanceText(t.walk_m)].join(DOT);
 }

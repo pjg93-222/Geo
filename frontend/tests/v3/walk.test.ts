@@ -23,7 +23,7 @@ const run = (over: Partial<WalkRun> = {}): WalkRun => ({
 const payload = (runs: WalkRun[]): WalkListPayload => ({
   schema: 'walk-list-1', generated_on: '2026-10-02', list: {key: null, title: 'Saturday', kind: 'standard', created_at: null}, query: {precinct: '02012'},
   window: {primaries: ['2014'], generals: ['2014'], abs_rule: 'Abs = mail ballots'},
-  totals: {streets: 1, stops: runs.length, doors: 1, voters: 1, walk_m: 410, minutes: 7}, bbox: [-104.81, 38.79, -104.79, 38.81], runs
+  totals: {streets: 1, stops: runs.length, doors: 1, voters: 1, walk_m: 410}, bbox: [-104.81, 38.79, -104.79, 38.81], runs
 });
 
 test('tallies: voted over eligible, a lone slash when nothing was eligible', () => {
@@ -59,11 +59,11 @@ test('run header: stop, house span and door count', () => {
 });
 
 test('totals line and distance: counts and kilometres, with no time estimate', () => {
-  // The totals still carry the server's `minutes`; the line leaves it out whatever it holds.
-  assert.equal(totalsLine({streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900, minutes: 160}), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km');
-  assert.equal(totalsLine({streets: 1, stops: 1, doors: 1, voters: 1, walk_m: 60, minutes: 2}), '1 street · 1 stop · 1 door · 1 voter · 0.1 km');
-  assert.equal(totalsLine({streets: 12, stops: 30, doors: 1200, voters: 1500, walk_m: 14000, minutes: 3000}), '12 streets · 30 stops · 1,200 doors · 1,500 voters · 14.0 km');
-  for (const minutes of [0, 2, 160, 3000, -3, NaN]) assert.equal(totalsLine({streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900, minutes}), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km', String(minutes));
+  assert.equal(totalsLine({streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900}), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km');
+  assert.equal(totalsLine({streets: 1, stops: 1, doors: 1, voters: 1, walk_m: 60}), '1 street · 1 stop · 1 door · 1 voter · 0.1 km');
+  assert.equal(totalsLine({streets: 12, stops: 30, doors: 1200, voters: 1500, walk_m: 14000}), '12 streets · 30 stops · 1,200 doors · 1,500 voters · 14.0 km');
+  // A list saved before `minutes` was dropped still carries it; the line ignores it and nothing rejects the extra field.
+  for (const minutes of [0, 2, 160, 3000, -3, NaN]) { const old = {streets: 4, stops: 6, doors: 58, voters: 104, walk_m: 2900, minutes}; assert.equal(totalsLine(old), '4 streets · 6 stops · 58 doors · 104 voters · 2.9 km', String(minutes)); }
   assert.ok(!('durationText' in walkLib), 'no walking-time formatter is left to call');
   assert.equal(distanceText(2850), '2.9 km'); assert.equal(distanceText(2849), '2.8 km'); assert.equal(distanceText(0), '0.0 km'); assert.equal(distanceText(1000), '1.0 km');
   assert.equal(distanceText(NaN), '0.0 km'); assert.equal(distanceText(-50), '0.0 km');
@@ -331,7 +331,7 @@ test('PDF: landscape letter, a header on every list page, (cont.) only after the
 });
 
 test('no time estimate in any output: totals line, run header, CSV and every PDF string have no minutes, hours or "about"', async () => {
-  // The totals carry the server's `minutes` (160 here); nothing the walker reads or prints may turn it into "about 2 h 40 min" or the like.
+  // A list saved earlier still carries the server's `minutes` (160 here); nothing the walker reads or prints may turn it into "about 2 h 40 min" or the like.
   const ESTIMATE = /\babout\s+\d|\b\d+\s*(?:h|hrs?|hours?|mins?|minutes?)\b|\bminutes?\b|\bmins?\b|\bhours?\b|\bestimated time\b|\bwalking time\b|\bETA\b/i;
   const ABOUT = /\babout\b/i;
   const totals = {streets: 1, stops: 2, doors: 2, voters: 2, walk_m: 2900, minutes: 160}, line = '1 street · 2 stops · 2 doors · 2 voters · 2.9 km';

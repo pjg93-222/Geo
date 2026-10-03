@@ -215,7 +215,7 @@ try{
     const summaries=await page.getByText(/\d+ streets? · \d+ stops? · \d+ doors? · \d+ voters?/).allInnerTexts();
     assert.ok(summaries.some(s=>s.includes(line)),`The summary line does not read "${line}"`);
     assert.equal(await tables().count(),listing.runs.length,'One panel per stop');
-    Object.assign(report.walk,{streets:t.streets,stops:t.stops,doors:t.doors,voters:t.voters,walk_m:t.walk_m,minutes:t.minutes});
+    Object.assign(report.walk,{streets:t.streets,stops:t.stops,doors:t.doors,voters:t.voters,walk_m:t.walk_m});
     return `Generate: "${line}", one panel per stop (${listing.runs.length})`;
   });
   await step('columns and order',async()=>{

@@ -33,7 +33,7 @@ PRECINCT_W, PRECINCT_E, PRECINCT_F = '5200021301', '5200021302', '5200021417'
 NO_STORE = 'no-store, private'
 
 LIST_KEYS = {'schema', 'generated_on', 'list', 'query', 'window', 'totals', 'bbox', 'runs', 'fingerprint', 'context'}   # context: walk_context.py
-TOTAL_KEYS = {'streets', 'stops', 'doors', 'voters', 'walk_m', 'minutes'}
+TOTAL_KEYS = {'streets', 'stops', 'doors', 'voters', 'walk_m'}
 RUN_KEYS = {'stop', 'street_id', 'street', 'side', 'precinct', 'from_house', 'to_house', 'walk_m', 'lr', 'path',
             'approach', 'doors'}
 DOOR_KEYS = {'seq', 'house', 'unit', 'placed_by', 'lon', 'lat', 'voters'}
@@ -589,6 +589,7 @@ class WalkListTests(WalkCase):
         self.assertEqual(set(payload['list']), {'key', 'title', 'kind', 'created_at'})
         self.assertEqual(payload['window'], {'primaries': list(N.PRIMARIES), 'generals': list(N.GENERALS), 'abs_rule': 'Abs = mail ballots'})
         self.assertEqual(set(payload['totals']), TOTAL_KEYS)
+        self.assertNotIn('minutes', payload['totals'])               # no time estimate anywhere
         self.assertEqual(len(payload['bbox']), 4)
         for run in payload['runs']:
             self.assertEqual(set(run), RUN_KEYS)
@@ -618,7 +619,7 @@ class WalkListTests(WalkCase):
         self.assertEqual((totals['streets'], totals['stops'], totals['doors'], totals['voters']), (2, len(runs), len(doors), len(voters)))
         self.assertEqual((len(doors), len(voters)), (19, 26))
         self.assertGreater(totals['walk_m'], sum(run['walk_m'] for run in runs))       # the walks between the runs come on top
-        self.assertEqual(totals['minutes'], totals['doors'] * 2 + totals['walk_m'] / 80)
+        self.assertNotIn('minutes', totals)
         west, south, east, north = payload['bbox']
         for lon, lat in [(d['lon'], d['lat']) for d in doors] + [p for run in runs for p in run['path'] + run['approach']]:
             self.assertTrue(west <= lon <= east and south <= lat <= north, (lon, lat, payload['bbox']))
@@ -904,6 +905,8 @@ class WalkSavedListTests(WalkCase):
         self.assertEqual((row.title, row.kind, row.parent, row.query), ('Cedar and Juniper', 'standard', None, {'streets': self.cedar_juniper()}))
         self.assertEqual(row.source_sha256, self.stores.source_sha256)
         self.assertEqual(self.json('/api/v3/walk/lists/' + saved['list']['key']), saved)
+        self.assertEqual(set(saved['totals']), TOTAL_KEYS)           # the saved list and the row's frozen payload carry no `minutes` either
+        self.assertNotIn('minutes', row.payload['totals'])
         self.assertTrue(saved['list']['key'] in {l['key'] for l in self.json('/api/v3/walk/lists')['lists']})
 
     def test_map_context_goes_out_with_each_list_and_is_never_stored(self):
@@ -1191,6 +1194,8 @@ class WalkSavedListTests(WalkCase):
     def check_payload(self, payload):
         self.assertEqual(set(payload), LIST_KEYS)
         self.assertEqual(set(payload['list']), {'key', 'title', 'kind', 'created_at'})
+        self.assertEqual(set(payload['totals']), TOTAL_KEYS)
+        self.assertNotIn('minutes', payload['totals'])
         for run in payload['runs']:
             self.assertEqual(set(run), RUN_KEYS)
             for door in run['doors']:
