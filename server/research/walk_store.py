@@ -369,10 +369,11 @@ class Store:
             'SELECT COUNT(*) FROM person p JOIN stop s ON s.id = p.stop_id WHERE p.street_id=?' + PARITY[side] + clause,
             [street, *args]).fetchone()[0] for street, side in picks)
 
-    def voters_by_id(self, ids):
+    def voters_by_key(self, keys):
+        """Rows of the people with these voter keys (.walk-salt HMACs, the same across rebuilds; person ids need not be)."""
         rows = []
-        for chunk in _chunks(sorted(set(ids))):
-            rows.extend(self.conn.execute(VOTER_SQL + ' WHERE p.person_id IN (%s)' % ','.join('?' * len(chunk)), chunk))
+        for chunk in _chunks(sorted(set(keys))):
+            rows.extend(self.conn.execute(VOTER_SQL + ' WHERE p.voter_key IN (%s)' % ','.join('?' * len(chunk)), chunk))
         return rows
 
     def contacts(self, ids):

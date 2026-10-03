@@ -16,6 +16,7 @@ import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
   lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
   addRefusal,clearRefused,doorsByPerson,keepRefused,listIdentity,marksWithRefused,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
+  LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyRefused,rekeyed,seenBy,splitOffRoster,
   type HeldList,type RefusalNote,type RefusedMarks,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkVisit,
 } from '../lib/walk';
 import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
@@ -44,18 +45,20 @@ const refusedMarks:RefusedMarks=new Map();
 let refusalNote:RefusalNote|null=null;
 const identities=(entry:HeldList)=>[...new Set([listIdentity(entry.meta?.key,entry.query),listIdentity(null,entry.query)])];
 /** Results the server refused: kept as the walker's marks on their list, and added to the note with their doors. Answers with the note. */
-function holdRefused(entry:HeldList,refused:Map<string,WalkVisit>,why:string):RefusalNote{
+function holdRefused(entry:HeldList,refused:Map<string,WalkVisit>,why:string,local=false):RefusalNote{
   keepRefused(refusedMarks,identities(entry)[0],refused);
-  return refusalNote=addRefusal(refusalNote,entry.meta?.title||entry.title,refused,entry.where,why);
+  return refusalNote=addRefusal(refusalNote,entry.meta?.title||entry.title,refused,entry.where,why,local);
 }
 /** Saves the list an entry belongs to, once. The answer stays on the entry, so a second ask (or a screen that comes later) shares it. */
 function saveEntry(entry:HeldList,title?:string):Promise<WalkListMeta>{
   if(entry.meta?.key)return Promise.resolve(entry.meta);
   if(entry.saving)return entry.saving;
   if(title?.trim())entry.title=title.trim();
-  const job:Promise<WalkListMeta>=saveWalkList(entry.title,entry.query).then(saved=>{
+  const job:Promise<WalkListMeta>=saveWalkList(entry.title,entry.query,entry.fingerprint).then(saved=>{
     if(!saved.list?.key)throw new Error('The list could not be saved.');
-    return entry.meta=saved.list;
+    const list=adoptSaved(entry,saved);   // when the voter data changed since the list was shown, the list saved is the new one: the entry keeps it
+    for(const id of identities(entry))rekeyRefused(refusedMarks,id,entry.moved);   // and a voter whose id changed keeps a refused mark
+    return list;
   }).finally(()=>{if(entry.saving===job)entry.saving=null;});
   return entry.saving=job;
 }
@@ -63,13 +66,17 @@ function saveEntry(entry:HeldList,title?:string):Promise<WalkListMeta>{
 // will not save): those results are refused and not sent again, so they cannot hold up the screen. Anything else (offline, an HTML page, a
 // conflict while the store is swapped, a server fault) is a failure to retry.
 const refusing=<T,>(job:Promise<T>,step:'list'|'results'):Promise<T>=>job.catch((e:unknown)=>{throw refusalOf(e,step)??e;});
-/** Posts one request of an entry's results (one day of visits), saving the list first when it is not saved yet. Answers with the list's key. */
-async function sendBatch(entry:HeldList,batch:Map<string,WalkVisit>,save:()=>Promise<string>=()=>saveEntry(entry).then(m=>String(m.key))):Promise<string>{
+/** Posts one request of an entry's results (one day of visits), saving the list first when it is not saved yet. Answers with the list's key and
+ *  the results saved, by the person ids of the saved list. When the list saved was built again from changed voter data, a voter whose id changed
+ *  is sent under the new id; results for voters it does not have are refused here (`offList`) and never sent. */
+async function sendBatch(entry:HeldList,visits:Map<string,WalkVisit>,offList:(refused:Map<string,WalkVisit>,why:string)=>void,
+  save:()=>Promise<string>=()=>saveEntry(entry).then(m=>String(m.key))):Promise<{list:string;sent:Map<string,WalkVisit>}>{
   const list=await refusing(save(),'list');
-  const {on,entries}=visitRequest(batch);
-  await refusing(saveWalkDispositions(list,on,entries),'results');
+  const {send:batch,off}=splitOffRoster(entry.roster,visits,entry.moved);
+  if(off.size)offList(off,OFF_LIST);
+  if(batch.size){const {on,entries}=visitRequest(batch);await refusing(saveWalkDispositions(list,on,entries),'results');}
   for(const id of identities(entry))clearRefused(refusedMarks,id,batch.keys());   // marked again and saved: no longer refused
-  return list;
+  return {list,sent:batch};
 }
 
 // --- area: Senate, House and Precinct, each optional; a parent change resets what lies below it ------------------------------
@@ -136,6 +143,7 @@ function StreetSearch({area,onAdd}:{area:Area;onAdd:(s:WalkStreet)=>void}){
         else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();setOpen(true);setActive(i=>Math.max(0,Math.min(hits.length-1,i+(e.key==='ArrowDown'?1:-1))));}
         else if(e.key==='Enter'&&listed&&hits[active]){e.preventDefault();pick(hits[active]);}
       }}/>
+    {open&&text.length===1&&<div className="walk-find-pop walk-find-empty" role="status">Type at least 2 letters</div>}
     {show&&!hits.length&&<div className="walk-find-pop walk-find-empty" role="status">{busy?'Searching…':error||'No match'}</div>}
     {listed&&<div id="walk-street-results" className="walk-find-pop" role="listbox" aria-label="Streets">
       {hits.map((s,i)=><button key={s.id} id={`walk-street-hit-${i}`} type="button" role="option" aria-selected={i===active} onMouseEnter={()=>setActive(i)} onMouseDown={e=>e.preventDefault()} onClick={()=>pick(s)}>
@@ -208,11 +216,11 @@ function UploadReport(p:{upload:Upload;picks:WalkPick[];onChoose:(i:number,c:Wal
 // A button shows a mark on this list: one set on this screen, or one recorded on this list before, which comes back selected. A result on
 // file from another list is history: it is not a mark, and choosing a code records a new visit on this list, the same code as the history
 // included. Choosing the code that is marked takes the mark back.
-const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:WalkCode|null|undefined;unsaved:boolean;onMark:(id:string,code:WalkCode|null)=>void}){
+const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:WalkCode|null|undefined;unsaved:boolean;note?:string;onMark:(id:string,code:WalkCode|null)=>void}){
   const refs=useRef<(HTMLButtonElement|null)[]>([]);
   const tab=p.value?WALK_CODES.indexOf(p.value):0;
   const go=(i:number)=>{const n=(i+WALK_CODES.length)%WALK_CODES.length;refs.current[n]?.focus();p.onMark(p.id,WALK_CODES[n]);};
-  return <div className="walk-res" role="radiogroup" aria-label={`Result for ${p.name}`}>
+  return <div className="walk-res" role="radiogroup" aria-label={`Result for ${p.name}`} aria-describedby={p.note}>
     {WALK_CODES.map((c,i)=><button key={c} ref={el=>{refs.current[i]=el;}} type="button" role="radio" aria-checked={p.value===c} aria-label={`${CODE_LABEL[c]} (${c})`} title={CODE_LABEL[c]} tabIndex={i===tab?0:-1}
       onClick={()=>p.onMark(p.id,markAfterClick(p.value,c,p.unsaved))}
       onKeyDown={e=>{
@@ -226,16 +234,19 @@ const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:Wal
 
 const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean;value:WalkCode|null|undefined;unsaved:boolean;last:WalkLast|null;onMark:(id:string,code:WalkCode|null)=>void}){
   const {v,door,first}=p;
-  return <tr className={first?undefined:'cont'}>
-    <td className="walk-addr">{first
+  const note=p.unsaved?`walk-unsaved-${door.seq}-${v.person_id}`:undefined;
+  return <tr role="row" className={first?undefined:'cont'}>
+    <td role="cell" className="walk-addr">{first
       ?<>{doorAddress(door)}{door.placed_by==='interpolated'&&<span title="Placed by house number"><span aria-hidden="true"> ≈</span><span className="walk-sr">, placed by house number</span></span>}</>
       :<span className="walk-sr">{doorAddress(door)}</span>}</td>
-    <td className="walk-name" title={v.name}>{v.name}</td>
-    <td>{phoneText(v.phone)}</td>
-    <td>{tallyText(v.pri)}</td><td>{tallyText(v.gen)}</td><td>{tallyText(v.abs)}</td>
-    <td>{v.party}</td><td>{v.age??''}</td><td>{v.gender}</td><td>{regDate(v.reg_date)}</td>
-    <td className={cx('walk-res-cell',p.unsaved&&'is-unsaved')}><ResultRadios id={v.person_id} name={v.name} value={p.value} unsaved={p.unsaved} onMark={p.onMark}/>
-      {p.unsaved&&<span className="walk-unsaved" title="The server refused this result. Choose it again to send it again.">{unsavedText(p.value)}</span>}
+    <td role="cell" className="walk-name" title={v.name}>{v.name}</td>
+    <td role="cell" className="walk-detail">{phoneText(v.phone)}</td>
+    <td role="cell" className="walk-detail" data-label="Pri">{tallyText(v.pri)}</td><td role="cell" className="walk-detail" data-label="Gen">{tallyText(v.gen)}</td>
+    <td role="cell" className="walk-detail" data-label="Abs">{tallyText(v.abs)}</td><td role="cell" className="walk-detail" data-label="Party">{v.party}</td>
+    <td role="cell" className="walk-detail" data-label="Age">{v.age??''}</td><td role="cell" className="walk-detail" data-label="Gender">{v.gender}</td>
+    <td role="cell" className="walk-detail" data-label="Reg.">{regDate(v.reg_date)}</td>
+    <td role="cell" className={cx('walk-res-cell',p.unsaved&&'is-unsaved')}><ResultRadios id={v.person_id} name={v.name} value={p.value} unsaved={p.unsaved} note={note} onMark={p.onMark}/>
+      {p.unsaved&&<span id={note} className="walk-unsaved" title="The server refused this result. Choose it again to send it again.">{unsavedText(p.value)}</span>}
       {p.last&&<span className={cx('walk-last',p.value!==undefined&&'is-marked')} title={`Last result: ${lastLabel(p.last)}`}>Last: {lastText(p.last)}</span>}</td>
   </tr>;
 });
@@ -250,10 +261,10 @@ const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkRe
       <span className="walk-run-meta">{runHeader(run,p.total)}</span>
     </header>
     <div className="walk-table-wrap" role="region" tabIndex={0} aria-label={`Stop ${run.stop}, ${title}: voters`}>
-      <table className="walk-table">
+      <table className="walk-table" role="table">
         <colgroup>{COLUMNS.map(h=><col key={h}/>)}</colgroup>
-        <thead><tr>{COLUMNS.map(h=><th key={h} scope="col">{h}</th>)}</tr></thead>
-        <tbody>{run.doors.flatMap(door=>door.voters.map((v,i)=>   // a voter with a mark, or a cleared mark awaiting the server, keeps the room for the history line but does not show it
+        <thead role="rowgroup"><tr role="row">{COLUMNS.map(h=><th key={h} scope="col" role="columnheader">{h}</th>)}</tr></thead>
+        <tbody role="rowgroup">{run.doors.flatMap(door=>door.voters.map((v,i)=>   // a voter with a mark, or a cleared mark awaiting the server, keeps the room for the history line but does not show it
           <VoterRow key={`${door.seq}-${v.person_id}`} v={v} door={door} first={i===0} value={Object.hasOwn(p.results,v.person_id)?p.results[v.person_id]:undefined} unsaved={p.unsaved.has(v.person_id)} last={lastOf(v,p.history)} onMark={p.onMark}/>))}</tbody>
       </table>
     </div>
@@ -308,6 +319,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [earlier,setEarlier]=useState<{message:string}|null>(null);   // results from before the screen was left that could not be saved
   const [refusal,showRefusal]=useState<RefusalNote|null>(()=>refusalNote);   // results the server refused: told until dismissed, whichever list comes on screen meanwhile
   const [unsaved,setUnsaved]=useState<ReadonlySet<string>>(()=>new Set());   // marks on screen the server refused: kept and flagged until marked again and saved
+  const [replaced,setReplaced]=useState(false);   // the list saved is not the one shown (the voter data changed in between), and is shown now
   const entryRef=useRef<HeldList|null>(null);const timer=useRef<ReturnType<typeof setTimeout>>(undefined);   // the shelf entry of the list on screen
   const saving=useRef<{base:WalkListPayload;job:Promise<string>}|null>(null);const resume=useRef<(()=>void)|null>(null);
   const gen=useRef(0);const genAbort=useRef<AbortController|null>(null);const matchJobs=useRef(latestJob()).current;const refocusSave=useRef(false);
@@ -326,7 +338,14 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(saving.current?.base===base)return saving.current.job;   // only this list's own save: another list's key would take these results
     const job:Promise<string>=saveEntry(entry,title).then(list=>{
       const key=String(list.key);
-      if(payloadRef.current===base){const next={...base,list};payloadRef.current=next;setPayload(next);setListKey(key);}
+      if(payloadRef.current===base){
+        const next=entry.replaced??{...base,list},moved=entry.moved;   // marks follow a voter whose id changed; the rest are refused when sent
+        payloadRef.current=next;setPayload(next);setListKey(key);
+        if(entry.replaced){
+          setResults(r=>rekeyed(r,moved));setHistory(h=>rekeyed(h,moved));setUnsaved(u=>moved?.size?new Set([...u].map(id=>moved.get(id)??id)):u);
+          setReplaced(true);setAnnounce(LIST_REPLACED);
+        }
+      }
       void refreshLists();
       return key;
     }).finally(()=>{if(saving.current?.job===job)saving.current=null;});
@@ -349,8 +368,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   },[]);
   // Results the server refused stay the walker's marks: flagged Not saved on screen and in the CSV, named in the note, and sent again only when
   // the walker marks them again. Nothing is taken off the screen.
-  const refuse=useCallback((entry:HeldList,refused:Map<string,WalkVisit>,why:string)=>{
-    showRefusal(holdRefused(entry,refused,why));
+  const refuse=useCallback((entry:HeldList,refused:Map<string,WalkVisit>,why:string,local=false)=>{
+    showRefusal(holdRefused(entry,refused,why,local));
     if(entryRef.current===entry)setUnsaved(u=>new Set([...u,...refused.keys()]));
   },[]);
 
@@ -365,8 +384,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       ready:()=>true,
       send:async batch=>{
         const shown=entryRef.current===entry;   // the list on screen takes its key into the screen; one that was left saves quietly
-        const key=await sendBatch(entry,batch,shown?()=>ensureSaved():undefined);
-        if(entryRef.current===entry)setUnsaved(u=>[...batch.keys()].some(id=>u.has(id))?new Set([...u].filter(id=>!batch.has(id))):u);   // saved now: no longer flagged
+        const {list:key,sent}=await sendBatch(entry,batch,(r,why)=>refuse(entry,r,why,true),shown?()=>ensureSaved():undefined);
+        if(entryRef.current===entry)setUnsaved(u=>[...sent.keys()].some(id=>u.has(id))?new Set([...u].filter(id=>!sent.has(id))):u);   // saved now: no longer flagged
         if(shown&&[...batch.values()].some(v=>v.code===null))void reconcile(key);
       },
       report:(state,message)=>{
@@ -391,8 +410,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     for(const entry of others){
       let why='';
       // a failure blocks with Retry; a refusal is only told: those results are never sent again, so there is nothing to wait for
-      const ok=await flushList(entry,{ready:()=>true,send:batch=>sendBatch(entry,batch),report:(state,text)=>{if(state==='error')why=text??'';},
-        refuse:(r,text)=>{refused=true;showRefusal(holdRefused(entry,r,text));}});
+      const held=(local:boolean)=>(r:Map<string,WalkVisit>,text:string)=>{refused=true;showRefusal(holdRefused(entry,r,text,local));};
+      const ok=await flushList(entry,{ready:()=>true,send:batch=>sendBatch(entry,batch,held(true)),report:(state,text)=>{if(state==='error')why=text??'';},refuse:held(false)});
       if(!ok)message??=why||'The results could not be saved.';
     }
     setEarlier(message===null?null:{message});
@@ -404,8 +423,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const show=useCallback((p:WalkListPayload,adopt:boolean)=>{
     // results recorded on this list come back selected, and so do the walker's marks the server refused (flagged); the rest is history
     const marks=marksWithRefused(p,refusedMarks,listIdentity(p.list?.key,p.query??{}));
-    payloadRef.current=p;setPayload(p);setResults(marks.results);setUnsaved(marks.unsaved);setHistory({});clearTimeout(timer.current);
-    entryRef.current=outbox.open({meta:p.list?.key?p.list:null,title:defaultListTitle(p),query:p.query??{},where:doorsByPerson(p)});
+    payloadRef.current=p;setPayload(p);setResults(marks.results);setUnsaved(marks.unsaved);setHistory({});setReplaced(false);clearTimeout(timer.current);
+    entryRef.current=outbox.open({meta:p.list?.key?p.list:null,title:defaultListTitle(p),query:p.query??{},where:doorsByPerson(p),seen:seenBy(p),fingerprint:p.fingerprint});
     setSaveState('idle');setSaveError('');setSaveOpen(false);setActionNote(null);setListKey(p.list?.key??'');
     const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
     const from=adopt?pickerOf(p):null;   // a re-knock list (either query shape) and a list with no picker settings leave the picker as it is
@@ -418,7 +437,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }
     setAnnounce(`Walk list ready. ${totalsLine(p.totals)}.`);
   },[]);
-  const load=useCallback(async(job:(signal:AbortSignal)=>Promise<WalkListPayload>,done:(p:WalkListPayload)=>void,opts:{fail?:()=>void;say?:(message:string)=>void}={}):Promise<void>=>{
+  const load=useCallback(async<T extends WalkListPayload,>(job:(signal:AbortSignal)=>Promise<T>,done:(p:T)=>void,opts:{fail?:()=>void;say?:(message:string)=>void}={}):Promise<void>=>{
     resume.current=null;
     if(!(await flush())){setNote('Some results are not saved yet. Use Retry beside the list actions, then try again.');return;}
     if(!(await settleEarlier())){   // results from before the screen was left go first; Retry under the note builds the list once they are saved
@@ -463,7 +482,10 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const p=payloadRef.current;
     if(!p?.list.key){setActionNote({text:'Save this list first. Then record results and use Not home again to list the doors where nobody answered.',alert:false});return;}
     const key=p.list.key,title=`Not home again · ${p.list.title}`.slice(0,120);setActionNote(null);
-    void load(sig=>reknockWalkList(title,key,sig),q=>{show(q,false);void refreshLists();},{say:text=>setActionNote({text,alert:true})});
+    void load(sig=>reknockWalkList(title,key,sig),q=>{
+      show(q,false);void refreshLists();
+      if(q.missing)setActionNote({text:missingText(q.missing),alert:false});   // voters marked Not home that the voter data no longer has
+    },{say:text=>setActionNote({text,alert:true})});
   }
   async function save(title:string){
     setBusy('save');setActionNote(null);
@@ -643,6 +665,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         :loadError?<div className="walk-empty is-error" role="alert"><h2>The walk list could not be built</h2><p>{loadError.message}</p><button type="button" className="walk-button" onClick={loadError.retry}>Retry</button></div>
         :payload?<>
           {saved&&<p className="walk-saved-line">{savedLine(payload,lists)}</p>}
+          {replaced&&<p className="walk-note" role="status">{LIST_REPLACED}</p>}
           <div className="walk-summary-row">
             <p className="walk-summary">{totalsLine(payload.totals)}</p>
             {payload.runs.length>0&&<div className="walk-seg"><Segmented variant="index" label="Map shading" items={[{id:'doors',label:'Doors'},{id:'party',label:'Party'}]} value={shade} onChange={setShade}/></div>}

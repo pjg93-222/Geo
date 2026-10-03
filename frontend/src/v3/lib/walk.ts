@@ -1,6 +1,6 @@
 // Walk list text rules: tallies, dates, phones, run headers, totals, result codes and the CSV in and out.
 // Pure, and only `import type` from other files, so node --test can load it directly (same constraint as format.ts).
-import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
+import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -203,6 +203,8 @@ export interface ResultOutbox<K,V>{
   holds(key:K):boolean;
   /** Forgets the waiting results; requests already sent count until they are answered. */
   clear():void;
+  /** Renames waiting results (old key -> new key), in their order; a request already sent keeps its keys. */
+  rekey(moved:ReadonlyMap<K,K>):void;
 }
 /** `group` splits the waiting results into requests: one request never holds results of two groups (here, two days of visits). */
 export function resultOutbox<K,V>(group?:(value:V)=>string):ResultOutbox<K,V>{
@@ -216,6 +218,7 @@ export function resultOutbox<K,V>(group?:(value:V)=>string):ResultOutbox<K,V>{
     unconfirmed:()=>waiting.size>0||sent.size>0,
     holds:key=>waiting.has(key)||[...sent].some(b=>b.has(key)),
     clear(){waiting.clear();},
+    rekey(moved){if(!moved.size)return;const all=[...waiting];waiting.clear();for(const [k,v] of all)waiting.set(moved.get(k)??k,v);},
   };
 }
 /**
@@ -317,13 +320,22 @@ export interface ListResults<K,V>{
   /** The latest flush of this list; the next one starts after it, so requests for one list never overlap and stay in order. */
   chain:Promise<boolean>;
   /** Where each voter of the list lives (doorsByPerson), to name the doors of results the server refuses. */
-  readonly where:Record<string,string>;
+  where:Record<string,string>;
+  /** The fingerprint of the list shown, sent when it is saved. */
+  readonly fingerprint?:string;
+  /** Each voter of the list shown as the walker saw them (seenBy), to find them again on a list built anew. */
+  readonly seen:Record<string,string>;
+  /** When the list saved is not the one shown (the voter data changed in between): that list, its voters, and the new person id of each
+   *  voter shown whose id changed but who is plainly on it (same door and name). Null otherwise. */
+  replaced:WalkSavedPayload|null;
+  roster:ReadonlySet<K>|null;
+  moved:ReadonlyMap<K,K>|null;
 }
 /** A list's results with the day of each visit: the form the walk screen keeps them in. */
 export type HeldList=ListResults<string,WalkVisit>;
 export interface ResultShelf<K,V>{
   /** A new, empty entry for a list that has come on screen. It joins the shelf when `keep` is called (the first result does). */
-  open(list:{meta:WalkListMeta|null;title:string;query:Record<string,string>;where?:Record<string,string>}):ListResults<K,V>;
+  open(list:{meta:WalkListMeta|null;title:string;query:Record<string,string>;where?:Record<string,string>;seen?:Record<string,string>;fingerprint?:string}):ListResults<K,V>;
   keep(entry:ListResults<K,V>):void;
   /** The entries that hold results the server has not confirmed. An entry that holds none leaves the shelf. */
   held():ListResults<K,V>[];
@@ -334,12 +346,62 @@ export function resultShelf<K,V>(group?:(value:V)=>string):ResultShelf<K,V>{
   const entries=new Set<ListResults<K,V>>();
   const held=():ListResults<K,V>[]=>{for(const e of entries)if(!e.box.unconfirmed())entries.delete(e);return [...entries];};
   return {
-    open:list=>({box:resultOutbox<K,V>(group),meta:list.meta,title:list.title,query:list.query,saving:null,chain:Promise.resolve(true),where:list.where??{}}),
+    open:list=>({box:resultOutbox<K,V>(group),meta:list.meta,title:list.title,query:list.query,saving:null,chain:Promise.resolve(true),where:list.where??{},
+      seen:list.seen??{},fingerprint:list.fingerprint,replaced:null,roster:null,moved:null}),
     keep:entry=>{entries.add(entry);},
     held,
     unconfirmed:()=>held().length>0,
   };
 }
+// --- a list saved after the voter data changed ------------------------------------------------------------------------------
+// Saving builds the list again. When the voter data changed since the list was shown, the server saves the list it builds now and says so
+// (`changed`): the page shows that list with a note, and results for voters it no longer has are refused here, kept as the walker's marks.
+export const LIST_REPLACED='The voter data was updated since this list was shown; showing the saved version.';
+export const OFF_LIST='The voter data was updated since this list was shown, and the saved list does not have these voters.';
+/** A name as two builds both spell it: no accents, case, punctuation or extra spaces. */
+const nameKey=(name:string):string=>name.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+/** Each voter of a list as the walker sees them: street, house, unit and name. */
+export function seenBy(payload:Pick<WalkListPayload,'runs'>):Record<string,string>{
+  const out:Record<string,string>={};
+  for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)out[v.person_id]=[run.street,door.house,door.unit,nameKey(v.name)].join('|');
+  return out;
+}
+/** The new person id of each voter shown whose id is not on the saved list, when one voter there is at the same door with the same name and
+ *  no other voter shown was. Two people alike at one door, or a voter who is not there, are left out: their results are not guessed. */
+export function movedIds(seen:Record<string,string>,saved:Pick<WalkListPayload,'runs'>):Map<string,string>{
+  const now=seenBy(saved),there=new Map<string,string[]>(),was=new Map<string,number>(),out=new Map<string,string>();
+  for(const [id,k] of Object.entries(now))there.set(k,[...there.get(k)??[],id]);
+  for(const k of Object.values(seen))was.set(k,(was.get(k)??0)+1);
+  for(const [id,k] of Object.entries(seen)){
+    const to=there.get(k);
+    if(!Object.hasOwn(now,id)&&to?.length===1&&was.get(k)===1&&!Object.hasOwn(seen,to[0]))out.set(id,to[0]);
+  }
+  return out;
+}
+/** Takes the answer to saving an entry's list: its details and, when it is not the list shown, that list, its voters, and the voters shown whose
+ *  person id changed (movedIds), whose waiting results now carry the new id. Answers with the details. */
+export function adoptSaved<V>(entry:ListResults<string,V>,saved:WalkSavedPayload):WalkListMeta{
+  if(saved.changed){
+    entry.replaced=saved;entry.roster=new Set(Object.keys(historyOf(saved)));entry.where={...doorsByPerson(saved),...entry.where};
+    entry.moved=movedIds(entry.seen,saved);entry.box.rekey(entry.moved);
+  }
+  return entry.meta=saved.list;
+}
+/** `record` with its keys renamed (old -> new); `record` itself when nothing moves. */
+export function rekeyed<T>(record:Record<string,T>,moved:ReadonlyMap<string,string>|null):Record<string,T>{
+  if(!moved?.size||!Object.keys(record).some(k=>moved.has(k)))return record;
+  return Object.fromEntries(Object.entries(record).map(([k,v])=>[moved.get(k)??k,v]));
+}
+/** The results of a batch for voters on the saved list (`send`, under their id there), and those for voters it does not have (`off`). No roster: all are sent. */
+export function splitOffRoster<K,V>(roster:ReadonlySet<K>|null,batch:Map<K,V>,moved?:ReadonlyMap<K,K>|null):{send:Map<K,V>;off:Map<K,V>}{
+  if(!roster)return {send:batch,off:new Map()};
+  const send=new Map<K,V>(),off=new Map<K,V>();
+  for(const [k,v] of batch){const id=moved?.get(k)??k;if(roster.has(id))send.set(id,v);else off.set(k,v);}
+  return {send,off};
+}
+/** "2 voters marked Not home are no longer in the voter data." */
+export const missingText=(n:number):string=>`${countText(n,'voter')} marked Not home ${n===1?'is':'are'} no longer in the voter data.`;
+
 /** Sends the waiting results of one list after any flush of that list still open. False when a request fails (the results stay on the entry). */
 export function flushList<K,V>(entry:ListResults<K,V>,io:DrainIo<K,V>):Promise<boolean>{
   const run=():Promise<boolean>=>drainResults(entry.box,io);
@@ -382,6 +444,11 @@ export function keepRefused(store:RefusedMarks,list:string,refused:ReadonlyMap<s
   for(const [id,v] of refused)marks.set(id,v.code);
   if(marks.size)store.set(list,marks);
 }
+/** A list's refused marks renamed to the person ids of the list saved (movedIds). */
+export function rekeyRefused(store:RefusedMarks,list:string,moved:ReadonlyMap<string,string>|null):void{
+  const marks=store.get(list);
+  if(marks&&moved?.size)store.set(list,new Map([...marks].map(([k,v])=>[moved.get(k)??k,v])));
+}
 /** Voters whose result has now been saved: their marks are no longer refused. */
 export function clearRefused(store:RefusedMarks,list:string,ids:Iterable<string>):void{
   const marks=store.get(list);if(!marks)return;
@@ -397,20 +464,22 @@ export function marksWithRefused(payload:Pick<WalkListPayload,'runs'|'list'>,sto
 }
 /** A refused mark as the list and the CSV show it: "S (not saved)", or "cleared (not saved)" for a clearing the server refused. */
 export const unsavedText=(code:WalkCode|null|undefined):string=>`${code??'cleared'} (not saved)`;
-/** The results the server refused since the walker last dismissed the note: each list by title, each door once with its code, each reason once. */
-export interface RefusalNote{lists:{title:string;doors:Record<string,string>}[];reasons:string[]}
-export function addRefusal(note:RefusalNote|null,title:string,refused:ReadonlyMap<string,{code:WalkCode|null}>,doors:Record<string,string>,why:string):RefusalNote{
+/** The results the server refused since the walker last dismissed the note: each list by title, each door once with its code, each reason once.
+ *  `local`: some were refused by the page itself (voters the saved list does not have), so the headline does not say the server refused them. */
+export interface RefusalNote{lists:{title:string;doors:Record<string,string>}[];reasons:string[];local?:boolean}
+export function addRefusal(note:RefusalNote|null,title:string,refused:ReadonlyMap<string,{code:WalkCode|null}>,doors:Record<string,string>,why:string,local=false):RefusalNote{
   const lists=(note?.lists??[]).map(l=>({title:l.title,doors:{...l.doors}}));
   const name=title.trim()||'Walk list';
   let list=lists.find(l=>l.title===name);if(!list){list={title:name,doors:{}};lists.push(list);}
   for(const [id,v] of refused)list.doors[id]=`${doors[id]||'A door on this list'} (${v.code??'cleared'})`;
   const reasons=note?.reasons??[],w=why.trim();
-  return {lists,reasons:w&&!reasons.includes(w)?[...reasons,w]:reasons};
+  return {lists,reasons:w&&!reasons.includes(w)?[...reasons,w]:reasons,...note?.local||local?{local:true}:{}};
 }
 export const refusalCount=(note:RefusalNote|null):number=>(note?.lists??[]).reduce((n,l)=>n+Object.keys(l.doors).length,0);
-/** "The server refused 3 results, so they were not saved. Record these doors again:" */
+/** "The server refused 3 results, so they were not saved. Record these doors again:"; "3 results were not saved:" when some were refused by the page. */
 export function refusalHeadline(note:RefusalNote|null):string{
   const n=refusalCount(note);
+  if(note?.local)return `${countText(n,'result')} ${n===1?'was':'were'} not saved:`;
   return `The server refused ${countText(n,'result')}, so ${n===1?'it was':'they were'} not saved. Record ${n===1?'that door':'these doors'} again:`;
 }
 

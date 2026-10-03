@@ -29,7 +29,7 @@ page.on('pageerror',()=>report.pageErrors++);
 page.on('request',r=>{const path=new URL(r.url()).pathname;if(path.startsWith('/fixtures/'))report.fixtureRequests++;if(path.startsWith('/api/'))report.apiRequests++;});
 
 // ---- helpers ----------------------------------------------------------------------------------------------------------------
-const DESKTOP={width:1440,height:900},PHONE={width:390,height:844};
+const DESKTOP={width:1440,height:900},PHONE={width:375,height:812};
 const COLUMNS=['Address','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Reg. date','Result'];
 const CSV_NEEDS=['Address','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Result'];   // in this order, other columns may sit between
 const code=c=>new RegExp(`\\(${c}\\)$|^${c}$`);                  // "Supporter (S)" or a bare "S"
@@ -168,12 +168,16 @@ try{
 
   // ---- 3. street search -> chip ----------------------------------------------------------------------------------------------
   await step('search',async()=>{
+    const box=page.getByRole('combobox',{name:'Add a street',exact:true});
+    await box.fill('C');
+    await page.getByRole('status').filter({hasText:'Type at least 2 letters'}).waitFor();     // one letter: the search says what it needs
+    await box.fill('');
     const [found]=await Promise.all([page.waitForResponse(r=>isGet(r,'/api/v3/walk/streets')).then(r=>r.json()),
       page.getByRole('combobox',{name:'Add a street',exact:true}).fill('Cedar')]);
     assert.ok(found.streets.some(s=>s.label==='Cedar Heights Dr'),'Search for "Cedar" does not offer Cedar Heights Dr');
     await page.getByRole('listbox',{name:'Streets',exact:true}).getByRole('option',{name:/^Cedar Heights Dr/}).first().click();
     await page.getByRole('button',{name:/^Remove Cedar Heights Dr/}).first().waitFor();
-    return 'Searching "Cedar" offers Cedar Heights Dr; choosing it adds a chip';
+    return 'One letter shows "Type at least 2 letters"; searching "Cedar" offers Cedar Heights Dr; choosing it adds a chip';
   });
 
   // ---- 4. CSV upload: matched, pick a place, no match; resolving the pick ---------------------------------------------------
@@ -200,6 +204,7 @@ try{
   await step('generate',async()=>{
     listing=await generate();
     assert.equal(listing.schema,'walk-list-1');
+    assert.match(listing.fingerprint??'',/^[0-9a-f]{64}$/,'the list carries the fingerprint of what it shows');
     const t=listing.totals,doors=listing.runs.flatMap(r=>r.doors),voters=flat(listing);
     assert.ok(listing.runs.length>0&&voters.length>0,'The list is empty');
     assert.equal(t.stops,listing.runs.length,'totals.stops');
@@ -275,8 +280,12 @@ try{
   await step('result persists',async()=>{
     const before=new Set((await api('/api/v3/walk/lists')).lists.map(l=>l.key));
     const voter=flat(listing)[0];
+    const saving=page.waitForResponse(r=>isPost(r,'/api/v3/walk/lists'));
     const posted=page.waitForResponse(r=>isPost(r,'/api/v3/walk/dispositions'));
     await choose(groups().first(),'S');
+    const save=await saving;
+    assert.equal(save.request().postDataJSON().fingerprint,listing.fingerprint,'the save names the list shown by its fingerprint');
+    assert.equal((await save.json()).changed,false,'the list saved is the one shown');
     assert.equal((await posted).status(),200,'Saving the result failed');
     const fresh=await until(async()=>{const l=(await api('/api/v3/walk/lists')).lists.filter(x=>!before.has(x.key));return l.length===1?l:null;},'the saved list to appear');
     savedKey=fresh[0].key;
@@ -383,6 +392,8 @@ try{
       assert.ok(said.includes('Some of those voters are not on this list.'),'the note gives the server\'s reason');
       assert.equal(await group().getByRole('radio',{name:code('O')}).getAttribute('aria-checked'),'true','the walker\'s O stays marked');
       await page.getByText('O (not saved)',{exact:true}).last().waitFor();
+      const described=await group().getAttribute('aria-describedby');
+      assert.ok(described&&(await page.locator(`[id="${described}"]`).innerText())==='O (not saved)','the result group is described by its "not saved" text');
       assert.equal(await page.getByRole('alert').filter({hasText:'Results not saved'}).count(),0,'a refusal offers no Retry');
       const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download CSV',exact:true}).click()]);
       const file=join(work,'refused.csv');await download.saveAs(file);
@@ -403,6 +414,109 @@ try{
     return 'A refused result stays marked and flagged "not saved" (screen and CSV), the note names its door and the server\'s reason, it is not retried, and another saved list opens straight away';
   },['not home again']);
 
+  // ---- 8e. the voter data changed between showing a list and saving it: the saved list is shown with a note, and a mark for a voter
+  //          it no longer has is refused and named, never sent. The save answer is edited here as a rebuild that dropped the last voter would. ----
+  await step('list changed before saving',async()=>{
+    await page.goto(base+'/walk');await heading().waitFor();
+    await addStreet('Juniper','Juniper Ln');
+    const shown=await generate(),voters=flat(shown),keep=voters[0],drop=voters.at(-1);
+    assert.ok(voters.length>=2&&keep.person_id!==drop.person_id,'The list needs two voters for this check');
+    const isLists=url=>url.pathname==='/api/v3/walk/lists';
+    let release,asked=null;const held=new Promise(r=>{release=r;});
+    const changed=async route=>{
+      if(route.request().method()!=='POST')return route.continue();
+      asked=route.request().postDataJSON();
+      const response=await route.fetch(),saved=await response.json();
+      await held;
+      for(const run of saved.runs)for(const door of run.doors)door.voters=door.voters.filter(v=>v.person_id!==drop.person_id);
+      for(const run of saved.runs)run.doors=run.doors.filter(d=>d.voters.length);
+      saved.runs=saved.runs.filter(r=>r.doors.length);
+      Object.assign(saved.totals,{stops:saved.runs.length,doors:saved.runs.flatMap(r=>r.doors).length,voters:flat(saved).length});
+      return route.fulfill({status:201,contentType:'application/json',body:JSON.stringify({...saved,changed:true})});
+    };
+    const sent=[];const watch=r=>{if(pathOf(r)==='/api/v3/walk/dispositions'&&r.method()==='POST')sent.push(...r.postDataJSON().entries.map(e=>e.person_id));};
+    page.on('request',watch);await page.route(isLists,changed);
+    try{
+      await choose(groups().first(),'S');
+      await until(()=>asked,'the list to be saved');
+      assert.equal(asked.fingerprint,shown.fingerprint,'the save names the list shown');
+      await choose(groups().last(),'NH');                                  // marked while the save is on its way
+      release();
+      const replaced='The voter data was updated since this list was shown; showing the saved version.';
+      await page.locator('p.walk-note[role="status"]',{hasText:replaced}).waitFor();            // the note on screen (the announcement says it too)
+      assert.equal(await page.locator('.walk-sr[role="status"]').innerText(),replaced,'the change is announced');
+      const note=page.getByRole('alert').filter({hasText:'the saved list does not have these voters'}).first();
+      await note.waitFor();
+      assert.ok(text(await note.innerText()).startsWith('1 result was not saved:'),'the page refused it, so the note does not say the server did');
+      const door=shown.runs.flatMap(r=>r.doors.map(d=>({...d,street:r.street}))).find(d=>d.voters.some(v=>v.person_id===drop.person_id));
+      assert.ok(text(await note.innerText()).includes(`${door.street} (NH)`),'the note names the door of the dropped voter with the mark');
+      assert.equal((await rows()).flat().length,voters.length-1,'the saved list is on screen');
+      assert.equal(await groups().first().getByRole('radio',{name:code('S')}).getAttribute('aria-checked'),'true','the mark of a voter still on the list stays');
+      await until(()=>sent.includes(keep.person_id),'the S to be sent');
+      await page.waitForTimeout(800);
+      assert.ok(!sent.includes(drop.person_id),'the mark of the voter the saved list lacks is never sent');
+      assert.equal(await page.getByRole('alert').filter({hasText:'Results not saved'}).count(),0,'nothing waits for Retry');
+      await page.getByRole('button',{name:'Dismiss',exact:true}).click();
+    }finally{release();page.off('request',watch);await page.unroute(isLists,changed);}
+    return 'A list saved after the voter data changed: the save sends the fingerprint, the saved list replaces the one shown with a note, marks on voters it still has stay and are saved, and a mark on a voter it lacks is named as not saved and never sent';
+  },['generate']);
+
+  // ---- 8f. the list saved has new person ids for the same voters (the contact stores were rebuilt): marks follow the voters by door and name ----
+  //          The save answer is given new ids here; the results the page sends under them are mapped back for the server, which knows the old ones.
+  await step('ids changed before saving',async()=>{
+    await page.goto(base+'/walk');await heading().waitFor();
+    await addStreet('Cedar','Cedar Heights Dr');
+    const shown=await generate(),voters=flat(shown);
+    assert.ok(voters.length>=2,'The list needs two voters for this check');
+    const isLists=url=>url.pathname==='/api/v3/walk/lists',isSave=url=>url.pathname==='/api/v3/walk/dispositions';
+    let release,asked=false,key='';const held=new Promise(r=>{release=r;});
+    const renamed=async route=>{
+      if(route.request().method()!=='POST')return route.continue();
+      asked=true;
+      const response=await route.fetch(),saved=await response.json();
+      await held;key=saved.list.key;
+      for(const run of saved.runs)for(const door of run.doors)for(const v of door.voters)v.person_id='x'+v.person_id;
+      return route.fulfill({status:201,contentType:'application/json',body:JSON.stringify({...saved,changed:true})});
+    };
+    const sent=[];
+    const back=route=>{
+      const body=route.request().postDataJSON();sent.push(...body.entries.map(e=>e.person_id));
+      return route.continue({postData:JSON.stringify({...body,entries:body.entries.map(e=>({...e,person_id:e.person_id.replace(/^x/,'')}))})});
+    };
+    await page.route(isLists,renamed);await page.route(isSave,back);
+    try{
+      await choose(groups().first(),'S');
+      await until(()=>asked,'the list to be saved');
+      await choose(groups().nth(1),'U');                                    // marked while the save is on its way
+      release();
+      await page.locator('p.walk-note[role="status"]',{hasText:'showing the saved version'}).waitFor();
+      await until(()=>sent.includes('x'+voters[0].person_id)&&sent.includes('x'+voters[1].person_id),'both results to be sent under the new ids');
+      assert.ok(sent.every(id=>id.startsWith('x')),'nothing is sent under an old id');
+      assert.equal(await page.getByRole('alert').filter({hasText:'not saved'}).count(),0,'no result is refused');
+      assert.equal(await groups().first().getByRole('radio',{name:code('S')}).getAttribute('aria-checked'),'true','the S stays on its voter');
+      assert.equal(await groups().nth(1).getByRole('radio',{name:code('U')}).getAttribute('aria-checked'),'true','the U stays on its voter');
+      await until(async()=>{const on=flat(await api('/api/v3/walk/lists/'+key));return on.find(v=>v.person_id===voters[0].person_id)?.last?.code==='S'&&on.find(v=>v.person_id===voters[1].person_id)?.last?.code==='U';},'both results on file');
+    }finally{release();await page.unroute(isLists,renamed);await page.unroute(isSave,back);}
+    return 'A list saved with new person ids for the same voters: both marks (one sent while the save was on its way) stay on their voters, go out under the new ids, and none is refused';
+  },['generate']);
+
+  // ---- 8g. a re-knock list whose voters the data partly no longer has says how many ------------------------------------------------
+  await step('re-knock lost voters',async()=>{
+    await page.goto(base+'/walk?list='+savedKey);await heading().waitFor();await tables().first().waitFor();
+    const isLists=url=>url.pathname==='/api/v3/walk/lists';
+    const lost=async route=>{
+      if(route.request().method()!=='POST')return route.continue();
+      const response=await route.fetch(),again=await response.json();
+      return route.fulfill({status:201,contentType:'application/json',body:JSON.stringify({...again,missing:1})});
+    };
+    await page.route(isLists,lost);
+    try{
+      await page.getByRole('button',{name:'Not home again',exact:true}).click();
+      await page.getByRole('status').filter({hasText:'1 voter marked Not home is no longer in the voter data.'}).waitFor();
+    }finally{await page.unroute(isLists,lost);}
+    return 'A re-knock list answered with missing: 1 says "1 voter marked Not home is no longer in the voter data."';
+  },['not home again']);
+
   // ---- 9. phone width: no sideways page scroll, tables scroll in their own region ---------------------------------------------
   await step('mobile',async()=>{
     await page.setViewportSize(PHONE);
@@ -412,19 +526,29 @@ try{
       assert.equal(await page.getByLabel('Open section',{exact:true}).inputValue(),'walk','The section menu is on Walk list');
       assert.ok(await fits(),'The builder is wider than the phone');
       await addStreet('Cedar','Cedar Heights Dr');
-      await generate();
+      const shown=await generate();
       assert.ok(await fits(),'The list makes the page wider than the phone');
-      const region=await tables().first().evaluate(t=>{
-        for(let e=t.parentElement;e&&e!==document.body;e=e.parentElement){
-          const o=getComputedStyle(e).overflowX;
-          if(o==='auto'||o==='scroll')return {overflow:o,client:e.clientWidth,scroll:e.scrollWidth};
+      const cards=await page.evaluate(()=>{
+        const W=innerWidth,bad=[];let rows=0;
+        for(const wrap of document.querySelectorAll('.walk-table-wrap'))if(wrap.scrollWidth>wrap.clientWidth+1)bad.push('a table scrolls sideways');
+        for(const tr of document.querySelectorAll('.walk-table tbody tr')){
+          rows++;
+          const row=tr.getBoundingClientRect(),name=tr.querySelector('td.walk-name'),n=name.getBoundingClientRect(),group=tr.querySelector('[role=radiogroup]');
+          if(n.width===0||n.left<0||n.right>W+0.5||n.top<row.top||n.bottom>row.bottom||name.scrollWidth>name.clientWidth+1)bad.push('name hidden: '+name.textContent);
+          for(const b of group.querySelectorAll('button')){
+            const r=b.getBoundingClientRect();
+            if(r.left<0||r.right>W+0.5||r.height<44||r.top<n.bottom-1||r.bottom>row.bottom)bad.push(`button ${b.textContent} of ${name.textContent} at ${Math.round(r.left)}-${Math.round(r.right)}, ${Math.round(r.height)} px`);
+          }
         }
-        return null;
+        return {rows,bad:bad.slice(0,5)};
       });
-      assert.ok(region,'The table sits in no scrolling region');
-      assert.ok(region.scroll>region.client,'The table fits without scrolling, so the columns are not all there');
+      assert.equal(cards.rows,flat(shown).length,'one card per voter');
+      assert.deepEqual(cards.bad,[],'every name and result button is in view, below its name, buttons 44 px tall');
+      assert.equal(await page.getByRole('table').count(),shown.runs.length,'each stop is still a table to a screen reader');
+      assert.equal(await groups().count(),flat(shown).length,'each voter still has its named result group');
+      await choose(groups().first(),'NH');                                 // a tap records the result without any sideways scrolling
       await shot('mobile-list.png');
-      return `At 390 px the page does not scroll sideways; the table scrolls in its own region (${region.scroll} px of ${region.client})`;
+      return `At ${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept`;
     }finally{await page.setViewportSize(DESKTOP);}
   });
 

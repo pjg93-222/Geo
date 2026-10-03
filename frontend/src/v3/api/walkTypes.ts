@@ -51,13 +51,19 @@ export interface WalkWindow { primaries: string[]; generals: string[]; abs_rule:
 export interface WalkContextRoad { k: 'S1200' | 'S1400' | 'V'; n: string; c: [number, number][] }  // V = generated street/connector
 export interface WalkContextArea { id: string; label: string; rings: [number, number][][] }
 export interface WalkContext { bbox: [number, number, number, number]; roads: WalkContextRoad[]; precincts: WalkContextArea[]; homes: [number, number][] }
+// `fingerprint`: a digest of what the list shows and of the voter behind each person id (absent on lists saved before it existed).
 export interface WalkListPayload {
   schema: 'walk-list-1'; generated_on: string; list: WalkListMeta; query: Record<string, string>;
   window: WalkWindow; totals: WalkTotals; bbox: [number, number, number, number]; runs: WalkRun[];
-  context?: WalkContext;
+  fingerprint?: string; context?: WalkContext;
 }
 
-// POST /api/v3/walk/lists {title, query} | {title, from, reknock: true} -> 201 WalkListPayload (list.key set)
+// POST /api/v3/walk/lists {title, query, fingerprint?} -> 201 WalkSavedPayload | {title, from, reknock: true} -> 201 WalkListPayload (list.key set)
+// The list is built again to be saved; `changed` is true when that list differs from the one whose fingerprint was sent (the voter data
+// changed in between): the list saved, and sent back, is the new one.
+export interface WalkSavedPayload extends WalkListPayload { changed?: boolean }
+// A re-knock list also says how many of the voters marked Not home the voter data no longer has (they are not on it).
+export interface WalkReknockPayload extends WalkListPayload { missing?: number }
 // GET  /api/v3/walk/lists -> WalkListsPayload ; GET /api/v3/walk/lists/<key> -> WalkListPayload
 export interface WalkSavedList { key: string; title: string; kind: WalkListKind; created_at: string; doors: number; voters: number }
 export interface WalkListsPayload { lists: WalkSavedList[] }

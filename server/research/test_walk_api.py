@@ -32,7 +32,7 @@ CS_SHOWN, FOUNTAIN_SHOWN = 'Colorado Springs', 'Fountain'   # how the API spells
 PRECINCT_W, PRECINCT_E, PRECINCT_F = '5200021301', '5200021302', '5200021417'
 NO_STORE = 'no-store, private'
 
-LIST_KEYS = {'schema', 'generated_on', 'list', 'query', 'window', 'totals', 'bbox', 'runs', 'context'}   # context: walk_context.py
+LIST_KEYS = {'schema', 'generated_on', 'list', 'query', 'window', 'totals', 'bbox', 'runs', 'fingerprint', 'context'}   # context: walk_context.py
 TOTAL_KEYS = {'streets', 'stops', 'doors', 'voters', 'walk_m', 'minutes'}
 RUN_KEYS = {'stop', 'street_id', 'street', 'side', 'precinct', 'from_house', 'to_house', 'walk_m', 'lr', 'path',
             'approach', 'doors'}
@@ -260,6 +260,10 @@ class WalkAccessTests(WalkCase):
                                    {'title': 'x', 'query': {'ss': '010', 'bogus': '1'}}, {'title': 'x', 'query': {'ss': 10}},
                                    {'title': 'x', 'query': {'streets': '1:left'}}, {'title': 'x', 'query': {}},
                                    {'title': 'x', 'query': {'ss': '010'}, 'extra': 1},
+                                   {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': 'abc'},
+                                   {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': 'A' * 64},
+                                   {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': 5},
+                                   {'title': 'x', 'from': key, 'reknock': True, 'fingerprint': '0' * 64},
                                    {'title': 'x', 'from': key}, {'title': 'x', 'from': key, 'reknock': 'yes'},
                                    {'title': 'x', 'from': 5, 'reknock': True}, {'title': 'x', 'from': key, 'reknock': True, 'query': {}},
                                    {'title': 'bad\x00title', 'query': {'ss': '010'}}],
@@ -894,6 +898,7 @@ class WalkSavedListTests(WalkCase):
         self.assertEqual(saved['list']['kind'], 'standard')
         self.assertRegex(saved['list']['key'], r'^[0-9a-f]{10}$')
         self.assertEqual(datetime.fromisoformat(saved['list']['created_at']).date(), date.today())
+        self.assertIs(saved.pop('changed'), False)                  # no fingerprint sent (a page from before it existed): nothing to compare
         self.assertEqual({k: v for k, v in saved.items() if k != 'list'}, {k: v for k, v in built.items() if k != 'list'})
         row = WalkList.objects.get(key=saved['list']['key'])
         self.assertEqual((row.title, row.kind, row.parent, row.query), ('Cedar and Juniper', 'standard', None, {'streets': self.cedar_juniper()}))
@@ -1073,6 +1078,7 @@ class WalkSavedListTests(WalkCase):
         self.results(key, [(nh, 'NH'), (later_s, 'NH'), (cleared, 'NH'), (other, 'U'), (still, 'NH')], '2026-09-30')
         self.results(key, [(later_s, 'S'), (cleared, None), (still, 'NH')], '2026-10-01')
         again = self.posted('/api/v3/walk/lists', {'title': 'Not home again', 'from': key, 'reknock': True}, 201)
+        self.assertEqual(again.pop('missing'), 0)
         self.check_payload(again)
         self.assertEqual({v['person_id'] for v in voters_of(again)}, {nh, still})
         self.assertEqual((again['list']['kind'], again['list']['title']), ('reknock', 'Not home again'))
@@ -1095,6 +1101,93 @@ class WalkSavedListTests(WalkCase):
         self.assertEqual({v['person_id'] for v in voters_of(third)}, {nh})
         self.assertIn('Not home', self.error(self.post('/api/v3/walk/lists', {'title': 'None', 'from': third['list']['key'], 'reknock': True}), 400))
 
+    def rekeyed_world(self, name):
+        """A copy of the stores in which every person id is new, as after the contact stores are rebuilt under a new
+        salt; the voter keys (.walk-salt) are the same."""
+        copy = Path(self.temporary.name) / name
+        shutil.copytree(self.stores.directory, copy)
+        with closing(sqlite3.connect(copy / 'walk.sqlite3')) as db, db:
+            db.execute("UPDATE person SET person_id='r' || person_id")
+        with closing(sqlite3.connect(copy / 'contacts.sqlite3')) as db, db:
+            db.execute("UPDATE contacts SET id='r' || id")
+        return copy
+
+    def test_a_re_knock_finds_its_voters_by_voter_key_when_the_person_ids_change(self):
+        saved = self.saved()
+        key = saved['list']['key']
+        people = [v['person_id'] for v in voters_of(saved)]
+        names = {v['person_id']: v['name'] for v in voters_of(saved)}
+        self.results(key, [(people[0], 'NH'), (people[1], 'NH'), (people[2], 'S')], '2026-09-30')
+        with override_settings(DATA_DIR=self.rekeyed_world('rekeyed')):
+            again = self.posted('/api/v3/walk/lists', {'title': 'Not home again', 'from': key, 'reknock': True}, 201)
+        self.assertEqual(again['missing'], 0)
+        shown = {v['person_id']: v for v in voters_of(again)}
+        self.assertEqual(set(shown), {'r' + people[0], 'r' + people[1]})
+        self.assertEqual({p: shown['r' + p]['name'] for p in people[:2]}, {p: names[p] for p in people[:2]})
+        self.assertTrue(all(v['last'] == {'code': 'NH', 'on': '2026-09-30', 'list': key} for v in shown.values()))
+        roster = WalkList.objects.get(key=again['list']['key']).payload[V.PRIVATE]
+        parent = WalkList.objects.get(key=key).payload[V.PRIVATE]
+        self.assertEqual({roster['r' + p] for p in people[:2]}, {parent[p] for p in people[:2]})
+
+    def test_a_re_knock_keeps_the_person_marked_when_another_shares_the_voter_key(self):
+        saved = self.saved()
+        key = saved['list']['key']
+        people = [v['person_id'] for v in voters_of(saved)]
+        self.results(key, [(people[0], 'NH')])
+        twin = WalkList.objects.get(key=key).payload[V.PRIVATE][people[0]]
+        copy = Path(self.temporary.name) / 'twin-key'
+        shutil.copytree(self.stores.directory, copy)
+        with closing(sqlite3.connect(copy / 'walk.sqlite3')) as db, db:          # the same voter id on two rows of the file
+            db.execute('UPDATE person SET voter_key=? WHERE person_id=?', (twin, people[1]))
+        with override_settings(DATA_DIR=copy):
+            again = self.posted('/api/v3/walk/lists', {'title': 'x', 'from': key, 'reknock': True}, 201)
+        self.assertEqual({v['person_id'] for v in voters_of(again)}, {people[0]})
+
+    def one_per_door(self, saved, n):
+        """The first voter of each of the first `n` doors of a list."""
+        return [door['voters'][0]['person_id'] for door in doors_of(saved)][:n]
+
+    def edited_copy(self, name, walk_sql):
+        """A re-keyed copy of the stores (rekeyed_world) with `walk_sql` [(sql, args)] run on its walk store."""
+        copy = self.rekeyed_world(name)
+        with closing(sqlite3.connect(copy / 'walk.sqlite3')) as db, db:
+            for sql, args in walk_sql:
+                db.execute(sql, args)
+        return copy
+
+    def test_a_shared_voter_key_is_settled_by_the_address_the_result_was_recorded_at(self):
+        saved = self.saved()
+        key = saved['list']['key']
+        a, b, c = self.one_per_door(saved, 3)
+        roster = WalkList.objects.get(key=key).payload[V.PRIVATE]
+        self.results(key, [(a, 'NH')])
+        twin = [('UPDATE person SET voter_key=? WHERE person_id=?', (roster[a], 'r' + b))]       # the voter id on a second row, elsewhere
+        with override_settings(DATA_DIR=self.edited_copy('twin-at-door', twin)):
+            again = self.posted('/api/v3/walk/lists', {'title': 'x', 'from': key, 'reknock': True}, 201)
+        self.assertEqual(({v['person_id'] for v in voters_of(again)}, again['missing']), ({'r' + a}, 0), 'the row at the door that was knocked')
+        moved = twin + [('DELETE FROM person WHERE person_id=?', ('r' + a,))]                   # only one row left: that is the voter
+        with override_settings(DATA_DIR=self.edited_copy('twin-moved', moved)):
+            again = self.posted('/api/v3/walk/lists', {'title': 'x', 'from': key, 'reknock': True}, 201)
+        self.assertEqual({v['person_id'] for v in voters_of(again)}, {'r' + b})
+        two = moved + [('UPDATE person SET voter_key=? WHERE person_id=?', (roster[a], 'r' + c))]  # two rows, neither at that door: unknown
+        with override_settings(DATA_DIR=self.edited_copy('twin-two', two)):
+            self.assertIn('no longer', self.error(self.post('/api/v3/walk/lists', {'title': 'x', 'from': key, 'reknock': True}), 409))
+
+    def test_a_re_knock_counts_the_voters_the_store_no_longer_has(self):
+        saved = self.saved()
+        key = saved['list']['key']
+        a, b, c = self.one_per_door(saved, 3)
+        self.results(key, [(a, 'NH'), (b, 'NH'), (c, 'NH')])
+        copy = Path(self.temporary.name) / 'two-gone'
+        shutil.copytree(self.stores.directory, copy)
+        with closing(sqlite3.connect(copy / 'walk.sqlite3')) as db, db:
+            db.execute('DELETE FROM person WHERE person_id IN (?, ?)', (b, c))
+        with override_settings(DATA_DIR=copy):
+            again = self.posted('/api/v3/walk/lists', {'title': 'x', 'from': key, 'reknock': True}, 201)
+        self.assertEqual(({v['person_id'] for v in voters_of(again)}, again['missing']), ({a}, 2))
+        self.assertNotIn('missing', WalkList.objects.get(key=again['list']['key']).payload)
+        self.assertNotIn('missing', self.json('/api/v3/walk/lists/' + again['list']['key']))
+
     def check_payload(self, payload):
         self.assertEqual(set(payload), LIST_KEYS)
         self.assertEqual(set(payload['list']), {'key', 'title', 'kind', 'created_at'})
@@ -1104,6 +1197,48 @@ class WalkSavedListTests(WalkCase):
                 self.assertEqual(set(door), DOOR_KEYS)
                 for voter in door['voters']:
                     self.assertEqual(set(voter), VOTER_KEYS)
+
+    def test_a_list_carries_a_fingerprint_of_what_it_shows(self):
+        url = '/api/v3/walk/list?streets=' + self.cedar_juniper()
+        built = self.json(url)
+        self.assertRegex(built['fingerprint'], r'^[0-9a-f]{64}$')
+        self.assertEqual(self.json(url)['fingerprint'], built['fingerprint'])
+        ridge = self.json('/api/v3/walk/list?streets=%d:both' % self.street_id('Ridgeview Ct'))
+        self.assertNotEqual(ridge['fingerprint'], built['fingerprint'])
+        saved = self.posted('/api/v3/walk/lists', {'title': 'Shown', 'query': built['query'], 'fingerprint': built['fingerprint']}, 201)
+        self.assertIs(saved.pop('changed'), False)
+        self.assertEqual({k: v for k, v in saved.items() if k != 'list'}, {k: v for k, v in built.items() if k != 'list'})
+        self.assertEqual(self.json('/api/v3/walk/lists/' + saved['list']['key']), saved)
+
+    def test_a_list_saved_after_the_voter_data_changed_is_the_one_saved_and_says_so(self):
+        built = self.json('/api/v3/walk/list?streets=' + self.cedar_juniper())
+        shown = {v['person_id'] for v in voters_of(built)}
+        gone, phoned = voters_of(built)[0]['person_id'], voters_of(built)[1]['person_id']
+        body = {'title': 'Shown before', 'query': built['query'], 'fingerprint': built['fingerprint']}
+        moved = Path(self.temporary.name) / 'moved-on'
+        shutil.copytree(self.stores.directory, moved)
+        with closing(sqlite3.connect(moved / 'walk.sqlite3')) as db, db:
+            db.execute('DELETE FROM person WHERE person_id=?', (gone,))
+        with override_settings(DATA_DIR=moved):
+            saved = self.posted('/api/v3/walk/lists', body, 201)
+        self.assertIs(saved.pop('changed'), True)
+        self.assertEqual({v['person_id'] for v in voters_of(saved)}, shown - {gone})
+        self.assertEqual(saved['totals']['voters'], len(shown) - 1)
+        self.assertNotEqual(saved['fingerprint'], built['fingerprint'])
+        key = saved['list']['key']
+        self.assertEqual(self.json('/api/v3/walk/lists/' + key), saved)                       # the list sent back is the one saved
+        self.assertIn('not on this list', self.error(self.post('/api/v3/walk/dispositions', {
+            'list': key, 'on': '2026-10-01', 'entries': [{'person_id': gone, 'code': 'S'}]}), 400))
+        self.assertEqual(self.results(key, [(phoned, 'S')]), {'saved': 1})
+        new_phone = Path(self.temporary.name) / 'new-phone'                                    # only the contact store changed
+        shutil.copytree(self.stores.directory, new_phone)
+        with closing(sqlite3.connect(new_phone / 'contacts.sqlite3')) as db, db:
+            db.execute("UPDATE contacts SET wireless='7195550123', phone='' WHERE id=?", (phoned,))
+        with override_settings(DATA_DIR=new_phone):
+            again = self.posted('/api/v3/walk/lists', body, 201)
+        self.assertIs(again['changed'], True)
+        self.assertEqual({v['person_id']: v['phone'] for v in voters_of(again)}[phoned], '7195550123')
+        self.assertIs(self.posted('/api/v3/walk/lists', body, 201)['changed'], False)        # the stores as they were when shown
 
     def test_voters_the_store_no_longer_has_cannot_be_re_knocked(self):
         saved = self.saved('%d:both' % self.street_id('Ridgeview Ct'))

@@ -6,7 +6,9 @@
   GET  /api/v3/walk/list         a walk list built now: runs in walking order, doors, voters (at most 40 streets, 1,500 voters)
   GET  /api/v3/walk/overview     the blocks of an area with door and party counts, for map shading
   GET  /api/v3/walk/lists        the 50 newest saved lists
-  POST /api/v3/walk/lists        freeze a list {title, query}, or make a re-knock list {title, from, reknock: true}
+  POST /api/v3/walk/lists        freeze a list {title, query, fingerprint?}, answered with `changed` when the list built to save
+                                 differs from the one shown; or make a re-knock list {title, from, reknock: true}, answered
+                                 with `missing`, the voters marked Not home that the voter data no longer has
   GET  /api/v3/walk/lists/<key>  a saved list as it was frozen, with each voter's latest result {code, on, list} refreshed
   POST /api/v3/walk/dispositions results of visits {list, on, entries}, appended; the newest entry of a person wins
 
@@ -15,6 +17,7 @@ names and phones), is `no-store`, takes an exact list of query parameters and, f
 Django enforces CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded
 for a person on its roster, and the roster's voter keys travel privately inside the stored payload.
 """
+import hashlib
 import json
 import logging
 import re
@@ -426,7 +429,16 @@ def plan_payload(store, rows, query):
                    'voters': len(rows), 'walk_m': plan.total_m,
                    'minutes': n_doors * MINUTES_PER_DOOR + plan.total_m / METRES_PER_MINUTE},
         'bbox': bounds(runs), 'runs': runs}
-    return payload, {row['person_id']: row['voter_key'] for row in rows}
+    keys = {row['person_id']: row['voter_key'] for row in rows}
+    payload['fingerprint'] = fingerprint(payload, keys)
+    return payload, keys
+
+
+def fingerprint(payload, keys):
+    """A digest of what a list shows (all of it but the day it was built and its saved details) and of the voter behind
+    each person id: two builds with the same fingerprint are the same list. Taken before `last` is attached."""
+    shown = {name: value for name, value in payload.items() if name not in ('generated_on', 'list', 'fingerprint')}
+    return hashlib.sha256(json.dumps([shown, keys], sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
 def standard_payload(store, picks, area, query):
@@ -531,46 +543,78 @@ def freeze(payload, keys, title, kind, parent, info):
 
 
 def current_codes(walk_list):
-    """{person id: code or None}: the newest entry of each person on the list."""
+    """{person id: (voter key, code or None)}: the newest entry of each person on the list."""
     state = {}
-    for person, code in Disposition.objects.filter(walk_list=walk_list).order_by('id').values_list('person_id', 'code'):
-        state[person] = code
+    for person, key, code in Disposition.objects.filter(walk_list=walk_list).order_by('id').values_list('person_id', 'voter_key', 'code'):
+        state[person] = (key, code)
     return state
+
+
+def places_of(payload):
+    """{person id: (street, house, unit)}: the door each voter of a frozen list was shown at."""
+    return {voter['person_id']: (run['street'], door['house'], door['unit'])
+            for run in payload.get('runs', ()) for door in run['doors'] for voter in door['voters']}
+
+
+def not_home(rows, again, places, names):
+    """The rows of the voters in `again` ({voter key: person ids it was recorded for}), found by voter key: person ids are
+    the contact stores' and change when those are rebuilt under a new salt. A key on several rows (one voter id twice in
+    the file) keeps the people the result was recorded for, else the rows at the door it was recorded at (`places`); a
+    key on one row is that voter wherever they live now. Anything else is unknown and left out."""
+    found = {}
+    for row in rows:
+        found.setdefault(row['voter_key'], []).append(row)
+    out = []
+    for key, group in found.items():
+        mine = [r for r in group if r['person_id'] in again[key]]
+        if not mine and len(group) > 1:
+            at = {places.get(person) for person in again[key]}
+            mine = [r for r in group if (street_label(names, r['street_id']), house_label(r['house']), r['unit'] or '') in at]
+        out.extend(mine or (group if len(group) == 1 else []))
+    return out
 
 
 def reknock(title, parent_key):
     parent = find_list(parent_key)
-    again = [person for person, code in current_codes(parent).items() if code == 'NH']
+    again = {}
+    for person, (key, code) in current_codes(parent).items():
+        if code == 'NH':
+            again.setdefault(key, set()).add(person)
     if not again:
         raise Refused('Nobody on that list is marked Not home.')
     with W.walk_store() as store:
-        rows = store.voters_by_id(again)
+        rows = not_home(store.voters_by_key(again), again, places_of(parent.payload), store.directory().by_id)
         if not rows:
             raise Refused('Those voters are no longer in the walk list data.', 409)
         payload, keys = plan_payload(store, rows, {'from': parent.key, 'reknock': '1'})
         info = store.info
     attach_last(payload, keys)
-    return freeze(payload, keys, title, 'reknock', parent, info)
+    return freeze(payload, keys, title, 'reknock', parent, info), len(again) - len({row['voter_key'] for row in rows})
 
 
 @write
 def create_list(request):
     params(request, set())
-    body = json_body(request, {'title', 'query', 'from', 'reknock'})
+    body = json_body(request, {'title', 'query', 'fingerprint', 'from', 'reknock'})
     title = clean_title(body.get('title'))
     if 'from' in body or 'reknock' in body:
         if set(body) != {'title', 'from', 'reknock'} or body['reknock'] is not True:
             raise BadRequest('A re-knock list needs title, from and reknock: true')
-        return response(C.attach(reknock(title, body['from'])), 201)
+        payload, missing = reknock(title, body['from'])
+        return response({**C.attach(payload), 'missing': missing}, 201)     # voters marked Not home the data no longer has
     query = body.get('query')
-    if set(body) != {'title', 'query'} or not isinstance(query, dict) or not set(query) <= QUERY_KEYS:
+    if set(body) - {'fingerprint'} != {'title', 'query'} or not isinstance(query, dict) or not set(query) <= QUERY_KEYS:
         raise BadRequest('A list needs a title and a query')
+    shown = clean(body['fingerprint'], r'[0-9a-f]{64}') if 'fingerprint' in body else None
     picks, area, query = list_query(query)
     with W.walk_store() as store:
         payload, keys = standard_payload(store, picks, area, query)
         info = store.info
     attach_last(payload, keys)
-    return response(C.attach(freeze(payload, keys, title, 'standard', None, info)), 201)
+    saved = C.attach(freeze(payload, keys, title, 'standard', None, info))
+    # The list is built again to be saved. If the voter data changed since the walker was shown it, the list saved is the
+    # new one, never quietly: `changed` tells the page to show the list it gets back instead of the one it had.
+    return response({**saved, 'changed': shown is not None and shown != saved['fingerprint']}, 201)
 
 
 @read

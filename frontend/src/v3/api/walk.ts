@@ -3,7 +3,7 @@
 import {localJson,postJson} from './client';
 import type {
   WalkArea,WalkDispositionEntry,WalkDispositionsResult,WalkLevel,WalkListPayload,WalkListsPayload,WalkMatchInput,WalkMatchPayload,
-  WalkOptionsPayload,WalkOverviewProps,WalkStreetsPayload,
+  WalkOptionsPayload,WalkOverviewProps,WalkReknockPayload,WalkSavedPayload,WalkStreetsPayload,
 } from './walkTypes';
 
 const BASE='/api/v3/walk';
@@ -34,12 +34,13 @@ export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal):Pr
 }
 export function getWalkLists(signal?:AbortSignal):Promise<WalkListsPayload>{return localJson(`${BASE}/lists`,signal);}
 export function getWalkSavedList(key:string,signal?:AbortSignal):Promise<WalkListPayload>{return localJson(`${BASE}/lists/${encodeURIComponent(key)}`,signal);}
-/** Freezes a list under a title; `queryOf` is the query the list was built from. Answers with the saved list, key set. */
-export function saveWalkList(title:string,queryOf:Record<string,string>,signal?:AbortSignal):Promise<WalkListPayload>{
-  return postJson(`${BASE}/lists`,{title,query:queryOf},signal);
+/** Freezes a list under a title; `queryOf` is the query the list was built from, `fingerprint` that of the list shown. Answers with the
+ *  saved list, key set, and `changed` when it is not the list shown. */
+export function saveWalkList(title:string,queryOf:Record<string,string>,fingerprint?:string,signal?:AbortSignal):Promise<WalkSavedPayload>{
+  return postJson(`${BASE}/lists`,{title,query:queryOf,...fingerprint?{fingerprint}:{}},signal);
 }
-/** A new list of the doors where the latest result on `from` is Not home. */
-export function reknockWalkList(title:string,from:string,signal?:AbortSignal):Promise<WalkListPayload>{
+/** A new list of the doors where the latest result on `from` is Not home; `missing` counts those the voter data no longer has. */
+export function reknockWalkList(title:string,from:string,signal?:AbortSignal):Promise<WalkReknockPayload>{
   return postJson(`${BASE}/lists`,{title,from,reknock:true},signal);
 }
 /** Results for a saved list; a null code clears a result. `on` is the day of the visit (yyyy-mm-dd). */

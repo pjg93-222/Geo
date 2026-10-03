@@ -1092,3 +1092,149 @@ test('walk screen wiring (refusals): narrow classification, marks kept and flagg
   assert.ok(/token=\(fresh:boolean\)=>csrf\(fresh,signal\)\.catch\(\(e:unknown\)=>\{throw e instanceof ApiError\?new ApiError\(e\.message,e\.status\):e;\}\)/.test(client), 'a session failure is never an answer of the endpoint');
   assert.ok(/catch\{throw new ApiError\('The local data service returned an unreadable response\.',response\.status\);\}/.test(client), 'an unreadable body is not answered');
 });
+
+// --- a list saved after the voter data changed: the server saves the list it builds now, says `changed`, and the page shows that one ----------
+import {LIST_REPLACED, OFF_LIST, adoptSaved, splitOffRoster} from '../../src/v3/lib/walk.ts';
+import type {WalkSavedPayload} from '../../src/v3/api/walkTypes.ts';
+const {saveWalkList} = await import('../../src/v3/api/walk.ts');
+
+test('saving a list sends the fingerprint of the list shown, and only what the server takes', async () => {
+  const real = globalThis.fetch, bodies: unknown[] = [];
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/api/auth/session')) return json(200, {csrf: 't'});
+    bodies.push(JSON.parse(String(init?.body))); return json(201, {list: {key: 'k1'}, changed: false});
+  }) as typeof fetch;
+  try {
+    await saveWalkList('Saturday', {precinct: '02012'}, 'f'.repeat(64));
+    await saveWalkList('Saturday', {precinct: '02012'});
+    assert.deepEqual(bodies, [{title: 'Saturday', query: {precinct: '02012'}, fingerprint: 'f'.repeat(64)}, {title: 'Saturday', query: {precinct: '02012'}}],
+      'the fingerprint goes with the list it was shown for; a list without one (saved before it existed) sends none');
+  } finally { globalThis.fetch = real; }
+});
+
+test('a saved list that differs from the one shown: the entry takes it, its voters and their doors; an unchanged one changes nothing else', () => {
+  const shelf = resultShelf<string, WalkVisit>(v => v.on);
+  const a = voter({person_id: 'a'}), b = voter({person_id: 'b'}), c = voter({person_id: 'c'});
+  const shown = payload([run({doors: [door(1, '4102', [a, b])]})]);
+  const same = shelf.open({meta: null, title: 'Saturday', query: shown.query, where: doorsByPerson(shown), fingerprint: 'f1'});
+  assert.equal(same.fingerprint, 'f1'); assert.equal(same.roster, null); assert.equal(same.replaced, null);
+  const meta = {key: 'k1', title: 'Saturday', kind: 'standard' as const, created_at: '2026-10-02T09:00:00-06:00'};
+  assert.deepEqual(adoptSaved(same, {...shown, list: meta, changed: false}), meta);
+  assert.deepEqual([same.meta, same.roster, same.replaced], [meta, null, null], 'the list saved is the one shown');
+  const entry = shelf.open({meta: null, title: 'Saturday', query: shown.query, where: doorsByPerson(shown), fingerprint: 'f1'});
+  const saved: WalkSavedPayload = {...payload([run({doors: [door(1, '4102', [b]), door(2, '4110', [c])]})]), list: meta, fingerprint: 'f2', changed: true};
+  assert.deepEqual(adoptSaved(entry, saved), meta);
+  assert.equal(entry.replaced, saved, 'the page shows the list that was saved');
+  assert.deepEqual([...(entry.roster ?? [])].sort(), ['b', 'c']);
+  assert.deepEqual(entry.where, {a: '4102 N Cedar Heights Dr', b: '4102 N Cedar Heights Dr', c: '4110 N Cedar Heights Dr'}, 'a voter no longer on the list keeps the door the walker saw');
+  assert.ok(!/should|best/i.test(LIST_REPLACED + OFF_LIST));
+});
+
+test('results for voters the saved list does not have are refused here, never sent, and cost no other result', async () => {
+  const off = splitOffRoster(new Set(['b', 'c']), new Map([['a', visit('S')], ['b', visit('U')], ['c', visit('NH')], ['d', visit(null)]]));
+  assert.deepEqual([[...off.send.keys()], [...off.off.keys()]], [['b', 'c'], ['a', 'd']]);
+  const all = new Map([['a', visit('S')]]);
+  assert.equal(splitOffRoster(null, all).send, all, 'no roster (the list saved is the one shown): the batch is sent as it is');
+  // through the drain, against a server that refuses a request holding a voter not on its list
+  const outbox = resultOutbox<string, WalkVisit>(v => v.on);
+  for (const id of ['a', 'b', 'c', 'd']) outbox.set(id, visit('S'));
+  const posted: string[][] = [], refused: [string[], string][] = [];
+  const io = (filter: boolean) => ({...calm, refuse: (r: Map<string, WalkVisit>, why: string) => refused.push([[...r.keys()], why]),
+    send: async (batch: Map<string, WalkVisit>) => {
+      const {send, off: gone} = filter ? splitOffRoster(new Set(['b', 'c']), batch) : {send: batch, off: new Map<string, WalkVisit>()};
+      if (gone.size) refused.push([[...gone.keys()], OFF_LIST]);
+      if (send.size) await refuser(['a', 'd'], posted)(send);
+    }});
+  assert.equal(await drainResults(outbox, io(true)), true);
+  assert.deepEqual(posted, [['b', 'c']], 'only the voters on the saved list are sent, in one request');
+  assert.deepEqual(refused, [[['a', 'd'], OFF_LIST]], 'the others are refused with the reason, and kept as the walker\'s marks by the caller');
+  assert.ok(!outbox.unconfirmed(), 'nothing waits, so nothing blocks the screen');
+  for (const id of ['a', 'b', 'c', 'd']) outbox.set(id, visit('S'));
+  posted.length = 0; refused.length = 0;
+  await drainResults(outbox, io(false));
+  assert.deepEqual(refused.flatMap(([ids]) => ids).sort(), ['a', 'b', 'c', 'd'], 'without the roster the split refuses good results with the bad (why it is filtered first)');
+});
+
+test('walk screen wiring (list saved after the voter data changed): fingerprint sent, saved list shown with a note, off-list results refused', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  assert.ok(/saveWalkList\(entry\.title,entry\.query,entry\.fingerprint\)/.test(src) && /adoptSaved\(entry,saved\)/.test(src), 'the save sends the fingerprint and the entry takes the answer');
+  assert.ok(/fingerprint:p\.fingerprint/.test(src), 'each list on screen carries its fingerprint');
+  assert.ok(/const next=entry\.replaced\?\?\{\.\.\.base,list\}/.test(src) && /setReplaced\(true\)/.test(src) && /\{LIST_REPLACED\}/.test(src), 'the saved list replaces the one shown, with the note');
+  assert.ok(/splitOffRoster\(entry\.roster,visits,entry\.moved\)/.test(src) && /offList\(off,OFF_LIST\)/.test(src), 'results for voters not on the saved list are refused, not sent');
+  assert.ok(/\(r,why\)=>refuse\(entry,r,why,true\)/.test(src) && /sendBatch\(entry,batch,held\(true\)\)/.test(src), 'those refusals are the page\'s own, so the note does not blame the server');
+  assert.ok(/setResults\(r=>rekeyed\(r,moved\)\)/.test(src) && /rekeyRefused\(refusedMarks,id,entry\.moved\)/.test(src) && /seen:seenBy\(p\)/.test(src), 'marks follow a voter whose person id changed');
+  assert.ok(/setReplaced\(false\)/.test(src), 'the note goes when another list comes on screen');
+});
+
+// --- round 2: person ids that change while the voters do not, a re-knock that lost voters, the page's own refusals, the phone layout ----------
+import {missingText, movedIds, rekeyRefused, rekeyed, seenBy} from '../../src/v3/lib/walk.ts';
+
+test('a list saved with new person ids for the same voters: marks follow them by door and name, are sent under the new ids, and none is refused', async () => {
+  const shelf = resultShelf<string, WalkVisit>(v => v.on);
+  const shown = payload([run({doors: [door(1, '4102', [voter({person_id: 'a'}), voter({person_id: 'b', name: 'Lee Stone'})]), door(2, '4110', [voter({person_id: 'c', name: 'Pat Moss'})], '2')]})]);
+  const saved: WalkSavedPayload = {...payload([run({doors: [door(1, '4102', [voter({person_id: 'ra', name: 'DANA  Whitfield'}), voter({person_id: 'rb', name: 'Lee Stone'})]),
+    door(2, '4110', [voter({person_id: 'rc', name: 'Pat Moss'})], '2')]})]), list: {key: 'k1', title: 'Saturday', kind: 'standard', created_at: null}, changed: true};
+  assert.deepEqual([...movedIds(seenBy(shown), saved)], [['a', 'ra'], ['b', 'rb'], ['c', 'rc']], 'case and spacing of a name do not matter');
+  const entry = shelf.open({meta: null, title: 'Saturday', query: shown.query, where: doorsByPerson(shown), seen: seenBy(shown)}); shelf.keep(entry);
+  entry.box.set('a', visit('S')); entry.box.set('c', visit('NH')); entry.box.set('b', visit('U', '2026-10-03'));   // b waits for a request of its own
+  const posted: string[][] = [], refused: string[] = [];
+  const ok = await flushList(entry, {...calm, refuse: r => refused.push(...r.keys()), send: async batch => {
+    if (!entry.meta) adoptSaved(entry, saved);                     // the first request saves the list, as sendBatch does
+    const {send, off} = splitOffRoster(entry.roster, batch, entry.moved);
+    refused.push(...off.keys()); posted.push([...send.keys()]);
+  }});
+  assert.equal(ok, true);
+  assert.deepEqual(posted, [['ra', 'rc'], ['rb']], 'the request already taken and the one still waiting both go out under the new ids');
+  assert.deepEqual(refused, [], 'nothing is refused: every voter is on the saved list');
+  assert.ok(!entry.box.unconfirmed());
+  assert.deepEqual(rekeyed({a: 'S', c: null, z: 'O'}, entry.moved), {ra: 'S', rc: null, z: 'O'}, 'the marks on screen follow too');
+  const marks: RefusedMarks = new Map([['query:x', new Map<string, WalkCode | null>([['b', 'O']])]]);
+  rekeyRefused(marks, 'query:x', entry.moved); assert.deepEqual([...marks.get('query:x') ?? []], [['rb', 'O']], 'and so does a refused mark');
+  const same = {a: 'S'}; assert.equal(rekeyed(same, new Map()), same);
+});
+
+test('re-keying never guesses: two alike at one door, a changed name or a voter who is gone stay refused; an unchanged id needs no match', () => {
+  const shown = payload([run({doors: [door(1, '4102', [voter({person_id: 'x1', name: 'Sam Lee'}), voter({person_id: 'x2', name: 'Sam Lee'}), voter({person_id: 'y', name: 'Ana Ruiz'})]),
+    door(2, '4110', [voter({person_id: 'n', name: 'Jo Park'}), voter({person_id: 'g', name: 'Al Gone'}), voter({person_id: 'same', name: 'Kim Day'})])]})]);
+  const saved = payload([run({doors: [door(1, '4102', [voter({person_id: 'rx1', name: 'Sam Lee'}), voter({person_id: 'rx2', name: 'Sam Lee'}), voter({person_id: 'ry', name: 'Ana Ruiz'})]),
+    door(2, '4110', [voter({person_id: 'rn', name: 'Jo Parker'}), voter({person_id: 'same', name: 'Kim Day'})])]})]);
+  const moved = movedIds(seenBy(shown), saved);
+  assert.deepEqual([...moved], [['y', 'ry']]);
+  const roster = new Set(Object.keys(seenBy(saved)));
+  const batch = new Map(['x1', 'x2', 'y', 'n', 'g', 'same'].map(id => [id, visit('S')]));
+  const {send, off} = splitOffRoster(roster, batch, moved);
+  assert.deepEqual([[...send.keys()], [...off.keys()]], [['ry', 'same'], ['x1', 'x2', 'n', 'g']]);
+  const elsewhere = payload([run({doors: [door(1, '4106', [voter({person_id: 'ry', name: 'Ana Ruiz'})])]})]);
+  assert.equal(movedIds(seenBy(shown), elsewhere).size, 0, 'another door is another voter as far as the page can tell');
+});
+
+test('the page\'s own refusals do not say the server refused them; a re-knock names the voters it lost', () => {
+  const server = addRefusal(null, 'Saturday', new Map([['a', visit('S')]]), {a: '4102 N Cedar Heights Dr'}, 'Some of those voters are not on this list.');
+  assert.equal(refusalHeadline(server), 'The server refused 1 result, so it was not saved. Record that door again:'); assert.equal(server.local, undefined);
+  const local = addRefusal(null, 'Saturday', new Map([['b', visit('NH')], ['c', visit('U')]]), {}, OFF_LIST, true);
+  assert.equal(refusalHeadline(local), '2 results were not saved:'); assert.deepEqual(local.reasons, [OFF_LIST], 'the reason line stays');
+  assert.equal(refusalHeadline(addRefusal(server, 'Saturday', new Map([['b', visit('NH')]]), {}, OFF_LIST, true)), '2 results were not saved:', 'mixed: neutral');
+  assert.equal(addRefusal(local, 'Saturday', new Map([['d', visit('S')]]), {}, 'x').local, true, 'stays neutral until dismissed');
+  assert.equal(missingText(1), '1 voter marked Not home is no longer in the voter data.');
+  assert.equal(missingText(3), '3 voters marked Not home are no longer in the voter data.');
+});
+
+test('outbox re-key: waiting results take the new ids in their order; a request already taken keeps its own', () => {
+  const box = resultOutbox<string, WalkVisit>(v => v.on);
+  box.set('a', visit('S')); box.set('b', visit('U')); const taken = box.take(1); box.set('c', visit('O'));
+  box.rekey(new Map([['a', 'ra'], ['b', 'rb'], ['c', 'rc']]));
+  assert.deepEqual([...taken.keys()], ['a']); assert.deepEqual([...box.waiting.keys()], ['rb', 'rc']); assert.ok(box.holds('a') && box.holds('rb'));
+});
+
+test('walk screen wiring (round 2): re-knock losses told, refused marks described, a one-letter search explained, table roles for the phone cards', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  const css = readFileSync(path.join(import.meta.dirname, '../../src/v3/styles/walk.css'), 'utf8');
+  assert.ok(/if\(q\.missing\)setActionNote\(\{text:missingText\(q\.missing\)/.test(src), 're-knock says how many voters it lost');
+  assert.ok(/aria-describedby=\{p\.note\}/.test(src) && /<span id=\{note\} className="walk-unsaved"/.test(src), 'a refused mark is part of its group\'s description');
+  assert.ok(/text\.length===1&&<div className="walk-find-pop walk-find-empty" role="status">Type at least 2 letters</.test(src), 'one letter asks for another');
+  assert.ok(/<table className="walk-table" role="table">/.test(src) && /<tr role="row"/.test(src) && /role="columnheader"/.test(src), 'roles survive the card layout');
+  const phone = css.slice(css.indexOf('@media(max-width:640px)'));
+  assert.ok(/\.walk-res button\{[^}]*height:44px/.test(phone) && /\.walk-table-wrap\{overflow-x:visible\}/.test(phone), 'phone: 44 px buttons, no sideways table');
+  assert.ok(!/@media[^{]*print/.test(css), 'the printed list is the PDF, not this stylesheet');
+});
