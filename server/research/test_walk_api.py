@@ -11,6 +11,7 @@ from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode
 from unittest import mock
 
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
@@ -27,6 +28,8 @@ from .street_views import local_only, local_only_post, response
 LOOPBACK = dict(HTTP_HOST='localhost')
 PROXY_HEADERS = ('HTTP_FORWARDED', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED_HOST', 'HTTP_X_FORWARDED_PROTO')
 JSON = 'application/json'
+ANY_FINGERPRINT = '0' * 64        # well formed, for a save whose result does not depend on the list shown
+OUT_OF_DATE = 'This page is out of date. Reload it, then save the list again.'
 CS, FOUNTAIN = 'COLORADO SPRINGS', 'FOUNTAIN'
 CS_SHOWN, FOUNTAIN_SHOWN = 'Colorado Springs', 'Fountain'   # how the API spells them
 PRECINCT_W, PRECINCT_E, PRECINCT_F = '5200021301', '5200021302', '5200021417'
@@ -125,7 +128,8 @@ class WalkCase(TestCase):
         return {pid for d in doors for pid in d['people']}
 
     def make_list(self, query, title='Test list', status=201):
-        return self.posted('/api/v3/walk/lists', {'title': title, 'query': query}, status)
+        shown = self.json('/api/v3/walk/list?' + urlencode(query))          # saving names the list shown by its fingerprint
+        return self.posted('/api/v3/walk/lists', {'title': title, 'query': query, 'fingerprint': shown['fingerprint']}, status)
 
     def cedar_juniper(self):
         return '%d:both,%d:both' % (self.street_id('Cedar Heights Dr'), self.street_id('Juniper Ln'))
@@ -143,7 +147,7 @@ class WalkAccessTests(WalkCase):
                 ('get', '/api/v3/walk/overview?ss=010', None), ('get', '/api/v3/walk/lists', None),
                 ('get', '/api/v3/walk/lists/' + key, None),
                 ('post', '/api/v3/walk/match', {'rows': [{'street': 'Pine St'}]}),
-                ('post', '/api/v3/walk/lists', {'title': 'Again', 'query': {'ss': '010'}}),
+                ('post', '/api/v3/walk/lists', {'title': 'Again', 'query': {'ss': '010'}, 'fingerprint': ANY_FINGERPRINT}),
                 ('post', '/api/v3/walk/dispositions', {'list': key, 'on': '2026-10-01',
                                                        'entries': [{'person_id': person, 'code': 'S'}]})]
 
@@ -220,7 +224,7 @@ class WalkAccessTests(WalkCase):
         key = self.make_list({'streets': '%d:both' % self.street_id('Ridgeview Ct')})['list']['key']
         person = voters_of(self.json('/api/v3/walk/lists/' + key))[0]['person_id']
         bodies = [('/api/v3/walk/match', {'rows': [{'street': 'Pine St'}]}, 200),
-                  ('/api/v3/walk/lists', {'title': 'Csrf', 'query': {'ss': '011'}}, 201),
+                  ('/api/v3/walk/lists', {'title': 'Csrf', 'query': {'ss': '011'}, 'fingerprint': ANY_FINGERPRINT}, 201),
                   ('/api/v3/walk/dispositions', {'list': key, 'on': '2026-10-01', 'entries': [{'person_id': person, 'code': 'U'}]}, 200)]
         before = (WalkList.objects.count(), Disposition.objects.count())
         for url, body, _ in bodies:
@@ -260,6 +264,7 @@ class WalkAccessTests(WalkCase):
                                    {'title': 'x', 'query': {'ss': '010', 'bogus': '1'}}, {'title': 'x', 'query': {'ss': 10}},
                                    {'title': 'x', 'query': {'streets': '1:left'}}, {'title': 'x', 'query': {}},
                                    {'title': 'x', 'query': {'ss': '010'}, 'extra': 1},
+                                   {'title': 'x', 'query': {'ss': '010'}},                       # no fingerprint
                                    {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': 'abc'},
                                    {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': 'A' * 64},
                                    {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': 5},
@@ -295,6 +300,29 @@ class WalkAccessTests(WalkCase):
             self.assertEqual(self.client.post(url, data={'a': 'b'}).status_code, 400)       # multipart
         self.assertEqual((WalkList.objects.count(), Disposition.objects.count()), before)
 
+    def test_saving_a_list_needs_the_fingerprint_of_the_list_shown(self):
+        body = {'title': 'No fingerprint', 'query': {'ss': '011'}}
+        before = WalkList.objects.count()
+        self.assertEqual(self.error(self.post('/api/v3/walk/lists', body), 400), OUT_OF_DATE)
+        self.assertEqual(WalkList.objects.count(), before)               # nothing was saved
+        for wrong in ('abc', 'A' * 64, 5, None):                          # a malformed one is a plain bad request, as before
+            self.assertNotEqual(self.error(self.post('/api/v3/walk/lists', {**body, 'fingerprint': wrong}), 400), OUT_OF_DATE, repr(wrong))
+        self.assertEqual(WalkList.objects.count(), before)
+        self.posted('/api/v3/walk/lists', {**body, 'fingerprint': ANY_FINGERPRINT}, 201)
+        self.assertEqual(WalkList.objects.count(), before + 1)
+
+    def test_a_re_knock_list_takes_no_fingerprint_and_needs_none(self):
+        key = self.make_list({'streets': '%d:both' % self.street_id('Ridgeview Ct')})['list']['key']
+        person = voters_of(self.json('/api/v3/walk/lists/' + key))[0]['person_id']
+        self.assertEqual(self.posted('/api/v3/walk/dispositions', {'list': key, 'on': '2026-10-01', 'entries': [{'person_id': person, 'code': 'NH'}]}), {'saved': 1})
+        before = WalkList.objects.count()
+        again = self.posted('/api/v3/walk/lists', {'title': 'Again', 'from': key, 'reknock': True}, 201)       # no fingerprint: still made
+        self.assertEqual((again['list']['kind'], WalkList.objects.count()), ('reknock', before + 1))
+        self.assertNotIn('changed', again)
+        refused = self.post('/api/v3/walk/lists', {'title': 'Again', 'from': key, 'reknock': True, 'fingerprint': ANY_FINGERPRINT})
+        self.assertNotEqual(self.error(refused, 400), OUT_OF_DATE)                                             # one is refused, not ignored
+        self.assertEqual(WalkList.objects.count(), before + 1)
+
     def test_a_body_nested_too_deeply_is_a_400_not_a_crash(self):
         for url in ('/api/v3/walk/match', '/api/v3/walk/lists', '/api/v3/walk/dispositions'):
             for raw in (b'[' * 20000, b'{"rows":' * 5000 + b'1' + b'}' * 5000):
@@ -309,7 +337,7 @@ class WalkAccessTests(WalkCase):
         self.assertEqual(response['Cache-Control'], NO_STORE)
         self.assertTrue(any('walk_list failed' in line for line in logged.output))
         with mock.patch.object(V, 'plan_payload', side_effect=ZeroDivisionError), self.assertLogs(V.log, 'ERROR'):
-            self.assertEqual(self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '011'}}).status_code, 500)
+            self.assertEqual(self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '011'}, 'fingerprint': ANY_FINGERPRINT}).status_code, 500)
         self.assertEqual(self.get(ridge).status_code, 200)
 
     def test_a_body_over_256_kb_is_refused(self):
@@ -823,7 +851,7 @@ class WalkListTests(WalkCase):
             self.assertIn('10', message)
             self.assertIn('34 voters', self.error(self.get('/api/v3/walk/list?ss=010'), 400))
             self.assertEqual(self.get('/api/v3/walk/list?streets=%d:both&precinct=%s' % (self.street_id('Juniper Ln'), PRECINCT_W)).status_code, 200)
-            self.error(self.post('/api/v3/walk/lists', {'title': 'Too big', 'query': {'streets': '%d:both' % cedar}}), 400)
+            self.error(self.post('/api/v3/walk/lists', {'title': 'Too big', 'query': {'streets': '%d:both' % cedar}, 'fingerprint': ANY_FINGERPRINT}), 400)
         self.assertEqual(WalkList.objects.count(), 0)
 
     def test_empty_and_unknown_selections_are_said_plainly(self):
@@ -899,7 +927,7 @@ class WalkSavedListTests(WalkCase):
         self.assertEqual(saved['list']['kind'], 'standard')
         self.assertRegex(saved['list']['key'], r'^[0-9a-f]{10}$')
         self.assertEqual(datetime.fromisoformat(saved['list']['created_at']).date(), date.today())
-        self.assertIs(saved.pop('changed'), False)                  # no fingerprint sent (a page from before it existed): nothing to compare
+        self.assertIs(saved.pop('changed'), False)                  # make_list names the list shown by its fingerprint, and the data has not changed
         self.assertEqual({k: v for k, v in saved.items() if k != 'list'}, {k: v for k, v in built.items() if k != 'list'})
         row = WalkList.objects.get(key=saved['list']['key'])
         self.assertEqual((row.title, row.kind, row.parent, row.query), ('Cedar and Juniper', 'standard', None, {'streets': self.cedar_juniper()}))
@@ -1324,7 +1352,7 @@ class WalkStoreChecks(WalkCase):
                 self.assertEqual(self.error(self.get(url), 503), "Walk list data isn't built yet. Run tools/build_walk.py.", url)
             self.assertEqual(self.error(self.post('/api/v3/walk/match', {'rows': [{'street': 'x'}]}), 503),
                              "Walk list data isn't built yet. Run tools/build_walk.py.")
-            self.assertEqual(self.error(self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '010'}}), 503),
+            self.assertEqual(self.error(self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': ANY_FINGERPRINT}), 503),
                              "Walk list data isn't built yet. Run tools/build_walk.py.")
             self.assertEqual(self.get('/api/v3/walk/lists').status_code, 200)
         self.assertFalse((empty / 'walk.sqlite3').exists())                     # a missing store is never created
@@ -1358,7 +1386,7 @@ class WalkStoreChecks(WalkCase):
             with override_settings(DATA_DIR=copy):
                 for url in self.endpoints():
                     self.assertIn('different source', self.error(self.get(url), 409), (store, url))
-                self.assertIn('different source', self.error(self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '010'}}), 409))
+                self.assertIn('different source', self.error(self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '010'}, 'fingerprint': ANY_FINGERPRINT}), 409))
 
     def test_the_crosswalk_must_be_verified_or_a_fixture(self):
         copy = self.copy_world('crosswalk')

@@ -1098,6 +1098,12 @@ import {LIST_REPLACED, OFF_LIST, adoptSaved, splitOffRoster} from '../../src/v3/
 import type {WalkSavedPayload} from '../../src/v3/api/walkTypes.ts';
 const {saveWalkList} = await import('../../src/v3/api/walk.ts');
 
+test('a list shown without a fingerprint is refused as a whole list, with the server words for it', () => {
+  const stale = 'This page is out of date. Reload it, then save the list again.';
+  const r = refusalOf(new ApiError(stale, 400, true), 'list');
+  assert.ok(r && r.whole && r.message === stale, 'a 400 on saving the list refuses the whole batch and keeps the message for the note');
+});
+
 test('saving a list sends the fingerprint of the list shown, and only what the server takes', async () => {
   const real = globalThis.fetch, bodies: unknown[] = [];
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
@@ -1107,9 +1113,8 @@ test('saving a list sends the fingerprint of the list shown, and only what the s
   }) as typeof fetch;
   try {
     await saveWalkList('Saturday', {precinct: '02012'}, 'f'.repeat(64));
-    await saveWalkList('Saturday', {precinct: '02012'});
-    assert.deepEqual(bodies, [{title: 'Saturday', query: {precinct: '02012'}, fingerprint: 'f'.repeat(64)}, {title: 'Saturday', query: {precinct: '02012'}}],
-      'the fingerprint goes with the list it was shown for; a list without one (saved before it existed) sends none');
+    assert.deepEqual(bodies, [{title: 'Saturday', query: {precinct: '02012'}, fingerprint: 'f'.repeat(64)}],
+      'the fingerprint goes with the list it was shown for (the server refuses a save without one, so the call cannot leave it out)');
   } finally { globalThis.fetch = real; }
 });
 
@@ -1158,7 +1163,8 @@ test('results for voters the saved list does not have are refused here, never se
 
 test('walk screen wiring (list saved after the voter data changed): fingerprint sent, saved list shown with a note, off-list results refused', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
-  assert.ok(/saveWalkList\(entry\.title,entry\.query,entry\.fingerprint\)/.test(src) && /adoptSaved\(entry,saved\)/.test(src), 'the save sends the fingerprint and the entry takes the answer');
+  assert.ok(/saveWalkList\(entry\.title,entry\.query,fingerprint\)/.test(src) && /adoptSaved\(entry,saved\)/.test(src), 'the save sends the fingerprint and the entry takes the answer');
+  assert.ok(/fingerprint\?saveWalkList\([^)]*\):Promise\.reject\(new ApiError\(OUT_OF_DATE,400,true\)\)/.test(src), 'a list shown without a fingerprint is refused here as the server would, never sent without one');
   assert.ok(/fingerprint:p\.fingerprint/.test(src), 'each list on screen carries its fingerprint');
   assert.ok(/const next=entry\.replaced\?\?\{\.\.\.base,list\}/.test(src) && /setReplaced\(true\)/.test(src) && /\{LIST_REPLACED\}/.test(src), 'the saved list replaces the one shown, with the note');
   assert.ok(/splitOffRoster\(entry\.roster,visits,entry\.moved\)/.test(src) && /offList\(off,OFF_LIST\)/.test(src), 'results for voters not on the saved list are refused, not sent');

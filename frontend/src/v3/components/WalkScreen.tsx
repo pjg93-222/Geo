@@ -49,12 +49,16 @@ function holdRefused(entry:HeldList,refused:Map<string,WalkVisit>,why:string,loc
   keepRefused(refusedMarks,identities(entry)[0],refused);
   return refusalNote=addRefusal(refusalNote,entry.meta?.title||entry.title,refused,entry.where,why,local);
 }
+const OUT_OF_DATE='This page is out of date. Reload it, then save the list again.';   // the server's words for a save without a fingerprint
 /** Saves the list an entry belongs to, once. The answer stays on the entry, so a second ask (or a screen that comes later) shares it. */
 function saveEntry(entry:HeldList,title?:string):Promise<WalkListMeta>{
   if(entry.meta?.key)return Promise.resolve(entry.meta);
   if(entry.saving)return entry.saving;
   if(title?.trim())entry.title=title.trim();
-  const job:Promise<WalkListMeta>=saveWalkList(entry.title,entry.query,entry.fingerprint).then(saved=>{
+  // Every list the server builds carries a fingerprint and it refuses a save without one; a list shown without one is answered the same way here
+  // (a refusal of the whole list, so the marks stay flagged), and nothing is sent.
+  const {fingerprint}=entry;
+  const job:Promise<WalkListMeta>=(fingerprint?saveWalkList(entry.title,entry.query,fingerprint):Promise.reject(new ApiError(OUT_OF_DATE,400,true))).then(saved=>{
     if(!saved.list?.key)throw new Error('The list could not be saved.');
     const list=adoptSaved(entry,saved);   // when the voter data changed since the list was shown, the list saved is the new one: the entry keeps it
     for(const id of identities(entry))rekeyRefused(refusedMarks,id,entry.moved);   // and a voter whose id changed keeps a refused mark

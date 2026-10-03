@@ -58,7 +58,7 @@ export interface WalkListPayload {
   fingerprint?: string; context?: WalkContext;
 }
 
-// POST /api/v3/walk/lists {title, query, fingerprint?} -> 201 WalkSavedPayload | {title, from, reknock: true} -> 201 WalkListPayload (list.key set)
+// POST /api/v3/walk/lists {title, query, fingerprint} -> 201 WalkSavedPayload | {title, from, reknock: true} -> 201 WalkListPayload (list.key set)
 // The list is built again to be saved; `changed` is true when that list differs from the one whose fingerprint was sent (the voter data
 // changed in between): the list saved, and sent back, is the new one.
 export interface WalkSavedPayload extends WalkListPayload { changed?: boolean }

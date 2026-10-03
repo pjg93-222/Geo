@@ -589,6 +589,21 @@ try{
     }finally{await page.setViewportSize(DESKTOP);}
   });
 
+  // ---- 9b. a save without a fingerprint is refused, in words that tell the walker what to do -------------------------------------
+  await step('save needs fingerprint',async()=>{
+    const before=(await api('/api/v3/walk/lists')).lists.length;
+    const answer=await page.evaluate(async query=>{     // the same session token and header the page itself uses
+      const {csrf}=await (await fetch('/api/auth/session',{credentials:'same-origin'})).json();
+      const r=await fetch('/api/v3/walk/lists',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRFToken':csrf},
+        body:JSON.stringify({title:'No fingerprint',query})});
+      return {status:r.status,body:await r.json()};
+    },listing.query);
+    assert.equal(answer.status,400,'a list save without a fingerprint was not refused');
+    assert.equal(answer.body.error,'This page is out of date. Reload it, then save the list again.','the refusal does not tell the walker to reload');
+    assert.equal((await api('/api/v3/walk/lists')).lists.length,before,'a refused save still made a list');
+    return 'A direct list save without a fingerprint answers 400 "This page is out of date. Reload it, then save the list again." and saves nothing';
+  },['generate']);
+
   // ---- 10. fault injection: the list request fails, Retry recovers ---------------------------------------------------------
   await step('fault',async()=>{
     await page.goto(base+'/walk');

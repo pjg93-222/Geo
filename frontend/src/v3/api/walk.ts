@@ -34,10 +34,10 @@ export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal):Pr
 }
 export function getWalkLists(signal?:AbortSignal):Promise<WalkListsPayload>{return localJson(`${BASE}/lists`,signal);}
 export function getWalkSavedList(key:string,signal?:AbortSignal):Promise<WalkListPayload>{return localJson(`${BASE}/lists/${encodeURIComponent(key)}`,signal);}
-/** Freezes a list under a title; `queryOf` is the query the list was built from, `fingerprint` that of the list shown. Answers with the
- *  saved list, key set, and `changed` when it is not the list shown. */
-export function saveWalkList(title:string,queryOf:Record<string,string>,fingerprint?:string,signal?:AbortSignal):Promise<WalkSavedPayload>{
-  return postJson(`${BASE}/lists`,{title,query:queryOf,...fingerprint?{fingerprint}:{}},signal);
+/** Freezes a list under a title; `queryOf` is the query the list was built from, `fingerprint` that of the list shown (the server refuses a save
+ *  without one). Answers with the saved list, key set, and `changed` when it is not the list shown. */
+export function saveWalkList(title:string,queryOf:Record<string,string>,fingerprint:string,signal?:AbortSignal):Promise<WalkSavedPayload>{
+  return postJson(`${BASE}/lists`,{title,query:queryOf,fingerprint},signal);
 }
 /** A new list of the doors where the latest result on `from` is Not home; `missing` counts those the voter data no longer has. */
 export function reknockWalkList(title:string,from:string,signal?:AbortSignal):Promise<WalkReknockPayload>{

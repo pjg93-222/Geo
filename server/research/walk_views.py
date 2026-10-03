@@ -6,7 +6,7 @@
   GET  /api/v3/walk/list         a walk list built now: runs in walking order, doors, voters (at most 40 streets, 1,500 voters)
   GET  /api/v3/walk/overview     the blocks of an area with door and party counts, for map shading
   GET  /api/v3/walk/lists        the 50 newest saved lists
-  POST /api/v3/walk/lists        freeze a list {title, query, fingerprint?}, answered with `changed` when the list built to save
+  POST /api/v3/walk/lists        freeze a list {title, query, fingerprint}, answered with `changed` when the list built to save
                                  differs from the one shown; or make a re-knock list {title, from, reknock: true}, answered
                                  with `missing`, the voters marked Not home that the voter data no longer has
   GET  /api/v3/walk/lists/<key>  a saved list as it was frozen, with each voter's latest result {code, on, list} refreshed
@@ -603,7 +603,9 @@ def create_list(request):
     query = body.get('query')
     if set(body) - {'fingerprint'} != {'title', 'query'} or not isinstance(query, dict) or not set(query) <= QUERY_KEYS:
         raise BadRequest('A list needs a title and a query')
-    shown = clean(body['fingerprint'], r'[0-9a-f]{64}') if 'fingerprint' in body else None
+    if 'fingerprint' not in body:       # only a plain save needs it: a re-knock list above takes none (and refuses one)
+        raise Refused('This page is out of date. Reload it, then save the list again.')
+    shown = clean(body['fingerprint'], r'[0-9a-f]{64}')
     picks, area, query = list_query(query)
     with W.walk_store() as store:
         payload, keys = standard_payload(store, picks, area, query)
@@ -612,7 +614,7 @@ def create_list(request):
     saved = C.attach(freeze(payload, keys, title, 'standard', None, info))
     # The list is built again to be saved. If the voter data changed since the walker was shown it, the list saved is the
     # new one, never quietly: `changed` tells the page to show the list it gets back instead of the one it had.
-    return response({**saved, 'changed': shown is not None and shown != saved['fingerprint']}, 201)
+    return response({**saved, 'changed': shown != saved['fingerprint']}, 201)
 
 
 @read
