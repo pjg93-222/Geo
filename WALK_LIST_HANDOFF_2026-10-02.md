@@ -2,15 +2,18 @@
 
 ## Status
 
-- **`main` is fast-forwarded to `b672820`.** Commits, in order:
+- **`main` is fast-forwarded to `fc671d4`** (plus this handoff update). Commits, in order:
   - `e5bf03e` feat(walk): add Walk list tab for canvass walk lists
   - `7f80580` fix(walk): remove time estimates from walk-list output
   - `9df1158` docs(walk): add walk list handoff for 2026-10-02
   - `bf2356d` fix(walk): address Codex Astra frontend review findings
   - `43f9fd0` fix(walk): keep refused results instead of blocking the screen
   - `b672820` fix(walk): stable re-knock keys, save drift detection, phone layout
+  - `a6f68cf` docs(walk): update handoff for b672820 and the live restart
+  - `290eddf` fix(walk): show a bottom bar on phones while results are not saved
+  - `fc671d4` fix(walk): drop the unused minutes figure from list totals
 - Work branch: `claude/walk-list`. No remote; nothing pushed.
-- Live app on 127.0.0.1:8767 was restarted at 22:13 on `b672820` and serves the **Walk list** tab (8 tabs total). The new backend is required: the new frontend sends `fingerprint` on save, which the old backend rejects.
+- Live app on 127.0.0.1:8767 was restarted on 2026-10-03 at 17:07 on `fc671d4` (PID 55544) and serves the **Walk list** tab (8 tabs total). It runs the backend that accepts `fingerprint` on save and no longer sends `minutes`. Fingerprints changed with the `minutes` removal, so a tab opened before this restart shows the "voter data was updated" note once on its next save; reloading avoids it. (Earlier restart: 2026-10-02 22:13 on `b672820`.)
 - Everything is committed. See Open items 1 for what each fix commit changed.
 
 ## What the feature does
