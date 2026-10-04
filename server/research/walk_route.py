@@ -11,11 +11,16 @@ exactly as before on its own deadhead table: a few runs exactly; more by nearest
 direction flips and or-opt, repeated from double-bridge kicks under a deterministic work cap. Groups are then ordered
 on the straight-line gaps between their first and last stops, and each step between two groups is found by A* on the
 network. Reported distances are true walking metres; the crossing allowance only steers the order (RoutePlan.cost).
-Within a run the numbered doors are listed by house number in the walking direction. The same input always gives the
-same plan.
+Within a run the numbered doors are listed by house number in the walking direction.
+
+The same input always gives the same plan: every search ends on a count of move evaluations (EVALS_PER_MS per budget
+millisecond), never on the clock, so neither machine speed nor load changes the order. The one nondeterministic path
+is the BACKSTOP, a wall-clock limit on the whole search far above what the work cap takes on real lists; it exists
+only for pathological inputs or a machine stalled for seconds, and when it cuts a search short it logs a warning.
 """
 import heapq
 import json
+import logging
 import math
 import time
 from bisect import bisect_left, bisect_right
@@ -29,8 +34,8 @@ DETOUR = 1.5          # straight-line factor between stops the loaded network do
 EXACT_TASKS = 8       # up to this many runs the order is solved exactly
 STARTS = 20           # nearest-next starts
 NEIGHBOURS = 16       # candidate list length for 2-opt and or-opt
-EVALS_PER_MS = 500    # move evaluations per budget millisecond: a deterministic cap on the search
-BACKSTOP = 3          # wall-clock limit in budgets, for machines far slower than that rate
+EVALS_PER_MS = 500    # move evaluations per budget millisecond: the deterministic cap that ends the search
+BACKSTOP = 5.0        # seconds of wall clock for the whole search; a last resort, never reached on real lists
 EPS = 1e-7
 DEG_M = math.pi * 6371008.8 / 180
 PAD_M = 400.0         # network loaded around the stops; grown PAD_GROWTH-fold while their blocks are not connected
@@ -38,6 +43,8 @@ PAD_GROWTH = 4
 PAD_MAX_M = 102400.0
 GROUP_GAP_M = 1500.0  # runs farther apart than this (straight line, end to end) are ordered as separate groups
 NODE_SLACK_M = 2.0    # node positions are kept to the metre: the A* estimate stays this much under the straight line
+
+log = logging.getLogger(__name__)
 
 
 class RouteTooLarge(ValueError):
@@ -50,6 +57,23 @@ class RouteTooLarge(ValueError):
 
 def edge_cost(len_m, kind):
     return float(len_m or 0) * (ARTERIAL_FACTOR if kind == 'S1200' else 1.0)
+
+
+class _Deadline:
+    """The BACKSTOP of one plan's search: a wall-clock instant shared by every group's search, logged once if passed."""
+    __slots__ = ('at', 'tripped')
+
+    def __init__(self, seconds):
+        self.at, self.tripped = time.perf_counter() + seconds, False
+
+    def passed(self, evals, max_evals, n):
+        if time.perf_counter() <= self.at:
+            return False
+        if not self.tripped:
+            self.tripped = True
+            log.warning('walk route: the search passed its %.1f s backstop after %d of %d evaluations on %d items; '
+                        'this plan may differ from a rebuild of the same list', BACKSTOP, evals, max_evals, n)
+        return True
 
 
 class Span:
@@ -104,13 +128,24 @@ class Graph:
     adj: dict = field(default_factory=dict)    # node -> [(neighbour, cost, span id)]; links are whole spans
     spans: dict = field(default_factory=dict)  # span id -> Span
     _index: tuple = field(default=None, repr=False, compare=False)
+    _links: tuple = field(default=None, repr=False, compare=False)
+    _read: dict = field(default=None, repr=False, compare=False)   # span id -> (Span, edge ids) read from road_span
 
     def index(self):
-        """({node: dense index}, [[(neighbour index, cost, metres)] per index]), built once and shared by the groups."""
+        """({node: dense index}, [[(neighbour index, cost, metres)] per index]), built once and shared by the groups.
+        Dense indices follow node ids, so a search over them breaks ties exactly as one over the ids would."""
         if self._index is None:
-            at = {n: i for i, n in enumerate(sorted(self.adj))}
-            self._index = (at, [[(at[v], w, self.spans[sid].len_m) for v, w, sid in self.adj[n]] for n in sorted(self.adj)])
+            nodes, spans = sorted(self.adj), self.spans
+            at = {n: i for i, n in enumerate(nodes)}
+            self._index = (at, [[(at[v], w, spans[sid].len_m) for v, w, sid in self.adj[n]] for n in nodes])
         return self._index
+
+    def links(self):
+        """([node id per dense index], [[span id] per index, in the order of index()'s links]), built on first use."""
+        if self._links is None:
+            nodes = sorted(self.adj)
+            self._links = (nodes, [[sid for _, _, sid in self.adj[n]] for n in nodes])
+        return self._links
 
 
 @dataclass
@@ -167,71 +202,116 @@ def _astar(graph, xy, starts, goals):
     getting on at that node and off from it: (cost, metres, first node, last node, [(node, span id), ...] from the
     first node), or None when no goal is reachable. The estimate is the straight line (xy metres) to the nearest goal
     less NODE_SLACK_M, never more than the cost still to come, so the answer is the cheapest; without positions for
-    every goal it is 0 (Dijkstra)."""
-    targets = [xy[n] for n in goals if n in xy]
+    every goal it is 0 (Dijkstra). `xy` holds (x, y) or None by graph.index() position.
 
-    def h(n):
-        p = xy.get(n)
-        if p is None or len(targets) < len(goals):
+    The search runs on graph.index()'s dense arrays, numbered in node id order, so the heap pops (estimate, cost,
+    node) in the same order as it would over the ids and equal-cost ties resolve the same way. Each node's estimate
+    is worked out once and reused (the same float every time)."""
+    at, nb = graph.index()
+    nodes, sids = graph.links()
+    goal = {at[n]: goals[n][0] for n in goals}
+    targets = [xy[i] for i in goal if xy[i] is not None]
+    plain = len(targets) < len(goal)
+    count = len(nb)
+    best, size, prev, est = [INF] * count, [0.0] * count, [None] * count, [-1.0] * count
+    hypot, push, pop = math.hypot, heapq.heappush, heapq.heappop
+    (qx, qy), (rx, ry) = targets[0] if targets else (0.0, 0.0), targets[-1] if targets else (0.0, 0.0)
+
+    def h(i):
+        """max(0, min(straight line to each goal) - NODE_SLACK_M), as min() and max() would pick (a goal span has
+        two ends at most)."""
+        p = xy[i]
+        if p is None or plain:
             return 0.0
-        return max(0.0, min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in targets) - NODE_SLACK_M)
-    best, size, prev, heap = {}, {}, {}, []
+        if len(targets) > 2:
+            v = min(hypot(p[0] - q[0], p[1] - q[1]) for q in targets)
+        else:
+            v = hypot(p[0] - qx, p[1] - qy)
+            w = hypot(p[0] - rx, p[1] - ry)
+            if w < v:
+                v = w
+        v -= NODE_SLACK_M
+        return v if v > 0.0 else 0.0
+    heap = []
     for n in sorted(starts):
-        best[n], size[n], prev[n] = starts[n][0], starts[n][1], None
-        heapq.heappush(heap, (starts[n][0] + h(n), starts[n][0], n))
+        i, c = at[n], starts[n][0]
+        best[i], size[i] = c, starts[n][1]
+        hv = est[i] = h(i)
+        push(heap, (c + hv, c, i))
     found = None
     while heap:
-        f, d, u = heapq.heappop(heap)
+        f, d, u = pop(heap)
         if d > best[u]:
             continue
         if found is not None and f >= found[0]:
             break
-        if u in goals and (found is None or d + goals[u][0] < found[0]):
-            found = (d + goals[u][0], u)
-        for v, w, sid in graph.adj.get(u, ()):
+        g = goal.get(u)
+        if g is not None and (found is None or d + g < found[0]):
+            found = (d + g, u)
+        su = size[u]
+        for (v, w, metres), sid in zip(nb[u], sids[u]):
             nd = d + w
-            if nd < best.get(v, INF):
-                best[v], size[v], prev[v] = nd, size[u] + graph.spans[sid].len_m, (u, sid)
-                heapq.heappush(heap, (nd + h(v), nd, v))
+            if nd < best[v]:
+                best[v], size[v], prev[v] = nd, su + metres, (u, sid)
+                hv = est[v]
+                if hv < 0.0:
+                    hv = est[v] = h(v)
+                push(heap, (nd + hv, nd, v))
     if found is None:
         return None
     links, node = [], found[1]
     while prev[node] is not None:
         u, sid = prev[node]
-        links.append((u, sid))
+        links.append((nodes[u], sid))
         node = u
-    return found[0], size[found[1]] + goals[found[1]][1], node, found[1], links[::-1]
+    last = nodes[found[1]]
+    return found[0], size[found[1]] + goals[last][1], nodes[node], last, links[::-1]
+
+
+def _plain(conn):
+    """A cursor that returns plain tuples whatever the connection's row_factory (the same values, built faster)."""
+    cursor = conn.cursor()
+    cursor.row_factory = None
+    return cursor
 
 
 def _rows(conn, sql, ids):
-    ids = sorted(ids)
+    """The rows of `sql` (an IN ({}) query) for `ids` as tuples, by chunks of 900 ids in id order, in one list."""
+    ids, out, cursor = sorted(ids), [], _plain(conn)
     for i in range(0, len(ids), 900):
         chunk = ids[i:i + 900]
-        yield from conn.execute(sql.format(','.join('?' * len(chunk))), chunk)
+        out.extend(cursor.execute(sql.format(','.join('?' * len(chunk))), chunk))
+    return out
 
 
-def load_graph(conn, bbox, pad_m=PAD_M, *, span_ids=()):
+def load_graph(conn, bbox, pad_m=PAD_M, *, span_ids=(), reuse=None):
     """Spans with an edge inside bbox (west, south, east, north; degrees) grown by pad_m, plus `span_ids`.
 
-    A span costs the sum of its edges' costs (len_m, x ARTERIAL_FACTOR on S1200). Edges without a span stand alone."""
+    A span costs the sum of its edges' costs (len_m, x ARTERIAL_FACTOR on S1200). Edges without a span stand alone.
+    `reuse`, a graph loaded earlier from the same connection, lends the spans it read: a span is the same whatever box
+    loaded it (its row, and its cost over all of its edges), so only spans new to this box are read and built."""
     west, south, east, north = bbox
     dlat = pad_m / DEG_M
     dlon = dlat / max(math.cos(math.radians((south + north) / 2)), 0.01)
-    edges = {r[0]: r for r in conn.execute(
+    edges = {r[0]: r for r in _plain(conn).execute(
         'SELECT e.id,e.u,e.v,e.len_m,e.kind,e.name_key,e.span_id FROM road_edge_box x JOIN road_edge e ON e.id=x.id '
         'WHERE x.west<=? AND x.east>=? AND x.south<=? AND x.north>=?',
         (east + dlon, west - dlon, north + dlat, south - dlat))}
     wanted = {r[6] for r in edges.values() if r[6] is not None} | {s for s in span_ids if s is not None}
-    rows = {r[0]: (r, [abs(int(e)) for e in json.loads(r[6] or '[]')]) for r in _rows(
-        conn, 'SELECT id,name_key,a,b,len_m,kind,edges,coords,even_left FROM road_span WHERE id IN ({})', wanted)}
-    missing = {e for _, ids in rows.values() for e in ids} - edges.keys()
+    known = reuse._read if reuse is not None and reuse._read is not None else {}
+    read = {sid: known[sid] for sid in wanted if sid in known}
+    rows = _rows(conn, 'SELECT id,name_key,a,b,len_m,kind,edges,coords,even_left FROM road_span WHERE id IN ({})',
+                 [sid for sid in wanted if sid not in read])
+    lists = [[abs(int(e)) for e in ids] for ids in json.loads('[%s]' % ','.join(r[6] or '[]' for r in rows))]
+    missing = ({e for ids in lists for e in ids} | {e for _, ids in read.values() for e in ids}) - edges.keys()
     edges.update((r[0], r) for r in _rows(
         conn, 'SELECT id,u,v,len_m,kind,name_key,span_id FROM road_edge WHERE id IN ({})', missing))
-    spans = {}
-    for sid, (r, ids) in sorted(rows.items()):
-        known = [edges[e] for e in ids if e in edges]
-        cost = sum(edge_cost(e[3], e[4]) for e in known) if ids and len(known) == len(ids) else edge_cost(r[4], r[5])
-        spans[sid] = Span(sid, r[1], r[2], r[3], r[4], r[5], cost, r[8], r[7])
+    each = {e: edge_cost(r[3], r[4]) for e, r in edges.items()}
+    for r, ids in zip(rows, lists):    # a span costs sum() of its edges' costs in its own order (one summation)
+        costs = [each.get(e) for e in ids]
+        cost = sum(costs) if ids and None not in costs else edge_cost(r[4], r[5])
+        read[r[0]] = (Span(r[0], r[1], r[2], r[3], r[4], r[5], cost, r[8], r[7]), ids)
+    spans = {sid: read[sid][0] for sid in sorted(read)}   # by id, the order the spans are built and linked in
     alone = sorted(e for e, r in edges.items() if r[6] not in spans)
     for eid, coords in _rows(conn, 'SELECT id,coords FROM road_edge WHERE id IN ({})', alone):
         r = edges[eid]
@@ -242,7 +322,7 @@ def load_graph(conn, bbox, pad_m=PAD_M, *, span_ids=()):
         adj[sp.a].append((sp.b, sp.cost, sid))
         if sp.b != sp.a:
             adj[sp.b].append((sp.a, sp.cost, sid))
-    return Graph(dict(adj), spans)
+    return Graph(dict(adj), spans, _read=read)
 
 
 def _connected(adj, nodes):
@@ -270,29 +350,32 @@ def _node_matrix(graph, terms):
     for r in range(k):
         D[r][r] = L[r][r] = 0.0
     dist, size = [INF] * len(nb), [0.0] * len(nb)
+    push, pop = heapq.heappush, heapq.heappop
     for r in range(k - 1):
         want = {tix[c]: c for c in range(r + 1, k) if tix[c] >= 0}
         if tix[r] < 0 or not want:
             continue
         dist[tix[r]], heap, left, touched = 0.0, [(0.0, tix[r])], len(want), [tix[r]]
         while heap:
-            d, u = heapq.heappop(heap)
+            d, u = pop(heap)
             if d > dist[u]:
                 continue
-            c = want.get(u)
-            if c is not None:
+            if u in want:
+                c = want[u]
                 D[r][c] = D[c][r] = d
                 L[r][c] = L[c][r] = size[u]
                 left -= 1
                 if not left:
                     break
+            su = size[u]
             for v, w, metres in nb[u]:
                 nd = d + w
-                if nd < dist[v]:
-                    if dist[v] == INF:
+                dv = dist[v]
+                if nd < dv:
+                    if dv == INF:
                         touched.append(v)
-                    dist[v], size[v] = nd, size[u] + metres
-                    heapq.heappush(heap, (nd, v))
+                    dist[v], size[v] = nd, su + metres
+                    push(heap, (nd, v))
         for v in touched:
             dist[v], size[v] = INF, 0.0
     return D, L
@@ -531,7 +614,7 @@ class _Order:
 
     def solve(self, max_evals, deadline):
         """A short tour of all items: exact for a few; else the best nearest-next tour from the starts, improved by
-        _Search within max_evals move evaluations."""
+        _Search within max_evals move evaluations (`deadline`, a _Deadline, is only the backstop)."""
         if self.n > EXACT_TASKS:
             best = None
             for s in self.starts():
@@ -707,9 +790,11 @@ class _Route:
     def baseline(self):
         return _baseline(self.tasks)
 
-    def order(self, budget_ms, started):
-        """The shortest tour found: each group's own (never worse than its house-number order), groups in order."""
-        deadline, tours = started + BACKSTOP * budget_ms / 1000, []
+    def order(self, budget_ms):
+        """The shortest tour found: each group's own (never worse than its house-number order), groups in order. The
+        work of every search is capped by budget_ms * EVALS_PER_MS move evaluations, shared by the groups by their
+        runs; BACKSTOP seconds from here is the wall-clock last resort."""
+        deadline, tours = _Deadline(BACKSTOP), []
         for members, model in zip(self.groups, self.models):
             base = tour = model.baseline()
             if len(members) > 1:
@@ -739,9 +824,12 @@ class _Route:
         stop) of another group: A* over the network, the crossing allowance as in _Model."""
         if (e, f) in self.steps:
             return self.steps[(e, f)]
-        if self.xy is None:
-            self.xy = {r[0]: (r[1], r[2]) for r in self.conn.execute('SELECT id, x, y FROM road_node')
-                       if r[1] is not None and r[2] is not None}
+        if self.xy is None:                    # positions of the loaded network's nodes, by graph.index() position
+            at, _ = self.graph.index()
+            self.xy = [None] * len(at)
+            for n, x, y in _rows(self.conn, 'SELECT id, x, y FROM road_node WHERE id IN ({})', at):
+                if x is not None and y is not None:
+                    self.xy[at[n]] = (x, y)
         (sp_e, x_e), (sp_f, x_f) = self.ends[e], self.ends[f]
         starts, goals = {}, {}
         for out, sp, x, towards in ((starts, sp_e, x_e, True), (goals, sp_f, x_f, False)):
@@ -793,7 +881,7 @@ class _Search:
     """Local search on a tour of states: 2-opt with direction flips (segment reversal) and or-opt of 1-3 tasks in
     either direction, on candidate lists, re-examining only tasks next to changed edges; then double-bridge kicks
     from a fixed-seed generator, kept when they shorten the tour. Work is capped by a count of move evaluations
-    (deterministic); the deadline is only a backstop."""
+    (deterministic); the deadline is only the BACKSTOP, the one path on which the clock can change the result."""
 
     def __init__(self, model, tour, max_evals, deadline):
         self.G, self.near, self.tour, self.n = model.G, model.near, list(tour), len(tour)
@@ -816,7 +904,7 @@ class _Search:
                 self.queue.append(s >> 1)
 
     def spent(self):
-        return self.evals >= self.max_evals or time.perf_counter() > self.deadline
+        return self.evals >= self.max_evals or self.deadline.passed(self.evals, self.max_evals, self.n)
 
     def flip(self, i, j):
         t = self.tour
@@ -901,7 +989,7 @@ class _Search:
         return False
 
     def run(self):
-        """Improve until no queued task yields a move; False when the work cap or the deadline cut it short."""
+        """Improve until no queued task yields a move; False when the work cap (or the backstop) cut it short."""
         while self.queue:
             if self.spent():
                 return False
@@ -1023,7 +1111,7 @@ def _prepare(conn, stops):
             while pad < PAD_MAX_M and not _connected(graph.adj, {n for sid in ids if sid in graph.spans
                                                                 for n in (graph.spans[sid].a, graph.spans[sid].b)}):
                 pad *= PAD_GROWTH
-                wider = load_graph(conn, box, pad, span_ids=ids)
+                wider = load_graph(conn, box, pad, span_ids=ids, reuse=graph)
                 if len(wider.spans) == len(graph.spans):
                     break                     # the whole network is in: what is not connected never will be
                 graph = wider
@@ -1041,11 +1129,10 @@ def plan_route(conn, stops, *, budget_ms=300, max_runs=None):
     graph, tasks, loose = _prepare(conn, stops)
     plan = RoutePlan()
     if tasks:
-        started = time.perf_counter()
         route = _Route(conn, graph, tasks, max_runs)
         tour = base = route.baseline()
         if len(tasks) > 1:
-            tour = route.order(budget_ms, started)
+            tour = route.order(budget_ms)
             if route.totals(base)[1] < route.totals(tour)[1]:
                 tour = base
             back = [s ^ 1 for s in reversed(tour)]  # same length; keep the direction with more runs in house order
