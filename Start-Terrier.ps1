@@ -1,10 +1,10 @@
-param([switch]$NoBrowser, [switch]$Quiet)
+param([switch]$NoBrowser, [switch]$Quiet, [switch]$NoSupervisor)
 $ErrorActionPreference = 'Stop'
 $terrierRoot = $PSScriptRoot
 $logDirectory = Join-Path $terrierRoot '_build'
 try {
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-    & (Join-Path $terrierRoot 'Start-TerrierServer.ps1')
+    & (Join-Path $terrierRoot 'Start-TerrierServer.ps1') -NoSupervisor:$NoSupervisor
     if (!$NoBrowser) {
         $candidates = @(
             (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),

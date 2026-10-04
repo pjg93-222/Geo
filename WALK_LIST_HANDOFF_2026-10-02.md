@@ -16,7 +16,7 @@
   - `fde78d4` fix(walk): require the shown list's fingerprint on save
 - Work branch: `claude/walk-list`. No remote; nothing pushed. Everything is committed. See Open items 1 for what each fix commit changed.
 - Live app on 127.0.0.1:8767 was restarted on 2026-10-03 at 17:40 on `fde78d4` (PID 82300) and serves the **Walk list** tab (8 tabs total). It requires `fingerprint` on a plain list save and no longer sends `minutes`. Tabs opened since the 2026-10-02 22:13 restart already send the fingerprint; an older tab gets "This page is out of date. Reload it, then save the list again." with its marks kept and flagged "not saved".
-- The previous live server (PID 55544, started 17:07 on `fc671d4`) had already exited before the 17:40 restart (`Stop-TerrierServer.ps1`: "Recorded process is absent"), so the app may have been down for part of that window. Cause not investigated. Earlier restarts: 2026-10-03 17:07 on `fc671d4`; 2026-10-02 22:13 on `b672820`.
+- The previous live server (PID 55544, started 17:07 on `fc671d4`) had already exited before the 17:40 restart (`Stop-TerrierServer.ps1`: "Recorded process is absent"), so the app may have been down for part of that window. It crashed at 17:25 (a thread-pool handle fault seen in ntdll across Python processes on this machine, not specific to Terrier; see Open items 8). Since then the launch scripts have a supervisor and crash logs (see "Server supervision and crash logs"); the live server predates them. Earlier restarts: 2026-10-03 17:07 on `fc671d4`; 2026-10-02 22:13 on `b672820`.
 
 ## What the feature does
 
@@ -121,6 +121,11 @@ Dependencies added: `jspdf@4.2.1`, `jspdf-autotable@5.0.8` (pinned; lazy-loaded 
 4. Codex tooling: the Codex MCP server is older than the bundled CLI, so `gpt-6-astra` works only via `codex exec` (MCP returns a 400 "requires a newer version").
 5. GateGuard friction: optional `GATEGUARD_EXEMPT_GLOBS` in `~/.claude/settings.json` for this repo and scratch paths (owner's call).
 6. Turf splitting into packets (e.g. ~100 doors per volunteer) was removed for simplicity; large lists (e.g. list A) need manual splitting by route stop.
+8. **Live server crash, 2026-10-03 17:25.** The live server (PID 55544, started 17:07) died with exception code `0xc000070a` at `ntdll+0xc87a4`. That code is `STATUS_THREADPOOL_HANDLE_EXCEPTION` (`certutil -error 0xc000070a`: "Status 0x%08x was returned, waiting on handle 0x%x for wait 0x%p, in waiter 0x%p"), **not** heap corruption (`0xc0000374`). A thread-pool wait fired on a handle that had already been closed or was invalid. That is a handle-misuse bug in software (Python or a native library it loads), not a RAM fault.
+   - It is not specific to Terrier. WER `ReportArchive` holds 172 `python.exe` AppCrash reports since 2026-09-19, most with this signature (`0xc000070a` at `ntdll+0xc87a4`). They come from both the codex-runtimes Python and the system Python312 (3.12.14). No readable `.dmp` files were found.
+   - The crashed server's `terrier-server.err.log` was overwritten by the 17:40 start, so its output is lost, and nothing restarted it.
+   - Fixed since: logs are rotated, a fault log is kept, and a supervisor restarts the server (see "Server supervision and crash logs"). Not fixed: the cause.
+   - Suggested next step, owner's call: open the WER `Report.wer` for the 55544 crash to see its loaded-module list, or turn on WER LocalDumps for `python.exe`. LocalDumps is a system registry setting the owner must make; the next crash then leaves a dump showing which module closed the handle.
 
 ## Useful commands
 
@@ -135,6 +140,33 @@ node frontend/scripts/check-no-eval.mjs --require
 $env:CU_DATA_DIR='<empty-dir>'; $env:CU_DEMO='0'; & ..\..\work\.venv\Scripts\python.exe manage.py serve --port 8768
 $env:TERRIER_URL='http://127.0.0.1:8768'; node frontend/scripts/verify-walk-list.mjs
 ```
+
+## Server supervision and crash logs
+
+- **Start:** `Start-Terrier.ps1` (and the desktop shortcut) start the server, and also start a hidden, detached `Watch-TerrierServer.ps1` supervisor. If the supervisor cannot be started or recorded, the start still succeeds with a warning, and no unrecorded supervisor is left running. Pass `-NoSupervisor` (to `Start-Terrier.ps1` or `Start-TerrierServer.ps1`) to start the server alone. The server record `_build/terrier-server-pid.json` has the same format as before. The supervisor is recorded in `_build/terrier-supervisor-pid.json` (pid, script, started, url) and identified by PID, `powershell.exe`, its script path and its creation time.
+- **On an unexpected exit** the supervisor appends a line to `_build/terrier-supervisor.log` (time, supervisor PID, old server PID, exit code, restart number). It then waits 5, 15, 30, then 60 s and relaunches through `Start-TerrierServer.ps1 -Relaunch` (which implies `-NoSupervisor`). That runs the same checks, log rotation, identity check and record writes as a manual start. It also refuses to launch once a stop has begun, and waits up to 90 s for readiness instead of about 15 s.
+  - If a relaunch reports a failure but the server it recorded is still running (for example, readiness timed out while Python was still loading), the supervisor adopts and watches that server instead of giving it up. Once that server listens, the supervisor has `Start-TerrierServer.ps1` finish its record (`launcher_pid` plus the listener), so later starts recognise it.
+  - Warnings from the relaunch (for example, a log it could only copy) are written to the supervisor log.
+- **Restart cap:** at most 5 restarts in any 10 minutes. After that the supervisor logs "giving up" and exits, and the next `Start-Terrier.ps1` starts a fresh supervisor. If a first start fails, `Start-Terrier.ps1` reports it as before and no supervisor is left behind.
+- **Logs** are in `_build/`:
+  - Before each launch, a non-empty `terrier-server.err.log` or `.out.log` is renamed to `terrier-server.err.<yyyyMMddTHHmmss>.log`. The newest 10 of each are kept, so the log from the first crash survives a full 5-restart loop.
+  - If another program holds the log open (a viewer tailing it, antivirus), it is copied instead of renamed. If even that fails, the start goes on with a warning.
+  - `terrier-faults.log` gets one header line per start of the live app (time, PID, port). If Python dies on a fatal error, faulthandler appends the stacks of all threads (`serve.py`). A server on any other port writes `terrier-faults-<port>.log` instead.
+  - **Caveat:** a Windows fail-fast (an error ntdll raises with fail-fast, such as the 2026-10-03 thread-pool handle fault) can end the process without running any handler, so faulthandler may record nothing. In that case look in Event Viewer → Windows Logs → Application ("Application Error" / Windows Error Reporting) and in `C:\ProgramData\Microsoft\Windows\WER\ReportArchive`.
+- **Stop:** `./Stop-TerrierServer.ps1` handles the supervisor first, then the server, so a deliberate stop is never restarted:
+  - It first writes `_build/terrier-supervisor.stop`. The supervisor checks for it every second and exits without restarting, and a relaunch that reaches the launcher lock after this point refuses to launch.
+  - It then takes the launcher lock (`Local\TerrierLauncher8767`, waiting up to 120 s). This waits out a launch already under way, so the server it stops is the one recorded last.
+  - It waits up to 40 s for the recorded supervisor to exit. It force-stops the supervisor only if that same process is still running after the wait. The identity check is case-insensitive and tolerates a missing command line.
+  - It then stops the server exactly as before, with the same identity check.
+  - A damaged supervisor record or any other supervisor problem only produces a warning; the server is still stopped.
+  - It also works when no supervisor is running (old-style starts, `-NoSupervisor`). The flag stays until the next supervised start removes it.
+- **The live server (PID 82300, started 17:40) predates this change.** It has no supervisor and no fault log.
+  - Running `./Start-Terrier.ps1 -NoBrowser` or clicking the shortcut while it runs attaches a supervisor without restarting it.
+  - The fault log and log rotation only take effect after a restart with the new scripts: `./Stop-TerrierServer.ps1; ./Start-Terrier.ps1 -NoBrowser`.
+- **Testing the launch scripts:** they hard-code port 8767, `_build` and `.local`. Never run them, or `tools/Test-TerrierDesktop.ps1`, in the repo (the desktop test stops and restarts the live server). Use a temp copy instead:
+  - Copy the scripts, `manage.py`, `server/`, `tools/`, `frontend/dist` and `assets/`.
+  - Replace `8767` with `8769`, and give the absolute venv python path.
+  - Build the copy's `.local` with `tools/make_walk_world.py`. The launch readiness check accepts only a `verified` w1 status, so relabel the world's `fixture` status in the copy only.
 
 ## Testing hygiene
 

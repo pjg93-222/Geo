@@ -1,13 +1,51 @@
+import faulthandler
 import logging
 import os
+import sys
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from server.wsgi import application
 
 log = logging.getLogger('cu.warm')
+
+# Kept open for the life of the process: faulthandler writes to this file's descriptor when the process dies.
+_fault_log = None
+
+
+def enable_fault_log(port):
+    """Append the Python stack of every thread to _build/terrier-faults.log if the process dies on a fatal error.
+
+    The live app (port 8767) writes terrier-faults.log; a server on any other port (test or synthetic servers started
+    from this repository) writes terrier-faults-<port>.log, so it never appends to or holds open the live app's file.
+
+    _build is the repository folder the launch scripts log to (Start-TerrierServer.ps1: $PSScriptRoot/_build). Each start
+    adds one header line (local ISO time, process id, port), so the file shows every start even when nothing goes wrong.
+    Caveat: a Windows fail-fast (for example ntdll reporting heap corruption) ends the process without running exception
+    handlers, so it can bypass faulthandler and leave nothing after the header; Windows Error Reporting (Event Viewer,
+    Application log, and the crash reports under C:/ProgramData/Microsoft/Windows/WER) still records those.
+    A failure to open the file is reported on stderr and never stops the server.
+    """
+    global _fault_log
+    if _fault_log is not None:
+        return
+    try:
+        folder = Path(settings.BASE_DIR) / '_build'
+        folder.mkdir(parents=True, exist_ok=True)
+        name = 'terrier-faults.log' if port == 8767 else 'terrier-faults-%d.log' % port
+        stream = open(folder / name, 'a', encoding='utf-8')
+        stream.write('%s pid=%d port=%d faulthandler enabled\n'
+                     % (datetime.now().astimezone().isoformat(timespec='seconds'), os.getpid(), port))
+        stream.flush()
+        faulthandler.enable(file=stream, all_threads=True)
+    except (OSError, ValueError, RuntimeError) as problem:
+        sys.stderr.write('serve: crash log not enabled (%s)\n' % problem)
+        return
+    _fault_log = stream
 
 
 def warm():
@@ -59,6 +97,7 @@ class Command(BaseCommand):
     def handle(self, *args, **o):
         from waitress import serve
         self.stdout.write(f'Credit Union Geography: http://127.0.0.1:{o["port"]}')
+        enable_fault_log(o['port'])
         if not o['no_warm']:
             threading.Thread(target=warm, name='warm', daemon=True).start()
         # Keep proxy headers visible so local-only middleware can reject them.
