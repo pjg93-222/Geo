@@ -104,16 +104,38 @@ test('a mark saved since is cleared from storage too; nothing left removes the k
   assert.equal(s.writes(), writes, 'a save that clears nothing writes nothing');
 });
 
-test('re-keying after a save under new person ids rewrites storage, so a reload finds the marks on the new ids', () => {
+test('a list saved: its query bucket moves under the key and is removed, merged with marks already there (the query mark wins); storage is rewritten', () => {
   const s = storage(), store = refusedStore(s);
   store.hold(QUERY, 'Saturday', visits(['a', 'S'], ['b', 'NH']), DOORS, 'why');
-  const writes = s.writes(); store.rekey([KEYED, QUERY], null); store.rekey([QUERY], new Map());
-  assert.equal(s.writes(), writes, 'nothing moved: nothing written');
-  store.rekey([KEYED, QUERY], new Map([['a', 'ra']]));
-  assert.deepEqual(stored(s).marks, {[QUERY]: {ra: 'S', b: 'NH'}});
+  store.hold(KEYED, 'Saturday', visits(['b', 'U'], ['c', 'O']), DOORS, 'why');   // already under the key: b collides, c does not
+  const writes = s.writes();
+  store.adopt(listIdentity(null, {}), KEYED, null); store.adopt(KEYED, KEYED, null); store.adopt(QUERY, QUERY, new Map());
+  assert.equal(s.writes(), writes, 'nothing to move and nothing renamed: nothing written');
+  store.adopt(QUERY, KEYED, null);
+  assert.deepEqual(stored(s).marks, {[KEYED]: {b: 'NH', c: 'O', a: 'S'}}, 'the query bucket is gone; b takes the newer NH from the query');
+  const again = refusedStore(s);   // a reload opens the list by its key: the marks are there, flagged
+  const shown = marksWithRefused(listOf(['a', 'b', 'c']), again.marks, KEYED);
+  assert.deepEqual(shown.results, {a: 'S', b: 'NH', c: 'O'}); assert.deepEqual([...shown.unsaved].sort(), ['a', 'b', 'c']);
+  assert.equal(marksWithRefused(listOf(['a']), again.marks, QUERY).unsaved.size, 0, 'the same streets built again no longer show them');
+  assert.deepEqual(again.note, store.note, 'the note is by list title: unchanged');
+});
+
+test('a list saved under new person ids: the query marks are renamed (movedIds) and then moved under the key, in one write', () => {
+  const s = storage(), store = refusedStore(s);
+  store.hold(QUERY, 'Saturday', visits(['a', 'S'], ['b', 'NH'], ['gone', 'U']), DOORS, 'why');
+  store.hold(KEYED, 'Saturday', visits(['ra', 'O']), DOORS, 'why');   // the saved list's own id for a: the renamed query mark wins
+  const writes = s.writes();
+  store.adopt(QUERY, KEYED, new Map([['a', 'ra'], ['b', 'rb']]));
+  assert.equal(s.writes(), writes + 1, 'one write');
+  assert.deepEqual(stored(s).marks, {[KEYED]: {ra: 'S', rb: 'NH', gone: 'U'}}, 'renamed first, then merged: no mark is left under an old id, a voter not found keeps hers');
   const again = refusedStore(s);
-  assert.deepEqual(marksWithRefused(listOf(['ra', 'b']), again.marks, QUERY).results, {ra: 'S', b: 'NH'});
-  assert.deepEqual(Object.keys(again.note?.lists[0].doors ?? {}), ['a', 'b'], 'the note names doors, so it is not re-keyed');
+  assert.deepEqual(marksWithRefused(listOf(['ra', 'rb']), again.marks, KEYED).results, {ra: 'S', rb: 'NH'});
+  assert.deepEqual(Object.keys(again.note?.lists[0].doors ?? {}), ['a', 'b', 'gone', 'ra'], 'the note names doors, so it is not re-keyed');
+  // a list saved without a query bucket still renames marks already under the key
+  const k = storage(), only = refusedStore(k);
+  only.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
+  only.adopt(QUERY, KEYED, new Map([['a', 'ra']]));
+  assert.deepEqual(stored(k).marks, {[KEYED]: {ra: 'S'}});
 });
 
 test('storage that throws, or is missing, is tolerated: the page keeps working from memory', () => {
@@ -121,7 +143,7 @@ test('storage that throws, or is missing, is tolerated: the page keeps working f
   assert.equal(store.marks.size, 0); assert.equal(store.note, null);
   const note = store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
   assert.equal(note, store.note); assert.deepEqual([...store.marks.get(KEYED) ?? []], [['a', 'S']]);
-  store.rekey([KEYED], new Map([['a', 'ra']])); store.clear([KEYED], ['x']); store.dismiss();
+  store.adopt(QUERY, KEYED, new Map([['a', 'ra']])); store.clear([KEYED], ['x']); store.dismiss();
   assert.deepEqual([...store.marks.get(KEYED) ?? []], [['ra', 'S']]); assert.equal(store.note, null);
   assert.equal(writeRefused({marks: store.marks, note: null}, throwing()), false);
   assert.equal(readRefused(throwing()).marks.size, 0);

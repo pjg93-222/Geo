@@ -1179,7 +1179,7 @@ test('walk screen wiring (list saved after the voter data changed): fingerprint 
   assert.ok(/const next=entry\.replaced\?\?\{\.\.\.base,list\}/.test(src) && /setReplaced\(true\)/.test(src) && /\{LIST_REPLACED\}/.test(src), 'the saved list replaces the one shown, with the note');
   assert.ok(/splitOffRoster\(entry\.roster,visits,entry\.moved\)/.test(src) && /offList\(off,OFF_LIST\)/.test(src), 'results for voters not on the saved list are refused, not sent');
   assert.ok(/\(r,why\)=>refuse\(entry,r,why,true\)/.test(src) && /sendBatch\(entry,batch,held\(true\)\)/.test(src), 'those refusals are the page\'s own, so the note does not blame the server');
-  assert.ok(/setResults\(r=>rekeyed\(r,moved\)\)/.test(src) && /refusals\.rekey\(identities\(entry\),entry\.moved\)/.test(src) && /seen:seenBy\(p\)/.test(src), 'marks follow a voter whose person id changed');
+  assert.ok(/setResults\(r=>rekeyed\(r,moved\)\)/.test(src) && /refusals\.adopt\(listIdentity\(null,entry\.query\),listIdentity\(list\.key,entry\.query\),entry\.moved\)/.test(src) && /seen:seenBy\(p\)/.test(src), 'marks follow a voter whose person id changed');
   assert.ok(/setReplaced\(false\)/.test(src), 'the note goes when another list comes on screen');
 });
 

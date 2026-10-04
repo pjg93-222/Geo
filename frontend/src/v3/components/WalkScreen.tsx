@@ -63,7 +63,9 @@ function saveEntry(entry:HeldList,title?:string):Promise<WalkListMeta>{
   const job:Promise<WalkListMeta>=(fingerprint?saveWalkList(entry.title,entry.query,fingerprint):Promise.reject(new ApiError(OUT_OF_DATE,400,true))).then(saved=>{
     if(!saved.list?.key)throw new Error('The list could not be saved.');
     const list=adoptSaved(entry,saved);   // when the voter data changed since the list was shown, the list saved is the new one: the entry keeps it
-    refusals.rekey(identities(entry),entry.moved);   // and a voter whose id changed keeps a refused mark (rewritten in the tab's storage too)
+    // and the marks refused before the save follow the list to its key, a voter whose id changed keeping a refused mark (the tab's storage
+    // is rewritten): a reload, which opens the list by its key, shows them
+    refusals.adopt(listIdentity(null,entry.query),listIdentity(list.key,entry.query),entry.moved);
     return list;
   }).finally(()=>{if(entry.saving===job)entry.saving=null;});
   return entry.saving=job;

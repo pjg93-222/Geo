@@ -512,15 +512,25 @@ try{
     // marked again once the server takes the save: saved, the flag goes from the screen and from the tab; the other mark stays flagged
     const saving=page.waitForResponse(r=>isPost(r,'/api/v3/walk/lists'));
     await groups().first().getByRole('radio',{name:code('S')}).click();
-    assert.equal((await saving).status(),201,'the list is saved once the server takes it');
+    const saved=await saving;
+    assert.equal(saved.status(),201,'the list is saved once the server takes it');
+    const key=(await saved.json()).list.key;
     await until(async()=>(await page.getByText('S (not saved)',{exact:true}).count())===0,'the S flag to go once saved');
     await page.getByText('NH (not saved)',{exact:true}).first().waitFor();
     const kept=(await refusedKept()).session;
-    assert.deepEqual(Object.values(kept?.marks??{}),[{[voters[1].person_id]:'NH'}],'the saved S has left the tab\'s storage; the NH is kept');
+    assert.deepEqual(kept?.marks,{['key:'+key]:{[voters[1].person_id]:'NH'}},'the saved S has left the tab\'s storage; the NH moved with the list to its key');
+    // the address now names the saved list: a reload opens it by its key, and the NH refused before the save is there, flagged
+    await until(()=>new URL(page.url()).searchParams.get('list')===key,'the address to name the saved list');
+    assert.deepEqual(await reload(),['beforeunload'],'the note is still up, so the reload asks first');
+    await tables().first().waitFor();
+    await until(async()=>(await groups().nth(1).getByRole('radio',{name:code('NH')}).getAttribute('aria-checked'))==='true','the NH to come back on the saved list');
+    await page.getByText('NH (not saved)',{exact:true}).first().waitFor();
+    assert.equal(await page.getByText('S (not saved)',{exact:true}).count(),0,'the saved S is not flagged');
+    assert.equal(await groups().first().getByRole('radio',{name:code('S')}).getAttribute('aria-checked'),'true','the saved S comes back from the list');
     await note.getByRole('button',{name:'Dismiss',exact:true}).click();
     await note.waitFor({state:'detached'});
     await forgetRefused();                                                // the fault step builds this list again
-    return 'A list save refused as out of date keeps both marks flagged with the note; the reload it asks for (after a prompt) brings both back flagged with the note and sends nothing; marking S again saves the list and clears its flag in the tab, the NH stays';
+    return 'A list save refused as out of date keeps both marks flagged with the note; the reload it asks for (after a prompt) brings both back flagged with the note and sends nothing; marking S again saves the list and clears its flag in the tab, the NH moves to the list\'s key and is still flagged after a reload that opens ?list=<key>';
   },['generate']);
 
   // ---- 8e. the voter data changed between showing a list and saving it: the saved list is shown with a note, and a mark for a voter

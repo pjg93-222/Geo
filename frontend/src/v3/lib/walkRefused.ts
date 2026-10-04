@@ -94,8 +94,13 @@ export interface RefusedStore{
   readonly note:RefusalNote|null;
   /** Results refused on a list: kept as the walker's marks under `list`, and added to the note with their doors. Answers with the note. */
   hold(list:string,title:string,refused:ReadonlyMap<string,{code:WalkCode|null}>,doors:Record<string,string>,why:string,local?:boolean):RefusalNote;
-  /** The lists' refused marks renamed to the person ids of the list saved (movedIds). */
-  rekey(lists:readonly string[],moved:ReadonlyMap<string,string>|null):void;
+  /**
+   * A list was saved under `key`: the marks refused while it was known by its query (`query`, listIdentity(null, query)) follow it, so the
+   * list reopened by its key (as a reload does, the address naming the list) shows them flagged. In order: the person ids of the query's
+   * marks are renamed to those of the list saved (`moved`, movedIds; the key's marks too, as before), then the query's marks move under the
+   * key and the query bucket goes. A voter marked under both keeps the query's mark: it is the newer one, set on the list just shown.
+   */
+  adopt(query:string,key:string,moved:ReadonlyMap<string,string>|null):void;
   /** Voters whose results are now saved: their marks are no longer refused. The only way a mark leaves. */
   clear(lists:readonly string[],ids:Iterable<string>):void;
   /** The walker dismissed the note. The marks stay: a walker's mark is never erased. */
@@ -113,9 +118,16 @@ export function refusedStore(storage:RefusedStorage|null=tabStorage()):RefusedSt
       note=addRefusal(note,title,refused,doors,why,local);
       write();return note;
     },
-    rekey(lists,moved){
-      if(!moved?.size)return;
-      for(const list of lists)rekeyRefused(marks,list,moved);
+    adopt(query,key,moved){
+      const renames=!!moved?.size&&(marks.has(query)||marks.has(key));
+      if(!renames&&(query===key||!marks.has(query)))return;
+      if(moved?.size)for(const list of new Set([query,key]))rekeyRefused(marks,list,moved);
+      const from=marks.get(query);
+      if(from&&query!==key){
+        const into=marks.get(key)??new Map<string,WalkCode|null>();
+        for(const [id,code] of from)into.set(id,code);   // the query's mark wins over one already under the key
+        marks.set(key,into);marks.delete(query);
+      }
       write();
     },
     clear(lists,ids){
