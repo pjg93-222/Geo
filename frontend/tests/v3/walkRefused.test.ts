@@ -270,7 +270,7 @@ test('the unload guard: only flagged voters of the list shown count, never a ref
   assert.deepEqual([...flaggedOnList(shown, new Set(['a', 'gone']))], ['a'], 'a voter the saved list dropped does not hold the guard up');
   assert.equal(flaggedOnList(shown, new Set(['gone'])).size, 0);
   assert.equal(flaggedOnList(null, new Set(['a'])).size, 0, 'no list shown');
-  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(/^const shownFlagged:\{current:ReadonlySet<string>\}=\{current:new Set\(\)\};/m.test(src), 'a ref beside the guards, outliving the screen');
   assert.ok(/useEffect\(\(\)=>\{shownFlagged\.current=flaggedOnList\(payload,unsaved\);\},\[payload,unsaved\]\)/.test(src), 'kept to the list shown and its flags');
   for (const guard of [/const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/, /const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/])
@@ -278,9 +278,10 @@ test('the unload guard: only flagged voters of the list shown count, never a ref
 });
 
 test('wiring: the note shown follows the store after a save, the screen drops its refusals on Sign out, and only Sign out resets (never the API client)', () => {
-  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
-  const client = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/client.ts'), 'utf8');
-  const legacy = readFileSync(path.join(import.meta.dirname, '../../src/main.tsx'), 'utf8');
+  // Line endings are normalised: a Windows checkout (core.autocrlf) has CRLF, and the patterns below match LF.
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  const client = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/client.ts'), 'utf8').replace(/\r\n/g, '\n');
+  const legacy = readFileSync(path.join(import.meta.dirname, '../../src/main.tsx'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(/sendBatch\(entry,batch,[^\n]*\n[^\n]*setUnsaved[^\n]*\n\s*showRefusal\(refusals\.note\);/.test(src), 'after a batch is saved the note shown is the store\'s');
   assert.ok(/setEarlier\(message===null\?null:\{message\}\);\n\s*showRefusal\(refusals\.note\);/.test(src), 'and after results from earlier are saved');
   assert.ok(/useEffect\(\(\)=>onRefusedReset\(\(\)=>\{/.test(src) && /showRefusal\(null\);setUnsaved\(new Set\(\)\);/.test(src), 'the screen forgets what it shows of them');
