@@ -27,6 +27,10 @@ const context=await browser.newContext({viewport:{width:1440,height:900},reduced
 const page=await context.newPage();page.setDefaultTimeout(30000);
 page.on('pageerror',()=>report.pageErrors++);
 page.on('request',r=>{const path=new URL(r.url()).pathname;if(path.startsWith('/fixtures/'))report.fixtureRequests++;if(path.startsWith('/api/'))report.apiRequests++;});
+// Every dialog the page opens is accepted (a beforeunload prompt then lets the navigation go on) and listed with the step it came in. A step
+// that expects one takes it off the list (reload() below); any left at the end were not expected and fail the run.
+const dialogs=[];let current='';
+page.on('dialog',d=>{dialogs.push({type:d.type(),step:current});d.accept().catch(()=>{});});
 
 // ---- helpers ----------------------------------------------------------------------------------------------------------------
 const DESKTOP={width:1440,height:900},PHONE={width:375,height:812};
@@ -49,6 +53,17 @@ const api=async path=>{const r=await context.request.get(base+path);assert.ok(r.
 const until=async(fn,what,ms=20000)=>{const end=Date.now()+ms;for(;;){const v=await fn();if(v)return v;if(Date.now()>end)throw new Error('Timed out waiting for '+what);await page.waitForTimeout(100);}};
 const shot=async name=>{try{await page.screenshot({path:fileURLToPath(new URL(name,output)),fullPage:true});}catch{/* a screenshot is only evidence */}};
 const fits=()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1&&document.body.scrollWidth<=innerWidth+1);
+// The refused marks and the refusal note of the tab (lib/walkRefused.ts). A step that should not meet another step's refusals forgets them,
+// then loads a page (a page already loaded keeps its own copy in memory).
+const REFUSED_KEY='terrier.walk.refused.v1';
+const refusedKept=()=>page.evaluate(k=>{const raw=sessionStorage.getItem(k);return {session:raw===null?null:JSON.parse(raw),local:localStorage.getItem(k)};},REFUSED_KEY);
+const forgetRefused=()=>page.evaluate(k=>sessionStorage.removeItem(k),REFUSED_KEY);
+// Reloads the page; answers with the types of the dialogs that came with it (a beforeunload prompt is accepted)
+async function reload(){
+  const n=dialogs.length;
+  await page.reload();await heading().waitFor();
+  return dialogs.splice(n).map(d=>d.type);
+}
 
 const heading=()=>page.getByRole('heading',{name:'Build a walk list',exact:true});
 const generateButton=()=>page.getByRole('button',{name:'Generate walk list',exact:true});
@@ -100,6 +115,7 @@ const done=new Set();
 async function step(name,fn,needs=[]){
   const missing=needs.filter(n=>!done.has(n));
   if(missing.length){report.skipped.push({check:name,needs:missing});return;}
+  current=name;
   try{
     const said=await fn();
     done.add(name);report.checks.push(said);
@@ -411,7 +427,168 @@ try{
       await page.getByRole('button',{name:'Dismiss',exact:true}).click();
       await note.waitFor({state:'detached'});
     }finally{await page.unroute(isSave,refuse);}
-    return 'A refused result stays marked and flagged "not saved" (screen and CSV), the note names its door and the server\'s reason, it is not retried, and another saved list opens straight away';
+    // chosen again once the server takes it: saved, so nothing flagged is left to hold the next page change up
+    await group().getByRole('radio',{name:code('O')}).click();
+    await until(async()=>(await page.getByText('O (not saved)',{exact:true}).count())===0,'the O to be saved when chosen again');
+    return 'A refused result stays marked and flagged "not saved" (screen and CSV), the note names its door and the server\'s reason, it is not retried, another saved list opens straight away, and choosing it again saves it';
+  },['not home again']);
+
+  // ---- 8d2. a refused mark and the note come back after a reload; dismissed, the note stays gone, the flag stays, and closing does not ask ---
+  await step('refused survives reload',async()=>{
+    await forgetRefused();                                                // 8d's dismissed O is still kept for this list
+    await page.goto(base+'/walk?list='+savedKey);await heading().waitFor();await tables().first().waitFor();
+    const saved=await api('/api/v3/walk/lists/'+savedKey);
+    const run=saved.runs.findLast(r=>r.doors.some(d=>d.voters.length)),door=run.doors.findLast(d=>d.voters.length),voter=door.voters.at(-1);
+    const isSave=url=>url.pathname==='/api/v3/walk/dispositions';
+    let posts=0;
+    const refuse=route=>{posts++;return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Some of those voters are not on this list.'})});};
+    const group=()=>groups().last(),note=page.locator('.walk-refused');
+    const marked=what=>until(async()=>(await group().getByRole('radio',{name:code('U')}).getAttribute('aria-checked'))==='true',what);
+    await page.route(isSave,refuse);
+    try{
+      await choose(group(),'U');
+      await note.filter({hasText:/The server refused 1 result, so it was not saved\./}).waitFor();
+      const kept=await refusedKept();
+      assert.deepEqual(kept.session?.marks,{['key:'+savedKey]:{[voter.person_id]:'U'}},'the tab keeps the mark by list and voter');
+      assert.match(kept.session?.note?.lists?.[0]?.doors?.[voter.person_id]??'',/\(U\)$/,'and the note, apart from the marks');
+      assert.equal(kept.local,null,'nothing in localStorage');
+      assert.ok(!page.url().includes(voter.person_id)&&!/refused/i.test(page.url()),'nothing in the address');
+      const before=posts;
+      assert.deepEqual(await reload(),['beforeunload'],'closing the page with the note up asks first');
+      await tables().first().waitFor();
+      await marked('the refused U to come back after the reload');
+      await page.getByText('U (not saved)',{exact:true}).last().waitFor();
+      await note.waitFor();
+      const said=text(await note.innerText());
+      assert.ok(said.startsWith('The server refused 1 result')&&said.includes(`${door.house}`)&&said.includes(`${run.street} (U)`),'the note comes back naming the door and its code');
+      assert.ok(said.includes('Some of those voters are not on this list.'),'with the server\'s reason');
+      await page.waitForTimeout(800);
+      assert.equal(posts,before,'a refused mark is not sent again after the reload');
+      await note.getByRole('button',{name:'Dismiss',exact:true}).click();
+      await note.waitFor({state:'detached'});
+      assert.equal((await refusedKept()).session?.note,null,'dismissing removes the note from the tab');
+      assert.deepEqual(await reload(),['beforeunload'],'the list shown still has a mark flagged "not saved": the reload still asks');
+      await tables().first().waitFor();
+      await marked('the refused U to stay after the note was dismissed');
+      await page.getByText('U (not saved)',{exact:true}).last().waitFor();
+      assert.equal(await note.count(),0,'the dismissed note does not come back');
+    }finally{await page.unroute(isSave,refuse);}
+    // chosen again once the server takes it: saved, the flag and the tab's copy go, and closing no longer asks
+    await group().getByRole('radio',{name:code('U')}).click();
+    await until(async()=>(await page.getByText('U (not saved)',{exact:true}).count())===0,'the U to be saved when chosen again');
+    assert.equal((await refusedKept()).session,null,'nothing left in the tab');
+    assert.deepEqual(await reload(),[],'nothing flagged and no note: no prompt');
+    await tables().first().waitFor();
+    assert.equal(await page.getByText('U (not saved)',{exact:true}).count(),0);
+    return 'A refused U and its note survive a reload (which asks first; the tab\'s sessionStorage holds the mark by list and voter and the note apart, nothing in localStorage or the address); after Dismiss a reload brings back the flag but not the note and still asks, since the list shown has a flagged mark; once the U is saved the tab holds nothing and a reload does not ask';
+  },['not home again']);
+
+  // ---- 8d3. a list save refused as out of date: the page says to reload, and the reload brings the marks back flagged ------------------
+  await step('out of date survives reload',async()=>{
+    await forgetRefused();
+    await page.goto(base+'/walk');await heading().waitFor();
+    await addStreet('Juniper','Juniper Ln');
+    const shown=await generate(),voters=flat(shown);
+    assert.ok(voters.length>=2,'The list needs two voters for this check');
+    const stale='This page is out of date. Reload it, then save the list again.';
+    const isLists=url=>url.pathname==='/api/v3/walk/lists',isSave=url=>url.pathname==='/api/v3/walk/dispositions';
+    let saves=0,posts=0;
+    const refuse=route=>{
+      if(route.request().method()!=='POST')return route.continue();
+      saves++;return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:stale})});
+    };
+    const counted=route=>{posts++;return route.continue();};
+    const note=page.locator('.walk-refused');
+    const both=async what=>{
+      await until(async()=>(await groups().first().getByRole('radio',{name:code('S')}).getAttribute('aria-checked'))==='true'
+        &&(await groups().nth(1).getByRole('radio',{name:code('NH')}).getAttribute('aria-checked'))==='true',what);
+      await page.getByText('S (not saved)',{exact:true}).first().waitFor();await page.getByText('NH (not saved)',{exact:true}).first().waitFor();
+    };
+    await page.route(isLists,refuse);await page.route(isSave,counted);
+    try{
+      await choose(groups().first(),'S');await choose(groups().nth(1),'NH');
+      await note.filter({hasText:/The server refused 2 results, so they were not saved\./}).waitFor();
+      assert.ok(text(await note.innerText()).includes(stale),'the note gives the server\'s words: reload');
+      await both('both marks flagged');
+      assert.ok(!new URL(page.url()).searchParams.get('list'),'the list was not saved');
+      const before=saves;
+      assert.deepEqual(await reload(),['beforeunload'],'the reload asks first while the note is up');
+      await tables().first().waitFor();
+      await both('both marks to come back flagged after the reload');
+      await note.filter({hasText:/The server refused 2 results/}).waitFor();
+      await page.waitForTimeout(800);
+      assert.equal(saves,before,'the reload sends nothing');assert.equal(posts,0,'no result is posted');
+    }finally{await page.unroute(isLists,refuse);await page.unroute(isSave,counted);}
+    // marked again once the server takes the save: saved, the flag goes from the screen and from the tab; the other mark stays flagged
+    const saving=page.waitForResponse(r=>isPost(r,'/api/v3/walk/lists'));
+    await groups().first().getByRole('radio',{name:code('S')}).click();
+    const saved=await saving;
+    assert.equal(saved.status(),201,'the list is saved once the server takes it');
+    const key=(await saved.json()).list.key;
+    await until(async()=>(await page.getByText('S (not saved)',{exact:true}).count())===0,'the S flag to go once saved');
+    await page.getByText('NH (not saved)',{exact:true}).first().waitFor();
+    const kept=(await refusedKept()).session;
+    assert.deepEqual(kept?.marks,{['key:'+key]:{[voters[1].person_id]:'NH'}},'the saved S has left the tab\'s storage; the NH moved with the list to its key');
+    // the address now names the saved list: a reload opens it by its key, and the NH refused before the save is there, flagged
+    await until(()=>new URL(page.url()).searchParams.get('list')===key,'the address to name the saved list');
+    assert.deepEqual(await reload(),['beforeunload'],'the note is still up, so the reload asks first');
+    await tables().first().waitFor();
+    await until(async()=>(await groups().nth(1).getByRole('radio',{name:code('NH')}).getAttribute('aria-checked'))==='true','the NH to come back on the saved list');
+    await page.getByText('NH (not saved)',{exact:true}).first().waitFor();
+    assert.equal(await page.getByText('S (not saved)',{exact:true}).count(),0,'the saved S is not flagged');
+    assert.equal(await groups().first().getByRole('radio',{name:code('S')}).getAttribute('aria-checked'),'true','the saved S comes back from the list');
+    const left=text(await note.innerText());
+    assert.ok(left.startsWith('The server refused 1 result')&&left.includes('(NH)')&&!left.includes('(S)'),'the saved S has left the note; the NH is still named');
+    // the last flagged mark saved: the note goes by itself, the tab holds nothing, and closing does not ask
+    await groups().nth(1).getByRole('radio',{name:code('NH')}).click();
+    await until(async()=>(await page.getByText('NH (not saved)',{exact:true}).count())===0,'the NH to be saved when chosen again');
+    await note.waitFor({state:'detached'});
+    assert.equal(await page.locator('.walk-refused-bar').count(),0,'and the phone bar with it');
+    assert.equal((await refusedKept()).session,null,'nothing left in the tab');
+    assert.deepEqual(await reload(),[],'every refused mark saved: no prompt');
+    await tables().first().waitFor();
+    assert.equal(await note.count(),0,'no note after the reload');
+    return 'A list save refused as out of date keeps both marks flagged with the note; the reload it asks for (after a prompt) brings both back flagged with the note and sends nothing; marking S again saves the list and takes S out of the flags, the tab and the note; the NH moves to the list\'s key and is still flagged after a reload that opens ?list=<key>; saving it too removes the note, empties the tab, and a reload does not ask';
+  },['generate']);
+
+  // ---- 8d4. a session timing out mid-canvass (the server answers 401) keeps the refused marks and the note: they are the walker's only copy -----
+  //          Only Sign out forgets them (the legacy page's; the v3 app has none), and closing the tab.
+  await step('session timeout keeps refusals',async()=>{
+    await forgetRefused();
+    await page.goto(base+'/walk?list='+savedKey);await heading().waitFor();await tables().first().waitFor();
+    const saved=await api('/api/v3/walk/lists/'+savedKey);
+    const voter=saved.runs.findLast(r=>r.doors.some(d=>d.voters.length)).doors.findLast(d=>d.voters.length).voters.at(-1);
+    const isSave=url=>url.pathname==='/api/v3/walk/dispositions',isLists=url=>url.pathname==='/api/v3/walk/lists';
+    const refuse=route=>route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Some of those voters are not on this list.'})});
+    let timedOut=0;
+    const expired=route=>{if(route.request().method()!=='GET')return route.continue();timedOut++;return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:'Sign in to continue'})});};
+    const note=page.locator('.walk-refused');
+    const flagged=async what=>{
+      await until(async()=>(await groups().last().getByRole('radio',{name:code('MV')}).getAttribute('aria-checked'))==='true',what);
+      await page.getByText('MV (not saved)',{exact:true}).last().waitFor();
+    };
+    await page.route(isSave,refuse);
+    try{
+      await choose(groups().last(),'MV');
+      await note.waitFor();
+      await page.route(isLists,expired);                                    // the reload's look at the saved lists finds the session timed out
+      assert.deepEqual(await reload(),['beforeunload'],'the note is up: the reload asks first');
+      await tables().first().waitFor();
+      await until(()=>timedOut>0,'the 401 on the saved lists');
+      await page.waitForTimeout(500);
+      assert.deepEqual((await refusedKept()).session?.marks,{['key:'+savedKey]:{[voter.person_id]:'MV'}},'the 401 keeps the mark in the tab');
+      await note.waitFor();
+      assert.ok(text(await note.innerText()).includes('(MV)'),'and the note');
+      await flagged('the flagged MV to stay after the 401');
+    }finally{await page.unroute(isSave,refuse);await page.unroute(isLists,expired);}
+    // the walker signs in again (here: the session is back) and chooses it again: saved, nothing kept, and closing does not ask
+    await groups().last().getByRole('radio',{name:code('MV')}).click();
+    await until(async()=>(await page.getByText('MV (not saved)',{exact:true}).count())===0,'the MV to be saved when chosen again');
+    await note.waitFor({state:'detached'});
+    assert.equal((await refusedKept()).session,null,'nothing left in the tab');
+    assert.deepEqual(await reload(),[],'nothing flagged and no note: no prompt');
+    await tables().first().waitFor();
+    return 'A 401 on the saved lists during a reload (a session timing out mid-canvass) keeps the refused MV in the tab, with its note and its "not saved" flag; once it is chosen again and saved, nothing is kept and a reload does not ask';
   },['not home again']);
 
   // ---- 8e. the voter data changed between showing a list and saving it: the saved list is shown with a note, and a mark for a voter
@@ -585,7 +762,9 @@ try{
         await bar.waitFor({state:'detached'});
         assert.equal(await page.locator('.walk-refused-bar').count(),0,'dismissing the note removes the bar');
       }finally{await page.unroute(isSave,refuse);}
-      return `At ${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept; a refusal shows a bottom bar ("! 1 result not saved") clear of the last card, View brings the note into view with focus, Dismiss removes both, a desktop shows no bar`;
+      await groups().last().getByRole('radio',{name:code('O')}).click();      // saved when chosen again: nothing flagged holds the next page change up
+      await until(async()=>(await page.getByText('O (not saved)',{exact:true}).count())===0,'the O to be saved when chosen again');
+      return `At${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept; a refusal shows a bottom bar ("! 1 result not saved") clear of the last card, View brings the note into view with focus, Dismiss removes both, a desktop shows no bar`;
     }finally{await page.setViewportSize(DESKTOP);}
   });
 
@@ -629,6 +808,7 @@ try{
   });
 
   assert.equal(report.fixtureRequests,0);
+  if(dialogs.length)report.failures.push({check:'unexpected dialogs',message:dialogs.map(d=>`${d.type} in ${d.step||'setup'}`).join('; ')});
   if(report.pageErrors)report.failures.push({check:'page errors',message:`${report.pageErrors} uncaught page error(s)`});
 }catch(error){
   report.failures.push({check:'run',type:error.name,message:text(String(error.message).split('\n')[0]).slice(0,300)});

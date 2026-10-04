@@ -680,7 +680,7 @@ test('upload identity: an answer for an earlier upload changes nothing (rematch 
 
 test('walk screen wiring: the unload guard, the startup plan, the rematch check and the CSV report use the helpers above', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
-  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\)/.test(src), 'the unload guard asks the outbox');
+  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'the unload guard asks the outbox, and while a refusal note is up or the list shown has a flagged mark');
   assert.ok(/startPlan\(init\)/.test(src) && !/init\.picks\.length\)generate/.test(src), 'startup follows the plan, which includes an area alone');
   assert.ok(/const current=\(\)=>uploadRef\.current\?\.id===id/.test(src) && /if\(!current\(\)\)return;/.test(src), 'a rematch answer is dropped once its upload is gone');
   assert.ok(/pickerOf\(p\)/.test(src) && !/k in q/.test(src), 'a saved list restores the picker only through pickerOf');
@@ -921,7 +921,7 @@ test('walk screen wiring (round 4): the shelf outlives the screen, a file is mat
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/^const outbox=resultShelf<string,WalkVisit>\(v=>v\.on\);/m.test(src), 'one shelf for the page, outside the component, split into requests by day');
   assert.ok(!/outbox\.clear\(\)/.test(src), 'showing another list does not forget results that were not saved');
-  assert.ok(/window\.addEventListener\('beforeunload',warnHeld\)/.test(src) && /const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\)/.test(src), 'closing the page asks while the screen is away too');
+  assert.ok(/window\.addEventListener\('beforeunload',warnHeld\)/.test(src) && /const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'closing the page asks while the screen is away too');
   assert.ok(/settleEarlier\(\)/.test(src) && /outbox\.held\(\)/.test(src), 'results kept from an earlier visit are sent again');
   assert.ok(/entry\.box\.set\(id,\{code,on:localToday\(\)\}\)/.test(src) && !/saveWalkDispositions\([^)]*localToday/.test(src), 'the day is taken when a result is set, never when it is sent');
   assert.ok(/matchJobs\.start\(\)/.test(src) && /matchWalkStreets\(inputs,area,job\.signal\)/.test(src) && /if\(!job\.live\(\)\)return;/.test(src), 'the first answer for a file is dropped once the file is replaced, cleared or left behind');
@@ -1093,10 +1093,12 @@ test('walk screen wiring (refusals): narrow classification, marks kept and flagg
   assert.ok(/throw refusalOf\(e,step\)\?\?e;/.test(src) && /await refusing\(save\(\),'list'\)/.test(src) && /await refusing\(saveWalkDispositions\(list,on,entries\),'results'\)/.test(src), 'both requests are classified by refusalOf');
   assert.ok(!/takeBack|refusedStatus\(e\.status\)/.test(src), 'nothing takes a mark off the screen');
   assert.ok(/refuse:\(refused,why\)=>refuse\(entry,refused,why\)/.test(src) && /setUnsaved\(u=>new Set\(\[\.\.\.u,\.\.\.refused\.keys\(\)\]\)\)/.test(src), 'a refused mark on screen is flagged, not removed');
-  assert.ok(/marksWithRefused\(p,refusedMarks,listIdentity\(p\.list\?\.key,p\.query\?\?\{\}\)\)/.test(src), 'a list opened again shows its refused marks, flagged');
+  assert.ok(/marksWithRefused\(p,refusals\.marks,listIdentity\(p\.list\?\.key,p\.query\?\?\{\}\)\)/.test(src), 'a list opened again shows its refused marks, flagged');
   assert.ok(/buildWalkCsv\(p,results,history,unsaved\)/.test(src), 'the CSV carries the flag');
-  assert.ok(/clearRefused\(refusedMarks,id,batch\.keys\(\)\)/.test(src), 'marked again and saved: the flag goes');
-  assert.ok(/^const refusedMarks:RefusedMarks=new Map\(\);/m.test(src) && /^let refusalNote:RefusalNote\|null=null;/m.test(src) && /useState<RefusalNote\|null>\(\(\)=>refusalNote\)/.test(src), 'marks and note outlive the screen');
+  assert.ok(/refusals\.clear\(identities\(entry\),batch\.keys\(\)\)/.test(src), 'marked again and saved: the flag goes');
+  assert.ok(/^const refusals=refusedStore\(\);/m.test(src) && /useState<RefusalNote\|null>\(\(\)=>refusals\.note\)/.test(src), 'marks and note outlive the screen, and a reload (restored when the module loads)');
+  assert.ok(/onClick=\{\(\)=>\{refusals\.dismiss\(\);showRefusal\(null\);\}\}>Dismiss</.test(src) && /return refusals\.hold\(identities\(entry\)\[0\],/.test(src), 'dismissing and refusing go through the store, which writes them through');
+  assert.ok(!/localStorage|refusedMarks|refusalNote=/.test(src), 'no copy of the marks or note outside the store, and nothing in localStorage');
   assert.ok(/token=\(fresh:boolean\)=>csrf\(fresh,signal\)\.catch\(\(e:unknown\)=>\{throw e instanceof ApiError\?new ApiError\(e\.message,e\.status\):e;\}\)/.test(client), 'a session failure is never an answer of the endpoint');
   assert.ok(/catch\{throw new ApiError\('The local data service returned an unreadable response\.',response\.status\);\}/.test(client), 'an unreadable body is not answered');
 });
@@ -1177,7 +1179,7 @@ test('walk screen wiring (list saved after the voter data changed): fingerprint 
   assert.ok(/const next=entry\.replaced\?\?\{\.\.\.base,list\}/.test(src) && /setReplaced\(true\)/.test(src) && /\{LIST_REPLACED\}/.test(src), 'the saved list replaces the one shown, with the note');
   assert.ok(/splitOffRoster\(entry\.roster,visits,entry\.moved\)/.test(src) && /offList\(off,OFF_LIST\)/.test(src), 'results for voters not on the saved list are refused, not sent');
   assert.ok(/\(r,why\)=>refuse\(entry,r,why,true\)/.test(src) && /sendBatch\(entry,batch,held\(true\)\)/.test(src), 'those refusals are the page\'s own, so the note does not blame the server');
-  assert.ok(/setResults\(r=>rekeyed\(r,moved\)\)/.test(src) && /rekeyRefused\(refusedMarks,id,entry\.moved\)/.test(src) && /seen:seenBy\(p\)/.test(src), 'marks follow a voter whose person id changed');
+  assert.ok(/setResults\(r=>rekeyed\(r,moved\)\)/.test(src) && /refusals\.adopt\(listIdentity\(null,entry\.query\),listIdentity\(list\.key,entry\.query\),entry\.moved\)/.test(src) && /seen:seenBy\(p\)/.test(src), 'marks follow a voter whose person id changed');
   assert.ok(/setReplaced\(false\)/.test(src), 'the note goes when another list comes on screen');
 });
 

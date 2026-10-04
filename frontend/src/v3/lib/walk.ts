@@ -457,6 +457,14 @@ export function marksWithRefused(payload:Pick<WalkListPayload,'runs'|'list'>,sto
     if(marks.has(v.person_id)){results[v.person_id]=marks.get(v.person_id)??null;unsaved.add(v.person_id);}
   return {results,unsaved};
 }
+/** The voters of the list on screen whose mark is flagged Not saved. Flags for voters the list does not show (a voter the saved list dropped)
+ *  are left out: such a mark can never be saved from this list, so it must not hold the page's unload guard up. */
+export function flaggedOnList(payload:Pick<WalkListPayload,'runs'>|null,unsaved:ReadonlySet<string>):ReadonlySet<string>{
+  if(!payload||!unsaved.size)return new Set();
+  const out=new Set<string>();
+  for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)if(unsaved.has(v.person_id))out.add(v.person_id);
+  return out;
+}
 /** A refused mark as the list and the CSV show it: "S (not saved)", or "cleared (not saved)" for a clearing the server refused. */
 export const unsavedText=(code:WalkCode|null|undefined):string=>`${code??'cleared'} (not saved)`;
 /** The results the server refused since the walker last dismissed the note: each list by title, each door once with its code, each reason once.
@@ -466,7 +474,8 @@ export function addRefusal(note:RefusalNote|null,title:string,refused:ReadonlyMa
   const lists=(note?.lists??[]).map(l=>({title:l.title,doors:{...l.doors}}));
   const name=title.trim()||'Walk list';
   let list=lists.find(l=>l.title===name);if(!list){list={title:name,doors:{}};lists.push(list);}
-  for(const [id,v] of refused)list.doors[id]=`${doors[id]||'A door on this list'} (${v.code??'cleared'})`;
+  // own properties only, defined rather than assigned: any person id (even "__proto__") is a plain key of the note
+  for(const [id,v] of refused)Object.defineProperty(list.doors,id,{value:`${(Object.hasOwn(doors,id)&&doors[id])||'A door on this list'} (${v.code??'cleared'})`,enumerable:true,writable:true,configurable:true});
   const reasons=note?.reasons??[],w=why.trim();
   return {lists,reasons:w&&!reasons.includes(w)?[...reasons,w]:reasons,...note?.local||local?{local:true}:{}};
 }
