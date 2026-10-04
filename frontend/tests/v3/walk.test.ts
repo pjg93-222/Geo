@@ -285,6 +285,14 @@ test('CSV value guard also catches a formula character after leading spaces or i
   assert.ok(csv.includes(`"' =cmd|'/c calc'!A1"`), 'a name with a leading space stays text in the file');
 });
 
+test('walk CSV guard also catches full-width = + - @ and a formula behind bidi controls', () => {
+  for (const s of ['\u{ff1d}1+1', '\u{ff0b}1', '\u{ff0d}1', '\u{ff20}SUM(1)', '\u{202e}=1', '\u{2066}+1', '\u{ad}-1', '\u{61c}@x', '\u{180e}\u{ff1d}1'])
+    assert.equal(csvValue(s), "'" + s, JSON.stringify(s));
+  for (const s of ['\u{202e}Dana', 'Dana\u{ff1d}Lee', '\u{2066}4 of 6\u{2069}']) assert.equal(csvValue(s), s, JSON.stringify(s));
+  const csv = buildWalkCsv(payload([run({doors: [door(1, '4102', [voter({name: '\u{202e}\u{ff1d}cmd|A1'})])]})]));
+  assert.ok(csv.includes(`"'\u{202e}\u{ff1d}cmd|A1"`), 'a full-width formula behind a bidi control stays text in the file');
+});
+
 test('dates: a day is read as written, so no viewer time zone moves a date or a local-time stamp', () => {
   const was = process.env.TZ;
   try {

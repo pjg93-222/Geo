@@ -41,3 +41,46 @@ test('ordinary rows serialize exactly as the earlier inline criteria export did'
   assert.equal(csvText([['a "b"', 'c,d'], ['', 'e']]), '"a ""b""","c,d"\r\n"","e"');
   assert.ok(!csvText(rows).endsWith('\n'), 'no trailing line break');
 });
+
+// Full-width triggers and bidi/format prefixes. FULL_WIDTH, BIDI_FORMAT, SKIPPED and TRIGGERS are copied verbatim into
+// server/research/test_terrier_contacts_csv.py, so both guards are pinned to the same code points.
+const FULL_WIDTH = ['＝', '＋', '－', '＠'];
+const BIDI_FORMAT = ['‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩', '­', '؜', '᠎'];
+const SKIPPED = [[0x0000, 0x0020], [0x007f, 0x00a0], [0x00ad, 0x00ad], [0x061c, 0x061c], [0x1680, 0x1680], [0x180e, 0x180e],
+  [0x2000, 0x200f], [0x2028, 0x202f], [0x205f, 0x2060], [0x2066, 0x2069], [0x3000, 0x3000], [0xfeff, 0xfeff]];
+const TRIGGERS = [0x002b, 0x002d, 0x003d, 0x0040, 0xff0b, 0xff0d, 0xff1d, 0xff20];
+
+test('a full-width = + - @ gets an apostrophe, first or behind any skipped prefix', () => {
+  for (const trigger of FULL_WIDTH)
+    for (const prefix of ['', ' ', ' ', '​', '﻿', '\t', '　', '‮', '⁦­'])
+      for (const value of [prefix + trigger + '1+1', prefix + trigger + 'HYPERLINK("https://example.invalid","x")']) {
+        assert.equal(csvValue(value), "'" + value, JSON.stringify(value));
+      }
+});
+
+test('a formula behind bidi controls, a soft hyphen, the Arabic letter mark or the Mongolian vowel separator gets an apostrophe', () => {
+  for (const prefix of [...BIDI_FORMAT, '‮⁦', '‫ ‏', '­­ '])
+    for (const trigger of ['=', '+', '-', '@', ...FULL_WIDTH]) {
+      const value = prefix + trigger + '1+1';
+      assert.equal(csvValue(value), "'" + value, JSON.stringify(value));
+    }
+});
+
+test('bidi or format characters before ordinary text, and full-width triggers later in the text, are unchanged', () => {
+  const values = [...BIDI_FORMAT.map(c => c + 'Jane Doe'), '‮enaJ', '⁦Main St⁩', 'a＝b', 'x ＋1', '＃ 5', '１＋１',
+    '­', '‮', 'Jane＠example.com'];
+  for (const value of values) assert.equal(csvValue(value), value, JSON.stringify(value));
+  assert.equal(csvText([['‮=1', '＝1', 'plain']]), "\"'‮=1\",\"'＝1\",\"plain\"");
+});
+
+test('the guard skips exactly the SKIPPED code points and fires on exactly the TRIGGERS (same list as the Python test)', () => {
+  const inRanges = (cp: number, ranges: number[][]) => ranges.some(([a, b]) => a <= cp && cp <= b);
+  const firstOnly = [0x09, 0x0a, 0x0d];
+  for (let cp = 0; cp <= 0x10ffff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue;
+    const c = String.fromCodePoint(cp);
+    const triggers = TRIGGERS.includes(cp) || firstOnly.includes(cp);
+    if ((csvValue(c + '1') !== c + '1') !== triggers) assert.fail(`U+${cp.toString(16)} as the first character`);
+    if ((csvValue(c + '=1') !== c + '=1') !== (triggers || inRanges(cp, SKIPPED))) assert.fail(`U+${cp.toString(16)} before =`);
+  }
+});

@@ -178,13 +178,15 @@ def contacts(request):
 
 
 # Same rule as csvValue in frontend/src/v3/lib/csv.ts. Python's \s, unlike JavaScript's, leaves out U+FEFF.
-CSV_FORMULA = re.compile(r'[\t\r\n]|[\s\x00-\x1f\x7f-\x9f\u200b-\u200f\u2060\ufeff]*[=+\-@]')
+# Triggers: = + - @ and their full-width forms. Skipped before them: spaces, controls, invisible marks, bidi controls.
+CSV_FORMULA = re.compile(r'[\t\r\n]|[\s\x00-\x1f\x7f-\x9f\xad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]*'
+                         r'[=+\-@\uff0b\uff0d\uff1d\uff20]')
 
 
 def csv_value(value):
     text = '' if value is None else str(value)
     # Keep a stored value from becoming a formula when the local CSV is opened in Excel,
-    # including one behind leading spaces, invisible characters or control characters.
+    # including one behind leading spaces, invisible, bidi or control characters, or written full-width.
     return "'" + text if CSV_FORMULA.match(text) else text
 
 

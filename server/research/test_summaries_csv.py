@@ -10,7 +10,7 @@ from .models import Snapshot
 from .test_measures import MEAN, measure_bundle
 
 FORMULAS = ('=HYPERLINK("https://example.invalid","x")', '@SUM(1+1)', '+1+1', '-1+1', ' =1+1',
-            '\u00a0=1+1', '\u200b=1+1', '\ufeff=1+1', '\t=1+1', '\n=1+1')
+            '\u00a0=1+1', '\u200b=1+1', '\ufeff=1+1', '\t=1+1', '\n=1+1', '\uff1d1+1', '\u202e=1+1', '\u2066\uff20SUM(1)')
 NUMBERS = ('value', 'index', 'valid_count', 'field_coverage', 'count', 'share', 'coverage', 'source_count',
            'component_coverage', 'components_used', 'components_total')
 

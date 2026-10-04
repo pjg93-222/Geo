@@ -36,6 +36,55 @@ class ContactCsvValueTests(SimpleTestCase):
                 self.assertEqual(csv_value(value), expected)
 
 
+# FULL_WIDTH, BIDI_FORMAT, SKIPPED and TRIGGERS are copied verbatim from frontend/tests/v3/csv.test.ts,
+# so both guards are pinned to the same code points.
+FULL_WIDTH = ['＝', '＋', '－', '＠']
+BIDI_FORMAT = ['‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩', '­', '؜', '᠎']
+SKIPPED = [[0x0000, 0x0020], [0x007f, 0x00a0], [0x00ad, 0x00ad], [0x061c, 0x061c], [0x1680, 0x1680], [0x180e, 0x180e],
+           [0x2000, 0x200f], [0x2028, 0x202f], [0x205f, 0x2060], [0x2066, 0x2069], [0x3000, 0x3000], [0xfeff, 0xfeff]]
+TRIGGERS = [0x002b, 0x002d, 0x003d, 0x0040, 0xff0b, 0xff0d, 0xff1d, 0xff20]
+
+
+class ContactCsvFullWidthAndBidiTests(SimpleTestCase):
+    def test_full_width_triggers_are_guarded_first_or_behind_any_skipped_prefix(self):
+        for trigger in FULL_WIDTH:
+            for prefix in ('', ' ', ' ', '​', '﻿', '\t', '　', '‮', '⁦­'):
+                for value in (prefix + trigger + '1+1', prefix + trigger + 'HYPERLINK("https://example.invalid","x")'):
+                    with self.subTest(value=value):
+                        self.assertEqual(csv_value(value), "'" + value)
+
+    def test_formulas_behind_bidi_and_format_characters_are_guarded(self):
+        for prefix in BIDI_FORMAT + ['‮⁦', '‫ ‏', '­­ ']:
+            for trigger in ['=', '+', '-', '@'] + FULL_WIDTH:
+                value = prefix + trigger + '1+1'
+                with self.subTest(value=value):
+                    self.assertEqual(csv_value(value), "'" + value)
+
+    def test_bidi_or_format_before_text_and_later_full_width_triggers_are_unchanged(self):
+        values = [c + 'Jane Doe' for c in BIDI_FORMAT] + [
+            '‮enaJ', '⁦Main St⁩', 'a＝b', 'x ＋1', '＃ 5', '１＋１',
+            '­', '‮', 'Jane＠example.com']
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual(csv_value(value), value)
+
+    def test_guard_skips_exactly_skipped_and_fires_on_exactly_triggers_like_the_frontend(self):
+        def in_ranges(cp):
+            return any(a <= cp <= b for a, b in SKIPPED)
+        first_only = (0x09, 0x0a, 0x0d)
+        wrong = []
+        for cp in range(0x110000):
+            if 0xd800 <= cp <= 0xdfff:
+                continue
+            c = chr(cp)
+            triggers = cp in TRIGGERS or cp in first_only
+            if (csv_value(c + '1') != c + '1') != triggers:
+                wrong.append('U+%04X as the first character' % cp)
+            if (csv_value(c + '=1') != c + '=1') != (triggers or in_ranges(cp)):
+                wrong.append('U+%04X before =' % cp)
+        self.assertEqual(wrong, [])
+
+
 @override_settings(LOCAL_ADMIN_ACCESS=True, HOSTED=False, DEMO_MODE=False)
 class ContactCsvExportTests(SimpleTestCase):
     # Borrow the synthetic source stores; subclassing TerrierSourceContactsTests here would run its tests twice.
