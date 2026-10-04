@@ -3,9 +3,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
-import {REFUSED_KEY, readRefused, refusedStore, tabStorage, writeRefused} from '../../src/v3/lib/walkRefused.ts';
+import {REFUSED_KEY, readRefused, refusedStore, resetRefused, tabStorage, writeRefused} from '../../src/v3/lib/walkRefused.ts';
 import type {RefusedStorage} from '../../src/v3/lib/walkRefused.ts';
-import {listIdentity, marksWithRefused, refusalHeadline} from '../../src/v3/lib/walk.ts';
+import {flaggedOnList, listIdentity, marksWithRefused, refusalHeadline} from '../../src/v3/lib/walk.ts';
+import {localJson, postJson} from '../../src/v3/api/client.ts';
 import type {WalkCode, WalkListPayload} from '../../src/v3/api/walkTypes.ts';
 
 const storage = () => {
@@ -130,7 +131,9 @@ test('a list saved under new person ids: the query marks are renamed (movedIds) 
   assert.deepEqual(stored(s).marks, {[KEYED]: {ra: 'S', rb: 'NH', gone: 'U'}}, 'renamed first, then merged: no mark is left under an old id, a voter not found keeps hers');
   const again = refusedStore(s);
   assert.deepEqual(marksWithRefused(listOf(['ra', 'rb']), again.marks, KEYED).results, {ra: 'S', rb: 'NH'});
-  assert.deepEqual(Object.keys(again.note?.lists[0].doors ?? {}), ['a', 'b', 'gone', 'ra'], 'the note names doors, so it is not re-keyed');
+  const doors = again.note?.lists[0].doors ?? {};
+  assert.deepEqual(Object.keys(doors), ['gone', 'ra', 'rb'], 'the note\'s doors are renamed with the marks, so saving them later takes them out of it');
+  assert.equal(doors.ra, '4102 N Cedar Heights Dr (S)', 'the renamed door replaces the one already under the new id, as the mark does');
   // a list saved without a query bucket still renames marks already under the key
   const k = storage(), only = refusedStore(k);
   only.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
@@ -159,7 +162,128 @@ test('storage that throws, or is missing, is tolerated: the page keeps working f
 });
 
 test('privacy: this tab\'s sessionStorage only, never localStorage or the address', () => {
-  const lib = readFileSync(path.join(import.meta.dirname, '../../src/v3/lib/walkRefused.ts'), 'utf8');
-  const code = lib.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const read = (f: string) => readFileSync(path.join(import.meta.dirname, '../../src/v3/lib', f), 'utf8').split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const code = read('walkRefused.ts') + read('walkRefusedReset.ts');
   assert.ok(/sessionStorage/.test(code) && !/localStorage|location|history\.|replaceQuery|URLSearchParams/.test(code));
+});
+
+// --- review findings: the note pruned on save, forgotten when the session ends, failed writes, the unload guard, odd person ids -----------
+
+test('a saved mark leaves the note as well; a note with no door left goes (and with it the unload prompt); one write each', () => {
+  const s = storage(), store = refusedStore(s);
+  store.hold(KEYED, 'Saturday', visits(['a', 'S'], ['b', 'NH']), DOORS, 'why');
+  store.hold(QUERY, 'Cedar', visits(['c', 'U']), DOORS, 'other');
+  let writes = s.writes();
+  store.clear([KEYED], ['a']);
+  assert.equal(s.writes(), writes + 1, 'one write');
+  assert.deepEqual(store.note?.lists.map(l => [l.title, Object.keys(l.doors)]), [['Saturday', ['b']], ['Cedar', ['c']]]);
+  assert.equal(refusalHeadline(store.note), 'The server refused 2 results, so they were not saved. Record these doors again:', 'the count follows');
+  store.clear([KEYED], ['b']);
+  assert.deepEqual(store.note?.lists.map(l => l.title), ['Cedar'], 'a list with no door left goes');
+  assert.deepEqual(store.note?.reasons, ['why', 'other'], 'the reasons stay while any door does');
+  store.clear([QUERY], ['c']);
+  assert.equal(store.note, null, 'every door saved: no note');
+  assert.equal(s.data.has(REFUSED_KEY), false, 'no marks and no note: the key is gone');
+  // a voter refused on two lists keeps the door until both marks are saved
+  const t = storage(), two = refusedStore(t);
+  two.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why'); two.hold(QUERY, 'Cedar', visits(['a', 'O']), DOORS, 'why');
+  two.clear([KEYED], ['a']);
+  assert.deepEqual(Object.keys(two.note?.lists[0].doors ?? {}), ['a'], 'still refused on the other list');
+  two.clear([QUERY], ['a']); assert.equal(two.note, null);
+  // a save under new person ids: the door renamed with the mark is taken out when the voter is saved
+  const r = storage(), moved = refusedStore(r);
+  moved.hold(QUERY, 'Saturday', visits(['a', 'S'], ['b', 'U']), DOORS, 'why');
+  moved.adopt(QUERY, KEYED, new Map([['a', 'ra']]));
+  writes = r.writes(); moved.clear([KEYED, QUERY], ['ra']);
+  assert.equal(r.writes(), writes + 1);
+  assert.deepEqual(Object.keys(moved.note?.lists[0].doors ?? {}), ['b']);
+  assert.deepEqual(stored(r), {marks: {[KEYED]: {b: 'U'}}, note: {lists: [{title: 'Saturday', doors: {b: '4110 N Cedar Heights Dr (U)'}}], reasons: ['why']}});
+});
+
+test('the session ends: reset() and resetRefused() forget the marks and the note in memory and in the tab, and never throw', () => {
+  const s = storage(), store = refusedStore(s);
+  store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
+  store.reset();
+  assert.equal(store.marks.size, 0); assert.equal(store.note, null); assert.equal(s.data.has(REFUSED_KEY), false);
+  assert.equal(refusedStore(s).note, null, 'a reload finds nothing');
+  const t = storage(), live = refusedStore(t), u = storage();
+  live.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why'); u.data.set(REFUSED_KEY, t.data.get(REFUSED_KEY) ?? '');
+  resetRefused(u);   // what Sign out and the API client call: every loaded store, and the given storage
+  assert.equal(live.marks.size, 0); assert.equal(live.note, null);
+  assert.equal(t.data.has(REFUSED_KEY), false, 'the loaded store removes its own key'); assert.equal(u.data.has(REFUSED_KEY), false, 'and the tab\'s key goes too');
+  assert.doesNotThrow(() => resetRefused(throwing())); assert.doesNotThrow(() => refusedStore(throwing()).reset()); assert.doesNotThrow(() => resetRefused(null));
+});
+
+test('a 401 from any request of the API client forgets the refusals before the error is thrown; other statuses do not', async () => {
+  const s = storage(), store = refusedStore(s), original = globalThis.fetch;
+  const answer = (status: number) => { globalThis.fetch = async () => new Response(JSON.stringify({error: status === 401 ? 'Sign in to continue' : 'No.', csrf: 't'}), {status}); };
+  try {
+    store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
+    answer(403); await assert.rejects(localJson('/api/v3/walk/lists'));
+    answer(500); await assert.rejects(localJson('/api/v3/walk/lists'));
+    assert.equal(store.marks.size, 1, 'a refusal or a fault is not the session ending');
+    answer(401); await assert.rejects(localJson('/api/v3/walk/lists'), /Sign in to continue/);
+    assert.equal(store.marks.size, 0); assert.equal(store.note, null); assert.equal(s.data.has(REFUSED_KEY), false);
+    store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
+    globalThis.fetch = async (url) => String(url).includes('/api/auth/session') ? new Response(JSON.stringify({csrf: 't'}), {status: 200}) : new Response(JSON.stringify({error: 'Sign in to continue'}), {status: 401});
+    await assert.rejects(postJson('/api/v3/walk/dispositions', {}));
+    assert.equal(store.marks.size, 0, 'a write answered 401 too'); assert.equal(s.data.has(REFUSED_KEY), false);
+  } finally { globalThis.fetch = original; }
+});
+
+test('a write that fails (a full quota) removes the key: a reload never brings back a mark since saved or a note since dismissed', () => {
+  const s = storage(); let ok = 1;
+  const quota: RefusedStorage = {getItem: k => s.getItem(k), removeItem: k => s.removeItem(k), setItem: (k, v) => { if (ok-- <= 0) throw new Error('QuotaExceededError'); s.setItem(k, v); }};
+  const store = refusedStore(quota);
+  store.hold(KEYED, 'Saturday', visits(['a', 'S'], ['b', 'U']), DOORS, 'why');   // the one write that succeeds
+  assert.ok(s.data.has(REFUSED_KEY));
+  store.clear([KEYED], ['a']);                                                      // a saved; the write fails
+  assert.equal(s.data.has(REFUSED_KEY), false, 'the older copy (a still refused) is gone');
+  assert.deepEqual([...store.marks.get(KEYED) ?? []], [['b', 'U']], 'memory stays right for this page');
+  assert.equal(refusedStore(s).marks.size, 0, 'a reload starts empty rather than with a mark since saved');
+  const d = storage(); let once = 1;
+  const full: RefusedStorage = {getItem: k => d.getItem(k), removeItem: k => d.removeItem(k), setItem: (k, v) => { if (once-- <= 0) throw new Error('QuotaExceededError'); d.setItem(k, v); }};
+  const dismissing = refusedStore(full);
+  dismissing.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why'); dismissing.dismiss();
+  assert.equal(refusedStore(d).note, null, 'a dismissed note never comes back');
+  assert.equal(writeRefused({marks: new Map([[KEYED, new Map<string, WalkCode | null>([['a', 'S']])]]), note: null}, full), false);
+});
+
+test('a person id of "__proto__" round-trips as a plain key, and nothing is polluted', () => {
+  const s = storage(), store = refusedStore(s);
+  store.hold(KEYED, 'Saturday', visits(['__proto__', 'S'], ['constructor', 'U']), {}, 'why');
+  const raw = stored(s);
+  assert.deepEqual(Object.keys(raw.marks[KEYED]), ['__proto__', 'constructor']); assert.equal(raw.marks[KEYED].__proto__, 'S');
+  assert.deepEqual(Object.keys(raw.note.lists[0].doors), ['__proto__', 'constructor']);
+  const again = refusedStore(s);
+  assert.deepEqual([...again.marks.get(KEYED) ?? []], [['__proto__', 'S'], ['constructor', 'U']]);
+  const doors = again.note?.lists[0].doors ?? {};
+  assert.ok(Object.hasOwn(doors, '__proto__') && doors.__proto__ === 'A door on this list (S)' && Object.getPrototypeOf(doors) === Object.prototype);
+  assert.equal(({} as Record<string, unknown>).S, undefined, 'Object.prototype is untouched');
+  again.clear([KEYED], ['__proto__', 'constructor']);
+  assert.equal(again.note, null); assert.equal(s.data.has(REFUSED_KEY), false);
+});
+
+test('the unload guard: only flagged voters of the list shown count, never a refused mark the list does not show', () => {
+  const shown = listOf(['a', 'b']);
+  assert.deepEqual([...flaggedOnList(shown, new Set(['a', 'gone']))], ['a'], 'a voter the saved list dropped does not hold the guard up');
+  assert.equal(flaggedOnList(shown, new Set(['gone'])).size, 0);
+  assert.equal(flaggedOnList(null, new Set(['a'])).size, 0, 'no list shown');
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  assert.ok(/^const shownFlagged:\{current:ReadonlySet<string>\}=\{current:new Set\(\)\};/m.test(src), 'a ref beside the guards, outliving the screen');
+  assert.ok(/useEffect\(\(\)=>\{shownFlagged\.current=flaggedOnList\(payload,unsaved\);\},\[payload,unsaved\]\)/.test(src), 'kept to the list shown and its flags');
+  for (const guard of [/const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/, /const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/])
+    assert.ok(guard.test(src), String(guard));
+});
+
+test('wiring: the note shown follows the store after a save, the screen drops its refusals when the session ends, Sign out and the API client reset', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  const client = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/client.ts'), 'utf8');
+  const legacy = readFileSync(path.join(import.meta.dirname, '../../src/main.tsx'), 'utf8');
+  assert.ok(/sendBatch\(entry,batch,[^\n]*\n[^\n]*setUnsaved[^\n]*\n\s*showRefusal\(refusals\.note\);/.test(src), 'after a batch is saved the note shown is the store\'s');
+  assert.ok(/setEarlier\(message===null\?null:\{message\}\);\n\s*showRefusal\(refusals\.note\);/.test(src), 'and after results from earlier are saved');
+  assert.ok(/useEffect\(\(\)=>onRefusedReset\(\(\)=>\{/.test(src) && /showRefusal\(null\);setUnsaved\(new Set\(\)\);/.test(src), 'the screen forgets what it shows of them');
+  assert.equal((client.match(/sessionEnded\(response\);/g) ?? []).length, 2, 'both request paths of the client');
+  assert.ok(/const sessionEnded=\(response:Response\)=>\{if\(response\.status===401\)resetRefused\(\);\};/.test(client));
+  assert.ok(/onClick=\{async\(\)=>\{resetRefused\(\);await post\('auth\/logout',\{\}\);/.test(legacy), 'Sign out forgets them before it signs out');
 });

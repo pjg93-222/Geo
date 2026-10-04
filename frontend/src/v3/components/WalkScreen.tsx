@@ -15,13 +15,14 @@ import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkList
 import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
   lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
-  doorsByPerson,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
+  doorsByPerson,flaggedOnList,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,
   type HeldList,type RefusalNote,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkVisit,
 } from '../lib/walk';
 import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
 import {exportWalkPdf} from '../lib/walkPdf';
 import {refusedStore} from '../lib/walkRefused';
+import {onRefusedReset} from '../lib/walkRefusedReset';
 import '../styles/walk.css';
 
 // MapLibre loads only once a list exists, so opening this screen stays light.
@@ -43,9 +44,12 @@ const outbox=resultShelf<string,WalkVisit>(v=>v.on);
 // note names their doors until it is dismissed, so a refusal while the screen is away is told on return. Both outlive a reload too: they are
 // restored from this tab's sessionStorage when this module loads, and every change is written back (lib/walkRefused.ts).
 const refusals=refusedStore();
-// The guard while the screen is away: results not yet confirmed, or a refusal note not yet dismissed. Refused marks alone do not ask: a mark
-// on a voter no list has any more is never cleared, so it would ask on every close.
-const warnHeld=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||refusals.note){e.preventDefault();e.returnValue='';}};
+// The voters of the list on screen (the last one shown, once the screen is away) whose mark is flagged Not saved (flaggedOnList). Kept here,
+// beside the guards, as a ref the screen updates.
+const shownFlagged:{current:ReadonlySet<string>}={current:new Set()};
+// The guard while the screen is away: results not yet confirmed, a refusal note not yet dismissed, or a flagged mark on the list shown. A
+// refused mark on a voter the list does not show (off the list, gone) does not ask: it is never cleared, so it would ask on every close.
+const warnHeld=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||refusals.note||shownFlagged.current.size>0){e.preventDefault();e.returnValue='';}};
 const identities=(entry:HeldList)=>[...new Set([listIdentity(entry.meta?.key,entry.query),listIdentity(null,entry.query)])];
 /** Results the server refused: kept as the walker's marks on their list, and added to the note with their doors. Answers with the note. */
 function holdRefused(entry:HeldList,marks:Map<string,WalkVisit>,why:string,local=false):RefusalNote{
@@ -327,6 +331,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [earlier,setEarlier]=useState<{message:string}|null>(null);   // results from before the screen was left that could not be saved
   const [refusal,showRefusal]=useState<RefusalNote|null>(()=>refusals.note);   // results the server refused: told until dismissed, whichever list comes on screen meanwhile
   const [unsaved,setUnsaved]=useState<ReadonlySet<string>>(()=>new Set());   // marks on screen the server refused: kept and flagged until marked again and saved
+  const unsavedRef=useRef(unsaved);unsavedRef.current=unsaved;
   const [replaced,setReplaced]=useState(false);   // the list saved is not the one shown (the voter data changed in between), and is shown now
   const entryRef=useRef<HeldList|null>(null);const timer=useRef<ReturnType<typeof setTimeout>>(undefined);   // the shelf entry of the list on screen
   const saving=useRef<{base:WalkListPayload;job:Promise<string>}|null>(null);const resume=useRef<(()=>void)|null>(null);
@@ -394,6 +399,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         const shown=entryRef.current===entry;   // the list on screen takes its key into the screen; one that was left saves quietly
         const {list:key,sent}=await sendBatch(entry,batch,(r,why)=>refuse(entry,r,why,true),shown?()=>ensureSaved():undefined);
         if(entryRef.current===entry)setUnsaved(u=>[...sent.keys()].some(id=>u.has(id))?new Set([...u].filter(id=>!sent.has(id))):u);   // saved now: no longer flagged
+        showRefusal(refusals.note);   // and no longer in the note: a note whose doors are all saved goes
         if(shown&&[...batch.values()].some(v=>v.code===null))void reconcile(key);
       },
       report:(state,message)=>{
@@ -423,6 +429,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       if(!ok)message??=why||'The results could not be saved.';
     }
     setEarlier(message===null?null:{message});
+    showRefusal(refusals.note);   // results saved here leave the note too
     if(message===null){if(!refused)setAnnounce('Results from earlier are saved.');void refreshLists();}
     return message===null;
   },[refreshLists]);
@@ -599,7 +606,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(plan==='saved')openSaved(init.list);else if(plan==='build')generate();
   },[]);
   useEffect(()=>{
-    const warn=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||saving.current||refusals.note){e.preventDefault();e.returnValue='';}};
+    const warn=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||saving.current||refusals.note||shownFlagged.current.size>0){e.preventDefault();e.returnValue='';}};
     const hidden=()=>{if(document.visibilityState==='hidden')void flush();};
     window.removeEventListener('beforeunload',warnHeld);   // while the screen is here, its own guard speaks for every list on the shelf
     window.addEventListener('beforeunload',warn);document.addEventListener('visibilitychange',hidden);
@@ -610,6 +617,14 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       genAbort.current?.abort();matchJobs.cancel();uploadAbort.current?.abort();
     };
   },[flush]);
+  // The list's flagged marks, for both unload guards: only voters this list shows count (flaggedOnList).
+  useEffect(()=>{shownFlagged.current=flaggedOnList(payload,unsaved);},[payload,unsaved]);
+  // The session ended (Sign out, a 401): the store has forgotten the refusals, and the screen drops what it shows of them, the flagged marks too.
+  useEffect(()=>onRefusedReset(()=>{
+    const gone=unsavedRef.current;
+    showRefusal(null);setUnsaved(new Set());
+    if(gone.size)setResults(r=>Object.fromEntries(Object.entries(r).filter(([id])=>!gone.has(id))));
+  }),[]);
   const goToStop=useCallback((stop:number)=>{
     const el=document.getElementById(`walk-run-${stop}`);if(!el)return;
     el.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'});

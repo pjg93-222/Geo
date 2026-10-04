@@ -680,7 +680,7 @@ test('upload identity: an answer for an earlier upload changes nothing (rematch 
 
 test('walk screen wiring: the unload guard, the startup plan, the rematch check and the CSV report use the helpers above', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
-  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\)/.test(src), 'the unload guard asks the outbox, and while a refusal note is up');
+  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'the unload guard asks the outbox, and while a refusal note is up or the list shown has a flagged mark');
   assert.ok(/startPlan\(init\)/.test(src) && !/init\.picks\.length\)generate/.test(src), 'startup follows the plan, which includes an area alone');
   assert.ok(/const current=\(\)=>uploadRef\.current\?\.id===id/.test(src) && /if\(!current\(\)\)return;/.test(src), 'a rematch answer is dropped once its upload is gone');
   assert.ok(/pickerOf\(p\)/.test(src) && !/k in q/.test(src), 'a saved list restores the picker only through pickerOf');
@@ -921,7 +921,7 @@ test('walk screen wiring (round 4): the shelf outlives the screen, a file is mat
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/^const outbox=resultShelf<string,WalkVisit>\(v=>v\.on\);/m.test(src), 'one shelf for the page, outside the component, split into requests by day');
   assert.ok(!/outbox\.clear\(\)/.test(src), 'showing another list does not forget results that were not saved');
-  assert.ok(/window\.addEventListener\('beforeunload',warnHeld\)/.test(src) && /const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\)/.test(src), 'closing the page asks while the screen is away too');
+  assert.ok(/window\.addEventListener\('beforeunload',warnHeld\)/.test(src) && /const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'closing the page asks while the screen is away too');
   assert.ok(/settleEarlier\(\)/.test(src) && /outbox\.held\(\)/.test(src), 'results kept from an earlier visit are sent again');
   assert.ok(/entry\.box\.set\(id,\{code,on:localToday\(\)\}\)/.test(src) && !/saveWalkDispositions\([^)]*localToday/.test(src), 'the day is taken when a result is set, never when it is sent');
   assert.ok(/matchJobs\.start\(\)/.test(src) && /matchWalkStreets\(inputs,area,job\.signal\)/.test(src) && /if\(!job\.live\(\)\)return;/.test(src), 'the first answer for a file is dropped once the file is replaced, cleared or left behind');

@@ -427,7 +427,10 @@ try{
       await page.getByRole('button',{name:'Dismiss',exact:true}).click();
       await note.waitFor({state:'detached'});
     }finally{await page.unroute(isSave,refuse);}
-    return 'A refused result stays marked and flagged "not saved" (screen and CSV), the note names its door and the server\'s reason, it is not retried, and another saved list opens straight away';
+    // chosen again once the server takes it: saved, so nothing flagged is left to hold the next page change up
+    await group().getByRole('radio',{name:code('O')}).click();
+    await until(async()=>(await page.getByText('O (not saved)',{exact:true}).count())===0,'the O to be saved when chosen again');
+    return 'A refused result stays marked and flagged "not saved" (screen and CSV), the note names its door and the server\'s reason, it is not retried, another saved list opens straight away, and choosing it again saves it';
   },['not home again']);
 
   // ---- 8d2. a refused mark and the note come back after a reload; dismissed, the note stays gone, the flag stays, and closing does not ask ---
@@ -464,13 +467,20 @@ try{
       await note.getByRole('button',{name:'Dismiss',exact:true}).click();
       await note.waitFor({state:'detached'});
       assert.equal((await refusedKept()).session?.note,null,'dismissing removes the note from the tab');
-      assert.deepEqual(await reload(),[],'no prompt once the note is dismissed, though the mark is still not saved');
+      assert.deepEqual(await reload(),['beforeunload'],'the list shown still has a mark flagged "not saved": the reload still asks');
       await tables().first().waitFor();
       await marked('the refused U to stay after the note was dismissed');
       await page.getByText('U (not saved)',{exact:true}).last().waitFor();
       assert.equal(await note.count(),0,'the dismissed note does not come back');
     }finally{await page.unroute(isSave,refuse);}
-    return 'A refused U and its note survive a reload (which asks first; the tab\'s sessionStorage holds the mark by list and voter and the note apart, nothing in localStorage or the address); after Dismiss a reload brings back the flag but not the note, and does not ask';
+    // chosen again once the server takes it: saved, the flag and the tab's copy go, and closing no longer asks
+    await group().getByRole('radio',{name:code('U')}).click();
+    await until(async()=>(await page.getByText('U (not saved)',{exact:true}).count())===0,'the U to be saved when chosen again');
+    assert.equal((await refusedKept()).session,null,'nothing left in the tab');
+    assert.deepEqual(await reload(),[],'nothing flagged and no note: no prompt');
+    await tables().first().waitFor();
+    assert.equal(await page.getByText('U (not saved)',{exact:true}).count(),0);
+    return 'A refused U and its note survive a reload (which asks first; the tab\'s sessionStorage holds the mark by list and voter and the note apart, nothing in localStorage or the address); after Dismiss a reload brings back the flag but not the note and still asks, since the list shown has a flagged mark; once the U is saved the tab holds nothing and a reload does not ask';
   },['not home again']);
 
   // ---- 8d3. a list save refused as out of date: the page says to reload, and the reload brings the marks back flagged ------------------
@@ -527,11 +537,47 @@ try{
     await page.getByText('NH (not saved)',{exact:true}).first().waitFor();
     assert.equal(await page.getByText('S (not saved)',{exact:true}).count(),0,'the saved S is not flagged');
     assert.equal(await groups().first().getByRole('radio',{name:code('S')}).getAttribute('aria-checked'),'true','the saved S comes back from the list');
-    await note.getByRole('button',{name:'Dismiss',exact:true}).click();
+    const left=text(await note.innerText());
+    assert.ok(left.startsWith('The server refused 1 result')&&left.includes('(NH)')&&!left.includes('(S)'),'the saved S has left the note; the NH is still named');
+    // the last flagged mark saved: the note goes by itself, the tab holds nothing, and closing does not ask
+    await groups().nth(1).getByRole('radio',{name:code('NH')}).click();
+    await until(async()=>(await page.getByText('NH (not saved)',{exact:true}).count())===0,'the NH to be saved when chosen again');
     await note.waitFor({state:'detached'});
-    await forgetRefused();                                                // the fault step builds this list again
-    return 'A list save refused as out of date keeps both marks flagged with the note; the reload it asks for (after a prompt) brings both back flagged with the note and sends nothing; marking S again saves the list and clears its flag in the tab, the NH moves to the list\'s key and is still flagged after a reload that opens ?list=<key>';
+    assert.equal(await page.locator('.walk-refused-bar').count(),0,'and the phone bar with it');
+    assert.equal((await refusedKept()).session,null,'nothing left in the tab');
+    assert.deepEqual(await reload(),[],'every refused mark saved: no prompt');
+    await tables().first().waitFor();
+    assert.equal(await note.count(),0,'no note after the reload');
+    return 'A list save refused as out of date keeps both marks flagged with the note; the reload it asks for (after a prompt) brings both back flagged with the note and sends nothing; marking S again saves the list and takes S out of the flags, the tab and the note; the NH moves to the list\'s key and is still flagged after a reload that opens ?list=<key>; saving it too removes the note, empties the tab, and a reload does not ask';
   },['generate']);
+
+  // ---- 8d4. the session ends (the server answers 401): the tab forgets the refused marks and the note --------------------------------------
+  //          The v3 app has no Sign out control (the one in src/main.tsx belongs to the legacy page, which index.html does not load), so a 401 is
+  //          the way the session ends here; the client's one choke point (api/client.ts sessionEnded) handles both.
+  await step('session end forgets refusals',async()=>{
+    await forgetRefused();
+    await page.goto(base+'/walk?list='+savedKey);await heading().waitFor();await tables().first().waitFor();
+    const isSave=url=>url.pathname==='/api/v3/walk/dispositions',isLists=url=>url.pathname==='/api/v3/walk/lists';
+    const refuse=route=>route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Some of those voters are not on this list.'})});
+    const ended=route=>route.request().method()==='GET'?route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:'Sign in to continue'})}):route.continue();
+    const note=page.locator('.walk-refused');
+    await page.route(isSave,refuse);
+    try{
+      await choose(groups().last(),'MV');
+      await note.waitFor();
+      assert.ok((await refusedKept()).session,'the refusal is kept in the tab');
+      await page.route(isLists,ended);                                     // the reload's look at the saved lists finds the session gone
+      assert.deepEqual(await reload(),['beforeunload'],'the note is up: the reload asks first');
+      await until(async()=>(await refusedKept()).session===null,'the tab to forget the refusals on the 401');
+      await note.waitFor({state:'detached'});
+      await until(async()=>(await page.getByText('MV (not saved)',{exact:true}).count())===0,'the screen to drop the flagged mark');
+    }finally{await page.unroute(isSave,refuse);await page.unroute(isLists,ended);}
+    assert.deepEqual(await reload(),[],'nothing kept: a reload does not ask');
+    await tables().first().waitFor();
+    assert.equal(await note.count(),0);assert.equal(await page.getByText('MV (not saved)',{exact:true}).count(),0);
+    assert.equal((await refusedKept()).session,null);
+    return 'When the server answers 401 (the session ended) the tab forgets the refused mark and the note: the key is removed, the screen drops the note and the flag, and a reload neither shows them nor asks';
+  },['not home again']);
 
   // ---- 8e. the voter data changed between showing a list and saving it: the saved list is shown with a note, and a mark for a voter
   //          it no longer has is refused and named, never sent. The save answer is edited here as a rebuild that dropped the last voter would. ----
@@ -704,7 +750,9 @@ try{
         await bar.waitFor({state:'detached'});
         assert.equal(await page.locator('.walk-refused-bar').count(),0,'dismissing the note removes the bar');
       }finally{await page.unroute(isSave,refuse);}
-      return `At ${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept; a refusal shows a bottom bar ("! 1 result not saved") clear of the last card, View brings the note into view with focus, Dismiss removes both, a desktop shows no bar`;
+      await groups().last().getByRole('radio',{name:code('O')}).click();      // saved when chosen again: nothing flagged holds the next page change up
+      await until(async()=>(await page.getByText('O (not saved)',{exact:true}).count())===0,'the O to be saved when chosen again');
+      return `At${PHONE.width}x${PHONE.height} the page does not scroll sideways and each of the ${cards.rows} voters is a card: name and all five 44 px result buttons in view, table roles kept; a refusal shows a bottom bar ("! 1 result not saved") clear of the last card, View brings the note into view with focus, Dismiss removes both, a desktop shows no bar`;
     }finally{await page.setViewportSize(DESKTOP);}
   });
 
