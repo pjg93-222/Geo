@@ -2,12 +2,13 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-contacts-ui.mjs');
 const out=fileURLToPath(new URL('../../_build/contact-verification/',import.meta.url));await mkdir(out,{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true,args:['--enable-unsafe-swiftshader']});
 const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});page.setDefaultTimeout(60000);
 const report={errors:[],apiRequests:[],checks:[]};
 page.on('pageerror',error=>report.errors.push(error.message));page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/api/'))report.apiRequests.push(request.url());});
-const base='http://127.0.0.1:8767';
 async function rows(){await page.locator('.contacts-table tbody tr').first().waitFor();}
 try{
   await page.goto(base+'/contacts');await rows();assert.equal(await page.locator('.contacts-table tbody tr').count(),50);

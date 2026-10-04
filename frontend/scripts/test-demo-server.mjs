@@ -44,5 +44,8 @@ const server=createServer(async(req,res)=>{
     res.end(req.method==='HEAD'?undefined:data);
   }catch{res.writeHead(404);res.end('Not found');}
 });
-server.listen(8767,'127.0.0.1',()=>console.log('Test-dummy preview: http://127.0.0.1:8767'));
+// Port defaults to 8767 (the standalone preview); TERRIER_PORT overrides it so a check can run beside the live app.
+const port=Number(process.env.TERRIER_PORT||8767);
+if(!Number.isInteger(port)||port<1||port>65535){console.error('TERRIER_PORT must be a port number');process.exit(2);}
+server.listen(port,'127.0.0.1',()=>console.log('Test-dummy preview: http://127.0.0.1:'+port));
 server.on('error',e=>{console.error(e.message);process.exitCode=1;});

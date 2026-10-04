@@ -1,10 +1,12 @@
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-terrier-dart.mjs');
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try {
   const page=await browser.newPage();
-  await page.goto('http://127.0.0.1:8767/brand/terrier-loading-hq.mp4');
+  await page.goto(base+'/brand/terrier-loading-hq.mp4');
   await page.waitForFunction(()=>document.querySelector('video')?.readyState>=2);
   const frames=await page.locator('video').evaluate(async video=>{
     video.pause();

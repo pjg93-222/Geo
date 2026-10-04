@@ -2,6 +2,8 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-test-demo.mjs');
 const out=fileURLToPath(new URL('../../_build/test-dummy-verification/',import.meta.url));await mkdir(out,{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true,args:['--enable-unsafe-swiftshader']});
 const page=await browser.newPage({viewport:{width:1920,height:1080},deviceScaleFactor:1});
@@ -10,7 +12,6 @@ const report={consoleErrors:[],errors:[],apiRequests:[],checks:[],timings:{},scr
 page.on('console',m=>{if(m.type()==='error'&&!expectedFault)report.consoleErrors.push(m.text());});
 page.on('pageerror',e=>report.errors.push(e.message));
 page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))report.apiRequests.push(r.url());});
-const base='http://127.0.0.1:8767';
 async function capture(name){if(process.argv.includes('--no-screenshots'))return;await page.screenshot({path:out+name+'.png',fullPage:true});report.screenshots.push(name+'.png');}
 async function open(path,selector){const start=performance.now();await page.goto(base+path);await page.locator(selector).first().waitFor();await page.evaluate(()=>document.fonts.ready);report.timings[path]=Math.round(performance.now()-start);}
 try{

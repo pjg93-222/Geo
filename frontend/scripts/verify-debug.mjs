@@ -1,11 +1,12 @@
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-debug.mjs');
 const output=new URL('../../_build/debug-verification/',import.meta.url);await mkdir(output,{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true,args:['--enable-unsafe-swiftshader']});
 const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
 const report={checks:[],errors:[]};page.on('pageerror',e=>report.errors.push(e.message));
-const base='http://127.0.0.1:8767';
 try {
   await page.goto(base+'/?index=cua&level=tract');await page.locator('.railA .rail-title').waitFor();
   assert.equal(await page.getByRole('button',{name:'Tract',exact:true}).getAttribute('aria-pressed'),'true');

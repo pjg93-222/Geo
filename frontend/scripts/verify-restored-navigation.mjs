@@ -2,13 +2,14 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-restored-navigation.mjs');
 const out=fileURLToPath(new URL('../../_build/restored-workspace/',import.meta.url));await mkdir(out,{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true,args:['--enable-unsafe-swiftshader']});
 const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
 const report={checks:[],errors:[],apiRequests:[],screenshots:[]};
 page.on('pageerror',e=>report.errors.push(e.message));
 page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))report.apiRequests.push(r.url());});
-const base='http://127.0.0.1:8767';
 const sections=[['Map','/','.railA'],['People','/people','.trow:not(.sk-row)'],['Contact sheet','/contacts','.contact-person'],['Criteria audit','/criteria','.work-table tbody tr'],['Data & sources','/sources','.work-facts dd'],['Team & snapshots','/workspace','.work-save-form'],['Method','/method','.method'],['Walk list','/walk','.walk-screen']];
 async function capture(name){if(!process.argv.includes('--screenshots'))return;await page.screenshot({path:out+name+'.png',fullPage:false});report.screenshots.push(name+'.png');}
 try{

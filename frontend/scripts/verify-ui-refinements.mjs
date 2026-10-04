@@ -2,10 +2,12 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-ui-refinements.mjs');
 const out=new URL('../../_build/ui-refinement/',import.meta.url);await mkdir(out,{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true,args:['--enable-unsafe-swiftshader']});
 const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
-const report={checks:[],errors:[],apiRequests:[]};const base='http://127.0.0.1:8767';
+const report={checks:[],errors:[],apiRequests:[]};
 page.on('pageerror',e=>report.errors.push(e.message));page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))report.apiRequests.push(r.url());});
 try{
  await page.goto(base+'/people');await page.locator('a.trow').first().waitFor();

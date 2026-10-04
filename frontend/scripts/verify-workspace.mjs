@@ -1,6 +1,8 @@
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
+import {terrierBase} from './terrier-base.mjs';
+const base=terrierBase('verify-workspace.mjs');
 const output=new URL('../../_build/workspace-verification/',import.meta.url);await mkdir(output,{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const context=await browser.newContext({viewport:{width:1440,height:900},reducedMotion:'reduce'});
@@ -8,7 +10,6 @@ const page=await context.newPage();
 const report={checks:[],errors:[],apiRequests:[]};
 page.on('pageerror',e=>report.errors.push(e.message));
 page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))report.apiRequests.push(r.url());});
-const base=process.env.TERRIER_URL||'http://127.0.0.1:8767';
 try{
   await page.goto(base+'/criteria');await page.getByRole('heading',{name:'Criteria audit',exact:true}).waitFor();
   assert.equal(await page.locator('.work-table tbody tr').count(),40);
