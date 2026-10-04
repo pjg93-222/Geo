@@ -177,10 +177,15 @@ def contacts(request):
                      'first': offset + 1 if total else 0, 'last': min(offset + PAGE_SIZE, total), 'coverage': totals})
 
 
+# Same rule as csvValue in frontend/src/v3/lib/csv.ts. Python's \s, unlike JavaScript's, leaves out U+FEFF.
+CSV_FORMULA = re.compile(r'[\t\r\n]|[\s\x00-\x1f\x7f-\x9f\u200b-\u200f\u2060\ufeff]*[=+\-@]')
+
+
 def csv_value(value):
     text = '' if value is None else str(value)
-    # Keep a stored value from becoming a formula when the local CSV is opened in Excel.
-    return "'" + text if text[:1] in ('=', '+', '-', '@', '\t', '\r', '\n') else text
+    # Keep a stored value from becoming a formula when the local CSV is opened in Excel,
+    # including one behind leading spaces, invisible characters or control characters.
+    return "'" + text if CSV_FORMULA.match(text) else text
 
 
 @local_only
