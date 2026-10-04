@@ -150,6 +150,7 @@ $env:TERRIER_URL='http://127.0.0.1:8768'; node frontend/scripts/verify-walk-list
   - If a relaunch reports a failure but the server it recorded is still running (for example, readiness timed out while Python was still loading), the supervisor adopts and watches that server instead of giving it up. Once that server listens, the supervisor has `Start-TerrierServer.ps1` finish its record (`launcher_pid` plus the listener), so later starts recognise it.
   - Warnings from the relaunch (for example, a log it could only copy) are written to the supervisor log.
 - **Restart cap:** at most 5 restarts in any 10 minutes. After that the supervisor logs "giving up" and exits, and the next `Start-Terrier.ps1` starts a fresh supervisor. If a first start fails, `Start-Terrier.ps1` reports it as before and no supervisor is left behind.
+- **Supervisor log cap:** at 1 MB (`$supervisorLogLimit` in `Watch-TerrierServer.ps1`) `Write-SupervisorLog` moves `terrier-supervisor.log` to `terrier-supervisor.1.log`, replacing any older one, and starts a new log, so the two stay under about 2 MB. A move that fails (log held open, old copy read-only) is skipped and tried again on the next line; it never stops the supervisor. The supervisor now running on the live server (PID 19412, started 2026-10-03 21:15) loaded the earlier script, so the cap applies after its next restart; no restart is needed now, since the log grows only a few lines per server restart.
 - **Logs** are in `_build/`:
   - Before each launch, a non-empty `terrier-server.err.log` or `.out.log` is renamed to `terrier-server.err.<yyyyMMddTHHmmss>.log`. The newest 10 of each are kept, so the log from the first crash survives a full 5-restart loop.
   - If another program holds the log open (a viewer tailing it, antivirus), it is copied instead of renamed. If even that fails, the start goes on with a warning.
@@ -162,9 +163,8 @@ $env:TERRIER_URL='http://127.0.0.1:8768'; node frontend/scripts/verify-walk-list
   - It then stops the server exactly as before, with the same identity check.
   - A damaged supervisor record or any other supervisor problem only produces a warning; the server is still stopped.
   - It also works when no supervisor is running (old-style starts, `-NoSupervisor`). The flag stays until the next supervised start removes it.
-- **The live server (PID 82300, started 17:40) predates this change.** It has no supervisor and no fault log.
-  - Running `./Start-Terrier.ps1 -NoBrowser` or clicking the shortcut while it runs attaches a supervisor without restarting it.
-  - The fault log and log rotation only take effect after a restart with the new scripts: `./Stop-TerrierServer.ps1; ./Start-Terrier.ps1 -NoBrowser`.
+- **The live server runs under these scripts** since the 2026-10-03 21:15 restart on `f7d9272` (server PID 25184, supervisor PID 19412; see Status), with the fault log and log rotation active.
+  - Running `./Start-Terrier.ps1 -NoBrowser` or clicking the shortcut while an unsupervised server runs attaches a supervisor without restarting it; a fresh restart is needed for the fault log: `./Stop-TerrierServer.ps1; ./Start-Terrier.ps1 -NoBrowser`.
 - **Testing the launch scripts:** they hard-code port 8767, `_build` and `.local`. Never run them, or `tools/Test-TerrierDesktop.ps1`, in the repo (the desktop test stops and restarts the live server). Use a temp copy instead:
   - Copy the scripts, `manage.py`, `server/`, `tools/`, `frontend/dist` and `assets/`.
   - Replace `8767` with `8769`, and give the absolute venv python path.

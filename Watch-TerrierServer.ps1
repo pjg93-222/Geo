@@ -13,6 +13,7 @@ $record = Join-Path $logDirectory 'terrier-server-pid.json'
 $watchRecord = Join-Path $logDirectory 'terrier-supervisor-pid.json'
 $stopFlag = Join-Path $logDirectory 'terrier-supervisor.stop'
 $supervisorLog = Join-Path $logDirectory 'terrier-supervisor.log'
+$supervisorLogLimit = 1048576
 $backoffSeconds = @(5, 15, 30, 60)
 $restartLimit = 5
 $restartWindow = [timespan]::FromMinutes(10)
@@ -21,6 +22,15 @@ function Write-SupervisorLog([string]$Text) {
     # Someone reading the log can briefly lock it; a line that still cannot be written is dropped rather than letting a
     # logging problem stop the supervisor.
     $line = (Get-Date -Format o) + ' supervisor ' + $PID + ': ' + $Text
+    # A log of $supervisorLogLimit bytes or more becomes terrier-supervisor.1.log (replacing any older one) before this line
+    # starts a new log, so the two files together stay near twice the limit. A move that cannot be done (the log is held
+    # open, the old copy is read-only) is skipped until the next line.
+    try {
+        if ((Get-Item -LiteralPath $supervisorLog -ErrorAction Stop).Length -ge $supervisorLogLimit) {
+            $older = [IO.Path]::ChangeExtension($supervisorLog, '.1.log')
+            if (Test-Path -LiteralPath $older) { [IO.File]::Replace($supervisorLog, $older, [NullString]::Value) } else { [IO.File]::Move($supervisorLog, $older) }
+        }
+    } catch { }
     for ($try = 0; $try -lt 10; $try++) {
         try { Add-Content -LiteralPath $supervisorLog -Value $line; return } catch { Start-Sleep -Milliseconds 200 }
     }
