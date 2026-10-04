@@ -82,7 +82,7 @@ Dependencies added: `jspdf@4.2.1`, `jspdf-autotable@5.0.8` (pinned; lazy-loaded 
 - Earlier, at `7f80580`: `verify-actual-data.mjs` 9/9; `tools/Test-TerrierDesktop.ps1` 26/26; `tools.test_build_scores` 15 OK, `tools.test_measures` 16 OK (not re-run since).
 - Real-data routing smoke: 73 cases, 0 violations; typical list p95 ≈ 0.26 s.
 - Reviews: Opus backend (security clean), Sonnet frontend, Codex Astra (`gpt-6-astra`, xhigh) frontend r2 + r3.
-- Known pre-existing failure: `frontend/scripts/verify-restored-navigation.mjs` asserts the old label "Self-described affiliation" (renamed in `fe311da`) and expects demo mode with zero API calls — not caused by this work.
+- `frontend/scripts/verify-restored-navigation.mjs` was failing (old label "Self-described affiliation", renamed in `fe311da`; expected demo mode with zero API calls). Fixed: it now checks the label "Affiliation" and fails on any `/api/` response of 400 or more. It runs against a **CU_DEMO=0** synthetic world, not a demo server: the live-only client refuses a demo-mode server (`client.ts:29`, 409 "connected to a demonstration service"). The Contact sheet and Team & snapshots pages also need two changes to your copy of the world (listed in the script header: w1 status `verified`, and the active snapshot's `source_sha256` set to the contacts store's). Passes on a world built by `tools/make_walk_world.py` with those two changes (78 API calls, none failed).
 
 ## Owner decisions on record
 
@@ -207,4 +207,4 @@ $env:TERRIER_URL='http://127.0.0.1:8768'; node frontend/scripts/verify-walk-list
 
 - Start synthetic servers with `export CU_DATA_DIR=... CU_DEMO=0` in the same shell as the server. One server started without the variable served the real `.local` data. `verify-walk-list.mjs` refuses to run against a data set that large (its guard caught it).
 - On Windows two servers can bind the same port and the older one takes the connections. Check `netstat` before starting, and stop every server you start (subagent-started servers have been left orphaned more than once).
-- Never use port 8767 for tests.
+- Never use port 8767 for tests. Every browser check that took 8767 (verify-restored-navigation, -debug, -ui-refinements, -contacts-ui, -server-smoke, -terrier-dart, -test-demo, -terrier, -workspace) now reads `TERRIER_URL` (default `http://127.0.0.1:8768`) through `frontend/scripts/terrier-base.mjs` and exits 2 before any browser or file activity when the port is 8767. `verify-actual-data.mjs` is not guarded: it reads the real local data on purpose and saves nothing. `test-demo-server.mjs` takes `TERRIER_PORT` (default 8767).
