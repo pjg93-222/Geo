@@ -38,8 +38,8 @@ class ContactCsvValueTests(SimpleTestCase):
 
 # FULL_WIDTH, BIDI_FORMAT, SKIPPED and TRIGGERS are copied verbatim from frontend/tests/v3/csv.test.ts,
 # so both guards are pinned to the same code points.
-FULL_WIDTH = ['＝', '＋', '－', '＠']
-BIDI_FORMAT = ['‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩', '­', '؜', '᠎']
+FULL_WIDTH = ['\uff1d', '\uff0b', '\uff0d', '\uff20']
+BIDI_FORMAT = ['\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069', '\u00ad', '\u061c', '\u180e']
 SKIPPED = [[0x0000, 0x0020], [0x007f, 0x00a0], [0x00ad, 0x00ad], [0x061c, 0x061c], [0x1680, 0x1680], [0x180e, 0x180e],
            [0x2000, 0x200f], [0x2028, 0x202f], [0x205f, 0x2060], [0x2066, 0x2069], [0x3000, 0x3000], [0xfeff, 0xfeff]]
 TRIGGERS = [0x002b, 0x002d, 0x003d, 0x0040, 0xff0b, 0xff0d, 0xff1d, 0xff20]
@@ -48,13 +48,13 @@ TRIGGERS = [0x002b, 0x002d, 0x003d, 0x0040, 0xff0b, 0xff0d, 0xff1d, 0xff20]
 class ContactCsvFullWidthAndBidiTests(SimpleTestCase):
     def test_full_width_triggers_are_guarded_first_or_behind_any_skipped_prefix(self):
         for trigger in FULL_WIDTH:
-            for prefix in ('', ' ', ' ', '​', '﻿', '\t', '　', '‮', '⁦­'):
+            for prefix in ('', ' ', '\u00a0', '\u200b', '\ufeff', '\t', '\u3000', '\u202e', '\u2066\u00ad'):
                 for value in (prefix + trigger + '1+1', prefix + trigger + 'HYPERLINK("https://example.invalid","x")'):
                     with self.subTest(value=value):
                         self.assertEqual(csv_value(value), "'" + value)
 
     def test_formulas_behind_bidi_and_format_characters_are_guarded(self):
-        for prefix in BIDI_FORMAT + ['‮⁦', '‫ ‏', '­­ ']:
+        for prefix in BIDI_FORMAT + ['\u202e\u2066', '\u202b \u200f', '\u00ad\u00ad\u00a0']:
             for trigger in ['=', '+', '-', '@'] + FULL_WIDTH:
                 value = prefix + trigger + '1+1'
                 with self.subTest(value=value):
@@ -62,8 +62,8 @@ class ContactCsvFullWidthAndBidiTests(SimpleTestCase):
 
     def test_bidi_or_format_before_text_and_later_full_width_triggers_are_unchanged(self):
         values = [c + 'Jane Doe' for c in BIDI_FORMAT] + [
-            '‮enaJ', '⁦Main St⁩', 'a＝b', 'x ＋1', '＃ 5', '１＋１',
-            '­', '‮', 'Jane＠example.com']
+            '\u202eenaJ', '\u2066Main St\u2069', 'a\uff1db', 'x \uff0b1', '\uff03 5', '\uff11\uff0b\uff11',
+            '\u00ad', '\u202e', 'Jane\uff20example.com']
         for value in values:
             with self.subTest(value=value):
                 self.assertEqual(csv_value(value), value)
