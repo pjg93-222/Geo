@@ -3,8 +3,8 @@
 // Stored is only what the screen shows again: each list's identity (listIdentity), each voter's person id and code, and the note's list
 // titles, door labels with their codes, and reasons. Every change is written through; anything malformed on reading is dropped and the key
 // rewritten without it. Storage that is missing or throws (blocked site data, a full quota) leaves the page working from memory; a write that
-// fails removes the key, so an older copy can never bring back a mark since saved or a note since dismissed. The session ending (Sign out, a
-// 401) forgets both (walkRefusedReset.ts).
+// fails removes the key, so an older copy can never bring back a mark since saved or a note since dismissed. Sign out forgets both
+// (walkRefusedReset.ts); a 401 (a session timing out) does not.
 // Pure apart from the storage it is handed, so node --test can load it directly.
 import type {WalkCode} from '../api/walkTypes';
 import {addRefusal,clearRefused,isWalkCode,keepRefused,rekeyRefused,type RefusalNote,type RefusedMarks} from './walk.ts';
@@ -134,7 +134,7 @@ export interface RefusedStore{
   clear(lists:readonly string[],ids:Iterable<string>):void;
   /** The walker dismissed the note. The marks stay: a walker's mark is never erased by the walker's own actions. */
   dismiss():void;
-  /** The session ended (Sign out, a 401): the marks and the note are forgotten, in memory and in the tab's storage. */
+  /** Sign out: the marks and the note are forgotten, in memory and in the tab's storage. */
   reset():void;
 }
 export function refusedStore(storage:RefusedStorage|null=tabStorage()):RefusedStore{
@@ -145,7 +145,7 @@ export function refusedStore(storage:RefusedStorage|null=tabStorage()):RefusedSt
     marks.clear();note=null;
     try{storage?.removeItem(REFUSED_KEY);}catch{/* storage withheld: nothing can be read back from it either */}
   };
-  onRefusedReset(reset);   // resetRefused (Sign out, a 401 anywhere in the API client) empties this store too
+  onRefusedReset(reset);   // resetRefused (Sign out) empties this store too
   return {
     marks,
     get note(){return note;},

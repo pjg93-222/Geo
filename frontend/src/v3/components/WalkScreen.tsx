@@ -619,7 +619,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   },[flush]);
   // The list's flagged marks, for both unload guards: only voters this list shows count (flaggedOnList).
   useEffect(()=>{shownFlagged.current=flaggedOnList(payload,unsaved);},[payload,unsaved]);
-  // The session ended (Sign out, a 401): the store has forgotten the refusals, and the screen drops what it shows of them, the flagged marks too.
+  // Sign out: the store has forgotten the refusals, and the screen drops what it shows of them, the flagged marks too. (A 401 forgets nothing.)
   useEffect(()=>onRefusedReset(()=>{
     const gone=unsavedRef.current;
     showRefusal(null);setUnsaved(new Set());

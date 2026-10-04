@@ -200,7 +200,7 @@ test('a saved mark leaves the note as well; a note with no door left goes (and w
   assert.deepEqual(stored(r), {marks: {[KEYED]: {b: 'U'}}, note: {lists: [{title: 'Saturday', doors: {b: '4110 N Cedar Heights Dr (U)'}}], reasons: ['why']}});
 });
 
-test('the session ends: reset() and resetRefused() forget the marks and the note in memory and in the tab, and never throw', () => {
+test('Sign out: reset() and resetRefused() forget the marks and the note in memory and in the tab, and never throw', () => {
   const s = storage(), store = refusedStore(s);
   store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
   store.reset();
@@ -208,27 +208,28 @@ test('the session ends: reset() and resetRefused() forget the marks and the note
   assert.equal(refusedStore(s).note, null, 'a reload finds nothing');
   const t = storage(), live = refusedStore(t), u = storage();
   live.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why'); u.data.set(REFUSED_KEY, t.data.get(REFUSED_KEY) ?? '');
-  resetRefused(u);   // what Sign out and the API client call: every loaded store, and the given storage
+  resetRefused(u);   // what Sign out calls: every loaded store, and the given storage
   assert.equal(live.marks.size, 0); assert.equal(live.note, null);
   assert.equal(t.data.has(REFUSED_KEY), false, 'the loaded store removes its own key'); assert.equal(u.data.has(REFUSED_KEY), false, 'and the tab\'s key goes too');
   assert.doesNotThrow(() => resetRefused(throwing())); assert.doesNotThrow(() => refusedStore(throwing()).reset()); assert.doesNotThrow(() => resetRefused(null));
 });
 
-test('a 401 from any request of the API client forgets the refusals before the error is thrown; other statuses do not', async () => {
+test('a 401 (most often a session timing out mid-canvass) keeps the refusals: a walker\'s mark is never erased; only Sign out forgets them', async () => {
   const s = storage(), store = refusedStore(s), original = globalThis.fetch;
-  const answer = (status: number) => { globalThis.fetch = async () => new Response(JSON.stringify({error: status === 401 ? 'Sign in to continue' : 'No.', csrf: 't'}), {status}); };
+  const kept = () => { assert.deepEqual([...store.marks.get(KEYED) ?? []], [['a', 'S']]); assert.ok(store.note); assert.deepEqual(stored(s).marks, {[KEYED]: {a: 'S'}}); };
   try {
     store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
-    answer(403); await assert.rejects(localJson('/api/v3/walk/lists'));
-    answer(500); await assert.rejects(localJson('/api/v3/walk/lists'));
-    assert.equal(store.marks.size, 1, 'a refusal or a fault is not the session ending');
-    answer(401); await assert.rejects(localJson('/api/v3/walk/lists'), /Sign in to continue/);
-    assert.equal(store.marks.size, 0); assert.equal(store.note, null); assert.equal(s.data.has(REFUSED_KEY), false);
-    store.hold(KEYED, 'Saturday', visits(['a', 'S']), DOORS, 'why');
+    for (const status of [401, 403, 500]) {
+      globalThis.fetch = async () => new Response(JSON.stringify({error: status === 401 ? 'Sign in to continue' : 'No.'}), {status});
+      await assert.rejects(localJson('/api/v3/walk/lists'));
+      kept();
+    }
     globalThis.fetch = async (url) => String(url).includes('/api/auth/session') ? new Response(JSON.stringify({csrf: 't'}), {status: 200}) : new Response(JSON.stringify({error: 'Sign in to continue'}), {status: 401});
-    await assert.rejects(postJson('/api/v3/walk/dispositions', {}));
-    assert.equal(store.marks.size, 0, 'a write answered 401 too'); assert.equal(s.data.has(REFUSED_KEY), false);
+    await assert.rejects(postJson('/api/v3/walk/dispositions', {}), /Sign in to continue/);
+    kept();   // a write answered 401 keeps them too
   } finally { globalThis.fetch = original; }
+  resetRefused(storage());   // Sign out still forgets them
+  assert.equal(store.marks.size, 0); assert.equal(store.note, null); assert.equal(s.data.has(REFUSED_KEY), false);
 });
 
 test('a write that fails (a full quota) removes the key: a reload never brings back a mark since saved or a note since dismissed', () => {
@@ -276,14 +277,13 @@ test('the unload guard: only flagged voters of the list shown count, never a ref
     assert.ok(guard.test(src), String(guard));
 });
 
-test('wiring: the note shown follows the store after a save, the screen drops its refusals when the session ends, Sign out and the API client reset', () => {
+test('wiring: the note shown follows the store after a save, the screen drops its refusals on Sign out, and only Sign out resets (never the API client)', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   const client = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/client.ts'), 'utf8');
   const legacy = readFileSync(path.join(import.meta.dirname, '../../src/main.tsx'), 'utf8');
   assert.ok(/sendBatch\(entry,batch,[^\n]*\n[^\n]*setUnsaved[^\n]*\n\s*showRefusal\(refusals\.note\);/.test(src), 'after a batch is saved the note shown is the store\'s');
   assert.ok(/setEarlier\(message===null\?null:\{message\}\);\n\s*showRefusal\(refusals\.note\);/.test(src), 'and after results from earlier are saved');
   assert.ok(/useEffect\(\(\)=>onRefusedReset\(\(\)=>\{/.test(src) && /showRefusal\(null\);setUnsaved\(new Set\(\)\);/.test(src), 'the screen forgets what it shows of them');
-  assert.equal((client.match(/sessionEnded\(response\);/g) ?? []).length, 2, 'both request paths of the client');
-  assert.ok(/const sessionEnded=\(response:Response\)=>\{if\(response\.status===401\)resetRefused\(\);\};/.test(client));
+  assert.ok(!/resetRefused|walkRefused|sessionEnded/.test(client), 'the API client never forgets the refusals: a 401 is a timeout, not a sign-out');
   assert.ok(/onClick=\{async\(\)=>\{resetRefused\(\);await post\('auth\/logout',\{\}\);/.test(legacy), 'Sign out forgets them before it signs out');
 });

@@ -551,32 +551,44 @@ try{
     return 'A list save refused as out of date keeps both marks flagged with the note; the reload it asks for (after a prompt) brings both back flagged with the note and sends nothing; marking S again saves the list and takes S out of the flags, the tab and the note; the NH moves to the list\'s key and is still flagged after a reload that opens ?list=<key>; saving it too removes the note, empties the tab, and a reload does not ask';
   },['generate']);
 
-  // ---- 8d4. the session ends (the server answers 401): the tab forgets the refused marks and the note --------------------------------------
-  //          The v3 app has no Sign out control (the one in src/main.tsx belongs to the legacy page, which index.html does not load), so a 401 is
-  //          the way the session ends here; the client's one choke point (api/client.ts sessionEnded) handles both.
-  await step('session end forgets refusals',async()=>{
+  // ---- 8d4. a session timing out mid-canvass (the server answers 401) keeps the refused marks and the note: they are the walker's only copy -----
+  //          Only Sign out forgets them (the legacy page's; the v3 app has none), and closing the tab.
+  await step('session timeout keeps refusals',async()=>{
     await forgetRefused();
     await page.goto(base+'/walk?list='+savedKey);await heading().waitFor();await tables().first().waitFor();
+    const saved=await api('/api/v3/walk/lists/'+savedKey);
+    const voter=saved.runs.findLast(r=>r.doors.some(d=>d.voters.length)).doors.findLast(d=>d.voters.length).voters.at(-1);
     const isSave=url=>url.pathname==='/api/v3/walk/dispositions',isLists=url=>url.pathname==='/api/v3/walk/lists';
     const refuse=route=>route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Some of those voters are not on this list.'})});
-    const ended=route=>route.request().method()==='GET'?route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:'Sign in to continue'})}):route.continue();
+    let timedOut=0;
+    const expired=route=>{if(route.request().method()!=='GET')return route.continue();timedOut++;return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:'Sign in to continue'})});};
     const note=page.locator('.walk-refused');
+    const flagged=async what=>{
+      await until(async()=>(await groups().last().getByRole('radio',{name:code('MV')}).getAttribute('aria-checked'))==='true',what);
+      await page.getByText('MV (not saved)',{exact:true}).last().waitFor();
+    };
     await page.route(isSave,refuse);
     try{
       await choose(groups().last(),'MV');
       await note.waitFor();
-      assert.ok((await refusedKept()).session,'the refusal is kept in the tab');
-      await page.route(isLists,ended);                                     // the reload's look at the saved lists finds the session gone
+      await page.route(isLists,expired);                                    // the reload's look at the saved lists finds the session timed out
       assert.deepEqual(await reload(),['beforeunload'],'the note is up: the reload asks first');
-      await until(async()=>(await refusedKept()).session===null,'the tab to forget the refusals on the 401');
-      await note.waitFor({state:'detached'});
-      await until(async()=>(await page.getByText('MV (not saved)',{exact:true}).count())===0,'the screen to drop the flagged mark');
-    }finally{await page.unroute(isSave,refuse);await page.unroute(isLists,ended);}
-    assert.deepEqual(await reload(),[],'nothing kept: a reload does not ask');
+      await tables().first().waitFor();
+      await until(()=>timedOut>0,'the 401 on the saved lists');
+      await page.waitForTimeout(500);
+      assert.deepEqual((await refusedKept()).session?.marks,{['key:'+savedKey]:{[voter.person_id]:'MV'}},'the 401 keeps the mark in the tab');
+      await note.waitFor();
+      assert.ok(text(await note.innerText()).includes('(MV)'),'and the note');
+      await flagged('the flagged MV to stay after the 401');
+    }finally{await page.unroute(isSave,refuse);await page.unroute(isLists,expired);}
+    // the walker signs in again (here: the session is back) and chooses it again: saved, nothing kept, and closing does not ask
+    await groups().last().getByRole('radio',{name:code('MV')}).click();
+    await until(async()=>(await page.getByText('MV (not saved)',{exact:true}).count())===0,'the MV to be saved when chosen again');
+    await note.waitFor({state:'detached'});
+    assert.equal((await refusedKept()).session,null,'nothing left in the tab');
+    assert.deepEqual(await reload(),[],'nothing flagged and no note: no prompt');
     await tables().first().waitFor();
-    assert.equal(await note.count(),0);assert.equal(await page.getByText('MV (not saved)',{exact:true}).count(),0);
-    assert.equal((await refusedKept()).session,null);
-    return 'When the server answers 401 (the session ended) the tab forgets the refused mark and the note: the key is removed, the screen drops the note and the flag, and a reload neither shows them nor asks';
+    return 'A 401 on the saved lists during a reload (a session timing out mid-canvass) keeps the refused MV in the tab, with its note and its "not saved" flag; once it is chosen again and saved, nothing is kept and a reload does not ask';
   },['not home again']);
 
   // ---- 8e. the voter data changed between showing a list and saving it: the saved list is shown with a note, and a mark for a voter

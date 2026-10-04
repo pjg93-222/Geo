@@ -1,7 +1,6 @@
 // The application reads the active local snapshot. A failed request never falls back to generated records.
 import type {AreaGeometry,AreasPayload,HouseholdPopover,Meta,PeoplePage,PeopleQuery,Profile,Source,StreetPayload,SearchResult} from '../types';
 import type {Level} from '../lib/format';
-import {resetRefused} from '../lib/walkRefusedReset.ts';
 export type Family='meta'|'geometry'|'areas'|'people'|'person'|'household'|'street'|'search';
 export const sources:Record<Family,Source>={meta:'live',geometry:'live',areas:'live',people:'live',person:'live',household:'live',street:'live',search:'live'};
 /** `answered` is true only when the server of the requested URL answered in JSON with an `error` of its own; never for an unreadable body
@@ -10,14 +9,10 @@ export class ApiError extends Error{
   readonly status:number;readonly answered:boolean;
   constructor(message:string,status:number,answered=false){super(message);this.status=status;this.answered=answered;}
 }
-// A 401 means the session has ended (signed out, or the sign-in expired): whatever the walk list kept of refused results in this tab is
-// forgotten before anything else happens. Every request of this client passes here.
-const sessionEnded=(response:Response)=>{if(response.status===401)resetRefused();};
 const errorOf=(body:unknown):string|null=>body&&typeof body==='object'&&'error' in body&&typeof body.error==='string'?body.error:null;
 
 export async function localJson<T>(url:string,signal?:AbortSignal):Promise<T>{
   const response=await fetch(url,{credentials:'same-origin',signal,cache:'no-store',headers:{Accept:'application/json'}});
-  sessionEnded(response);
   let body:unknown;
   try{body=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
   if(!response.ok){
@@ -61,7 +56,6 @@ export async function postJson<T>(url:string,body:unknown,signal?:AbortSignal):P
   const cached=!!csrfToken;
   let response=await send(false);
   if(response.status===403&&cached)response=await send(true); // a kept token can go stale; ask once more with a fresh one
-  sessionEnded(response);
   let data:unknown;
   try{data=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
   if(!response.ok){
