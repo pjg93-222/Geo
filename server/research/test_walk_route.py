@@ -163,6 +163,33 @@ class DijkstraTests(unittest.TestCase):
             self.assertAlmostEqual(load_graph(net.db, (*ll(0, 0), *ll(60, 80))).spans[sid].cost, 140 * 1.3)
         self.assertEqual(sorted(g.adj), [net.nodes[(0, 0)], net.nodes[(60, 80)]])
 
+    def test_a_grown_network_reads_only_new_spans_and_is_the_same(self):
+        net = Net()
+        grid(net, 6, s1200={'H02'})
+        long = net.span('Long', [(250, 50), (450, 50), (650, 50), (2650, 50)], 'S1200')   # ends far outside the pads
+        net.edge('', [(0, 0), (-150, -150)])                                              # an edge without a span
+        box = (*ll(0, 0), *ll(100, 100))
+        small = load_graph(net.db, box, 200.0)
+        fresh = load_graph(net.db, box, 800.0)
+        real, reads = W._rows, []
+
+        def spy(conn, sql, ids):
+            reads.append((sql, sorted(ids)))
+            return real(conn, sql, ids)
+        with patch.object(W, '_rows', spy):
+            grown = load_graph(net.db, box, 800.0, reuse=small)
+        self.assertIn(long, small.spans)
+        self.assertGreater(len(fresh.spans), len(small.spans))
+        span_reads = [ids for sql, ids in reads if 'FROM road_span' in sql]
+        self.assertEqual(span_reads, [sorted(set(fresh.spans) - set(small.spans))])     # only the new spans are read
+        self.assertEqual(grown.adj, fresh.adj)
+        self.assertEqual(list(grown.spans), list(fresh.spans))
+        fields = ('id', 'name_key', 'a', 'b', 'len_m', 'kind', 'cost', 'even_left', 'raw')
+        for sid, sp in fresh.spans.items():
+            self.assertEqual([getattr(grown.spans[sid], k) for k in fields], [getattr(sp, k) for k in fields])
+        self.assertAlmostEqual(grown.spans[long].cost, 2400.0)                           # all three edges, inside or out
+        self.assertIs(grown.spans[long], small.spans[long])
+
 
 class PlanTests(unittest.TestCase):
     def check_cover(self, net, plan):
