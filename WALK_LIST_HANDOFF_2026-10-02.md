@@ -2,7 +2,7 @@
 
 ## Status
 
-- **`main` is fast-forwarded to `fde78d4`** (plus this handoff update). Commits, in order:
+- **`main` is fast-forwarded to `f7d9272`** (plus this handoff update). Commits, in order:
   - `e5bf03e` feat(walk): add Walk list tab for canvass walk lists
   - `7f80580` fix(walk): remove time estimates from walk-list output
   - `9df1158` docs(walk): add walk list handoff for 2026-10-02
@@ -14,9 +14,11 @@
   - `fc671d4` fix(walk): drop the unused minutes figure from list totals
   - `0650b33` docs(walk): record the 2026-10-03 live restart on fc671d4
   - `fde78d4` fix(walk): require the shown list's fingerprint on save
+  - `6612c77` docs(walk): record the 2026-10-03 live restart on fde78d4
+  - `f7d9272` feat(server): crash logging and an auto-restart supervisor
 - Work branch: `claude/walk-list`. No remote; nothing pushed. Everything is committed. See Open items 1 for what each fix commit changed.
-- Live app on 127.0.0.1:8767 was restarted on 2026-10-03 at 17:40 on `fde78d4` (PID 82300) and serves the **Walk list** tab (8 tabs total). It requires `fingerprint` on a plain list save and no longer sends `minutes`. Tabs opened since the 2026-10-02 22:13 restart already send the fingerprint; an older tab gets "This page is out of date. Reload it, then save the list again." with its marks kept and flagged "not saved".
-- The previous live server (PID 55544, started 17:07 on `fc671d4`) had already exited before the 17:40 restart (`Stop-TerrierServer.ps1`: "Recorded process is absent"), so the app may have been down for part of that window. It crashed at 17:25 (a thread-pool handle fault seen in ntdll across Python processes on this machine, not specific to Terrier; see Open items 8). Since then the launch scripts have a supervisor and crash logs (see "Server supervision and crash logs"); the live server predates them. Earlier restarts: 2026-10-03 17:07 on `fc671d4`; 2026-10-02 22:13 on `b672820`.
+- Live app on 127.0.0.1:8767 was restarted on 2026-10-03 at 21:15 on `f7d9272` and is **supervised**: server PID 25184 (launcher 73988), supervisor PID 19412 (`_build/terrier-supervisor-pid.json`; its log says "watching server pid 25184"). `_build/terrier-faults.log` has its start header, and the previous err log was rotated to `terrier-server.err.20261003T211515.log`. It serves the **Walk list** tab (8 tabs total), requires `fingerprint` on a plain list save and no longer sends `minutes`. A tab older than the 2026-10-02 22:13 restart gets "This page is out of date. Reload it, then save the list again." with its marks kept and flagged "not saved". Stop it with `./Stop-TerrierServer.ps1`, which stops the supervisor first.
+- Earlier restarts: 2026-10-03 17:40 on `fde78d4` (PID 82300, unsupervised); 17:07 on `fc671d4` (PID 55544, which crashed at 17:25 with a thread-pool handle fault seen across Python processes on this machine, not specific to Terrier; see Open items 8); 2026-10-02 22:13 on `b672820`.
 
 ## What the feature does
 
