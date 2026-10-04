@@ -1,4 +1,5 @@
 """Walk route ordering on tiny synthetic road tables (no Django, no real data)."""
+import itertools
 import json
 import math
 import random
@@ -6,6 +7,7 @@ import sqlite3
 import time
 import unittest
 from dataclasses import asdict
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from server.research import walk_route as W
@@ -448,6 +450,33 @@ class PlanTests(unittest.TestCase):
         first = build(0)
         self.assertEqual(build(0), first)
         self.assertEqual(build(3), first)
+
+    def test_a_busy_machine_does_not_change_the_plan(self):
+        """The search ends on its count of move evaluations, not on the clock: a clock racing to 90% of the backstop
+        (five times the 0.9 s that used to cut the search) gives the very same plan; past the backstop the plan is
+        still whole, and the one warning says so."""
+        net = Net()
+        spans = grid(net, 10)
+        rng = random.Random(7)
+        grid_stops(net, spans, 10, lambda sid, name: sorted(rng.sample(range(9), 3)))
+        calm = asdict(plan_route(net.db, net.stops))
+        reads = []
+        with patch.object(W, 'time', SimpleNamespace(perf_counter=lambda: reads.append(1) or time.perf_counter())):
+            self.assertEqual(asdict(plan_route(net.db, net.stops)), calm)
+        self.assertGreater(len(reads), 20)                       # the search does look at the clock
+        step, ticks = 0.9 * W.BACKSTOP / len(reads), itertools.count()
+        with patch.object(W, 'time', SimpleNamespace(perf_counter=lambda: next(ticks) * step)):
+            rushed = asdict(plan_route(net.db, net.stops))
+        self.assertGreater(next(ticks) * step, 4.0)             # the old limit was 3 x 300 ms from the start
+        self.assertEqual(rushed, calm)
+        ticks = itertools.count()
+        with patch.object(W, 'time', SimpleNamespace(perf_counter=lambda: next(ticks) * W.BACKSTOP)), \
+                self.assertLogs(W.log, 'WARNING') as logged:
+            cut = plan_route(net.db, net.stops)
+        self.assertEqual(len(logged.records), 1)
+        self.assertIn('backstop', logged.output[0])
+        self.check_cover(net, cut)
+        self.assertLessEqual(cut.cost, cut.baseline_cost)
 
     def test_forty_street_grid_speed(self):
         net = Net()

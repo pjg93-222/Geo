@@ -11,11 +11,16 @@ exactly as before on its own deadhead table: a few runs exactly; more by nearest
 direction flips and or-opt, repeated from double-bridge kicks under a deterministic work cap. Groups are then ordered
 on the straight-line gaps between their first and last stops, and each step between two groups is found by A* on the
 network. Reported distances are true walking metres; the crossing allowance only steers the order (RoutePlan.cost).
-Within a run the numbered doors are listed by house number in the walking direction. The same input always gives the
-same plan.
+Within a run the numbered doors are listed by house number in the walking direction.
+
+The same input always gives the same plan: every search ends on a count of move evaluations (EVALS_PER_MS per budget
+millisecond), never on the clock, so neither machine speed nor load changes the order. The one nondeterministic path
+is the BACKSTOP, a wall-clock limit on the whole search far above what the work cap takes on real lists; it exists
+only for pathological inputs or a machine stalled for seconds, and when it cuts a search short it logs a warning.
 """
 import heapq
 import json
+import logging
 import math
 import time
 from bisect import bisect_left, bisect_right
@@ -29,8 +34,8 @@ DETOUR = 1.5          # straight-line factor between stops the loaded network do
 EXACT_TASKS = 8       # up to this many runs the order is solved exactly
 STARTS = 20           # nearest-next starts
 NEIGHBOURS = 16       # candidate list length for 2-opt and or-opt
-EVALS_PER_MS = 500    # move evaluations per budget millisecond: a deterministic cap on the search
-BACKSTOP = 3          # wall-clock limit in budgets, for machines far slower than that rate
+EVALS_PER_MS = 500    # move evaluations per budget millisecond: the deterministic cap that ends the search
+BACKSTOP = 5.0        # seconds of wall clock for the whole search; a last resort, never reached on real lists
 EPS = 1e-7
 DEG_M = math.pi * 6371008.8 / 180
 PAD_M = 400.0         # network loaded around the stops; grown PAD_GROWTH-fold while their blocks are not connected
@@ -38,6 +43,8 @@ PAD_GROWTH = 4
 PAD_MAX_M = 102400.0
 GROUP_GAP_M = 1500.0  # runs farther apart than this (straight line, end to end) are ordered as separate groups
 NODE_SLACK_M = 2.0    # node positions are kept to the metre: the A* estimate stays this much under the straight line
+
+log = logging.getLogger(__name__)
 
 
 class RouteTooLarge(ValueError):
@@ -50,6 +57,23 @@ class RouteTooLarge(ValueError):
 
 def edge_cost(len_m, kind):
     return float(len_m or 0) * (ARTERIAL_FACTOR if kind == 'S1200' else 1.0)
+
+
+class _Deadline:
+    """The BACKSTOP of one plan's search: a wall-clock instant shared by every group's search, logged once if passed."""
+    __slots__ = ('at', 'tripped')
+
+    def __init__(self, seconds):
+        self.at, self.tripped = time.perf_counter() + seconds, False
+
+    def passed(self, evals, max_evals, n):
+        if time.perf_counter() <= self.at:
+            return False
+        if not self.tripped:
+            self.tripped = True
+            log.warning('walk route: the search passed its %.1f s backstop after %d of %d evaluations on %d items; '
+                        'this plan may differ from a rebuild of the same list', BACKSTOP, evals, max_evals, n)
+        return True
 
 
 class Span:
@@ -531,7 +555,7 @@ class _Order:
 
     def solve(self, max_evals, deadline):
         """A short tour of all items: exact for a few; else the best nearest-next tour from the starts, improved by
-        _Search within max_evals move evaluations."""
+        _Search within max_evals move evaluations (`deadline`, a _Deadline, is only the backstop)."""
         if self.n > EXACT_TASKS:
             best = None
             for s in self.starts():
@@ -707,9 +731,11 @@ class _Route:
     def baseline(self):
         return _baseline(self.tasks)
 
-    def order(self, budget_ms, started):
-        """The shortest tour found: each group's own (never worse than its house-number order), groups in order."""
-        deadline, tours = started + BACKSTOP * budget_ms / 1000, []
+    def order(self, budget_ms):
+        """The shortest tour found: each group's own (never worse than its house-number order), groups in order. The
+        work of every search is capped by budget_ms * EVALS_PER_MS move evaluations, shared by the groups by their
+        runs; BACKSTOP seconds from here is the wall-clock last resort."""
+        deadline, tours = _Deadline(BACKSTOP), []
         for members, model in zip(self.groups, self.models):
             base = tour = model.baseline()
             if len(members) > 1:
@@ -793,7 +819,7 @@ class _Search:
     """Local search on a tour of states: 2-opt with direction flips (segment reversal) and or-opt of 1-3 tasks in
     either direction, on candidate lists, re-examining only tasks next to changed edges; then double-bridge kicks
     from a fixed-seed generator, kept when they shorten the tour. Work is capped by a count of move evaluations
-    (deterministic); the deadline is only a backstop."""
+    (deterministic); the deadline is only the BACKSTOP, the one path on which the clock can change the result."""
 
     def __init__(self, model, tour, max_evals, deadline):
         self.G, self.near, self.tour, self.n = model.G, model.near, list(tour), len(tour)
@@ -816,7 +842,7 @@ class _Search:
                 self.queue.append(s >> 1)
 
     def spent(self):
-        return self.evals >= self.max_evals or time.perf_counter() > self.deadline
+        return self.evals >= self.max_evals or self.deadline.passed(self.evals, self.max_evals, self.n)
 
     def flip(self, i, j):
         t = self.tour
@@ -901,7 +927,7 @@ class _Search:
         return False
 
     def run(self):
-        """Improve until no queued task yields a move; False when the work cap or the deadline cut it short."""
+        """Improve until no queued task yields a move; False when the work cap (or the backstop) cut it short."""
         while self.queue:
             if self.spent():
                 return False
@@ -1041,11 +1067,10 @@ def plan_route(conn, stops, *, budget_ms=300, max_runs=None):
     graph, tasks, loose = _prepare(conn, stops)
     plan = RoutePlan()
     if tasks:
-        started = time.perf_counter()
         route = _Route(conn, graph, tasks, max_runs)
         tour = base = route.baseline()
         if len(tasks) > 1:
-            tour = route.order(budget_ms, started)
+            tour = route.order(budget_ms)
             if route.totals(base)[1] < route.totals(tour)[1]:
                 tour = base
             back = [s ^ 1 for s in reversed(tour)]  # same length; keep the direction with more runs in house order
