@@ -1,0 +1,14 @@
+# Terrier overnight changes, 2026-10-07
+
+One dated bullet per change, in plain English. Times are this machine's local time (UTC-4). Nothing here is committed.
+
+- **2026-10-07 11:28, the Phase 3 runner stopped at or-05 hmfit; the cause was the laptop sleeping, not the model fit.**
+  - What happened: `run_fast` wrote "failed: p3-or-05-hmfit, timed out after 135 min", but the step had 5.7 hours of wall time. Windows put the laptop into Modern Standby three times because the lid was closed (05:46 to 06:11, 06:28 to 08:28, 08:29 to 11:17; about 313 of the 341 minutes). Everything, the runner and the fit, was frozen while it slept. The step was only awake about 28 minutes. When the lid opened at 11:17:17 the runner saw the wall clock was long past its 135-minute deadline and killed the fit 11 seconds later.
+  - Not the cause: no RAM-floor pauses (`pauses.log` has nothing after the legacy step), no hang, no crash or retry. The runner's kill worked; it just fired at wake. No stray `run_phase3` or `run_fast` process was left alive.
+  - Progress kept: 9 of 19 household-model fields finished (T and S forests saved). The 10th field, `sci_ct_political_outlk_vliberal`, was about 2 minutes into its first fit and was refit from scratch. Awake time per field was 0.2 to 6 minutes before the sleep; after the relaunch the first four fields (vliberal and the three partyaff fields) finished in about 4 minutes in total.
+  - Fix 1, `_build\run_fast.ps1` (`RunPy`): the step timeout now counts run time only. Each 10-second check adds at most 60 seconds, so a suspend of any length counts as one minute, not hours. The 135-minute limit is unchanged.
+  - Fix 2, `tools\luna_district\common.py` (`Step._watch`): the driver's own 2-hour watchdog had the same flaw (Python 3.12 `time.monotonic()` is `GetTickCount64()`, which keeps counting through sleep). It now counts awake time the same way. One new test, `WatchdogTests` in `test_luna_district.py`, checks that a 5-hour suspend does not trip it and a real 2-hour overrun does; all 22 driver tests pass.
+  - Not changed: model settings, seeds, features, the holdout, `n_jobs=4`, and any Windows power setting. The lid-close action is "Sleep" on both AC and battery and idle sleep is already "Never"; changing it is Paul's call. With the lid closed the run still pauses (nothing is lost or killed); it continues when the lid is opened.
+  - Relaunch: `launch_run_fast.ps1`; hmfit resumes with `--resume`, so the 9 finished fields are skipped.
+
+- 2026-10-07 (lead): moved .local\or-05\luna-v1\receipts\report.json aside as report.smoke-stale-20261007T091554Z.json. It came from a synthetic report smoke test (outputs in a Temp report-smoke folder), not from the real or-05 run, and would have made the runner skip the real or-05 report step. Nothing deleted.
