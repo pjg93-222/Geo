@@ -7,6 +7,7 @@ The fixture is invented: its contact layer carries SENTINEL_* names, addresses, 
 that none of them reaches scores.sqlite3. The loader runs in full (manifest hashes, W1 census with the shifted control,
 contribution sums, band rule, street mapping) and must fail closed on every tampered input.
 """
+import hashlib
 import json
 import os
 import re
@@ -190,6 +191,29 @@ class LoaderTests(unittest.TestCase):
             for code in FL.REG_GROUPS:
                 self.assertGreaterEqual(entry['K_actual'][code], min(entry['K_g'][code], balanced['counts'][code]))
 
+    def test_balanced_allocations_follow_the_k_values_of_the_frozen_config(self):
+        # a district's config names its own K (OR-05: 100, 1% and 10% of its rows); Colorado's three stay the default above
+        folder = self.root / 'rowfw_k'
+        shutil.copytree(self.fx.rowfw_dir, folder)
+        path = folder / 'framework_config.json'
+        config = json.loads(path.read_text(encoding='utf-8'))
+        config['top_sets'] = {'balanced_by_registration_view': {'K': [100, 7, 70]}}
+        path.write_text(json.dumps(config), encoding='utf-8')
+        for stem in B.STEMS:
+            manifest_path = folder / ('%s_rowfw-1.0.0.manifest.json' % stem)
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['config_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+        out = self.root / 'k.sqlite3'
+        self.assertEqual(self.run_loader(out, self.root / 'k.json', rowfw=folder), 0)
+        db = sqlite3.connect('file:%s?mode=ro' % out.as_posix(), uri=True)
+        try:
+            balanced = json.loads(db.execute("SELECT value FROM metadata WHERE key='balanced'").fetchone()[0])
+        finally:
+            db.close()
+        self.assertEqual(sorted(balanced['k']), ['100', '7', '70'])
+        self.assertEqual(sum(balanced['k']['70']['K_g'].values()), 70)
+
     def test_households_map_to_one_household_code_and_street_rows_have_a_bin(self):
         rows = self.db.execute('SELECT h_id, hh, n_people, ovr_mean_pct, bin, reg_block FROM street_household').fetchall()
         self.assertGreater(len(rows), 100)
@@ -278,6 +302,29 @@ class LoaderTests(unittest.TestCase):
         out = self.root / 'other_source.sqlite3'
         self.assertEqual(self.run_loader(out, self.root / 'other_source.json', contacts=contacts), 2)
         self.assertFalse(out.exists())
+
+
+class DistrictInputTests(unittest.TestCase):
+    def test_a_null_geography_value_becomes_an_empty_string_in_both_column_layouts(self):
+        import pyarrow as pa
+        table = pa.table({'d': pa.array(['b', None, 'a', 'b']).dictionary_encode(), 'p': pa.array(['x', None, 'y', 'z'])})
+        self.assertEqual(B.strings(table, 'd').tolist(), ['b', '', 'a', 'b'])
+        self.assertEqual(B.strings(table, 'p').tolist(), ['x', '', 'y', 'z'])
+        clean = pa.table({'d': pa.array(['b', 'a']).dictionary_encode()})
+        self.assertEqual(B.strings(clean, 'd').tolist(), ['b', 'a'])
+
+    def test_minor_party_group_may_gain_a_code_but_never_hold_d_r_or_u(self):
+        co = {'D': ['D'], 'R': ['R'], 'U': ['U'], 'other': ['G', 'L', 'O', 'T']}
+        self.assertTrue(B.registration_groups_ok(co))
+        self.assertTrue(B.registration_groups_ok({**co, 'other': ['G', 'L', 'O', 'T', 'W']}))             # OR-05 and CT-01 add W
+        self.assertFalse(B.registration_groups_ok({**co, 'other': ['G', 'D']}))
+        self.assertFalse(B.registration_groups_ok({**co, 'U': ['U', 'X']}))
+        self.assertFalse(B.registration_groups_ok({'D': ['D'], 'R': ['R'], 'other': ['G']}))
+
+    def test_k_values_come_from_the_config_with_colorados_as_the_fallback(self):
+        self.assertEqual(B.k_values({'top_sets': {'balanced_by_registration_view': {'K': [100, 5626, 56256]}}}), (100, 5626, 56256))
+        self.assertEqual(B.k_values({}), B.W.K_VALUES)
+        self.assertEqual(B.W.K_VALUES, (100, 4913, 49131))
 
 
 class RollupCheckTests(unittest.TestCase):

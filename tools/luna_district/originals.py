@@ -58,19 +58,20 @@ def _walk(root):
     return out
 
 
-def listing(with_hash):
+def listing(with_hash, roots=None):
+    """roots=None: the Luna set above; a list of folders: just those (the Phase 3b row-framework original)."""
     files = {}
     stat_only = {}
-    for root in HASHED:
+    for root in HASHED if roots is None else roots:
         for path, info in _walk(root):
             if info == 'pycache':
                 files[path] = {'pycache_dir': True}
             else:
                 files[path] = {'size': info[0], 'mtime_ns': info[1]}
-    for path in SINGLE_FILES:
+    for path in SINGLE_FILES if roots is None else ():
         st = path.stat()
         files[str(path)] = {'size': st.st_size, 'mtime_ns': st.st_mtime_ns}
-    for root in STAT_ONLY:
+    for root in STAT_ONLY if roots is None else ():
         for path, info in _walk(root):
             stat_only[path] = {'pycache_dir': True} if info == 'pycache' else {'size': info[0], 'mtime_ns': info[1]}
     if with_hash:
@@ -81,11 +82,11 @@ def listing(with_hash):
     return files, stat_only
 
 
-def snapshot(out_path):
+def snapshot(out_path, roots=None):
     t0 = time.time()
-    files, stat_only = listing(with_hash=True)
-    locks = {str(p): sha256_file(p) for p in LOCK_FILES if p.exists()}
-    missing_locks = [str(p) for p in LOCK_FILES if not p.exists()]
+    files, stat_only = listing(with_hash=True, roots=roots)
+    locks = {str(p): sha256_file(p) for p in LOCK_FILES if p.exists()} if roots is None else {}
+    missing_locks = [str(p) for p in LOCK_FILES if not p.exists()] if roots is None else []
     payload = {'created_utc': utc_now(), 'hashed_files': len(files), 'stat_only_files': len(stat_only),
                'bytes_hashed': sum(v.get('size', 0) for v in files.values()), 'seconds': round(time.time() - t0, 1),
                'lock_files': locks, 'lock_files_not_present': missing_locks, 'files': files, 'stat_only': stat_only}
@@ -114,12 +115,13 @@ def diff(before, after_files, after_stat):
     return changes
 
 
-def check_stat(strict=True):
-    """Stat-only comparison with the global BEFORE snapshot. Raises on any difference when strict."""
-    if not Path(ORIGINALS_BEFORE).exists():
+def check_stat(strict=True, before_path=None, roots=None):
+    """Stat-only comparison with the global BEFORE snapshot (or another one, for `roots`). Raises on any difference when strict."""
+    before_path = before_path or ORIGINALS_BEFORE
+    if not Path(before_path).exists():
         raise RuntimeError('no BEFORE snapshot; run: python -m tools.luna_district.originals snapshot')
-    before = read_json(ORIGINALS_BEFORE)
-    files, stat_only = listing(with_hash=False)
+    before = read_json(before_path)
+    files, stat_only = listing(with_hash=False, roots=roots)
     changes = diff(before, files, stat_only)
     if changes and strict:
         raise RuntimeError('Luna originals changed: ' + '; '.join(f'{k} {p}' for k, p in changes[:10]))

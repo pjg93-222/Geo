@@ -120,6 +120,17 @@ def verify_manifests(rowfw, log):
     return manifests, shas
 
 
+def registration_groups_ok(groups):
+    """D, R and U are singletons; 'other' is any set of minor party codes (a district may add one, as OR-05 adds W)."""
+    return (set(groups) == {'D', 'R', 'U', 'other'} and all(groups[g] == [g] for g in 'DRU')
+            and not {'D', 'R', 'U'} & set(groups['other']))
+
+
+def k_values(config):
+    """The balanced-view K values of the frozen config (Colorado: 100, 1% and 10% of 491,308); W.K_VALUES when it names none."""
+    return tuple(config.get('top_sets', {}).get('balanced_by_registration_view', {}).get('K', W.K_VALUES))
+
+
 def verify_config(rowfw, manifest, log):
     path = rowfw / 'framework_config.json'
     actual = W.sha256_file(path)
@@ -136,9 +147,7 @@ def verify_config(rowfw, manifest, log):
                     'Code-50 weight differs for ' + row['name'])
     lean_bands = config['groups']['lean']['bands']
     require(lean_bands['cuts'] == [25, 75], 'Lean band cuts differ from 25/75')
-    groups = config['standing']['within_registration']['groups']
-    require(groups == {'D': ['D'], 'R': ['R'], 'U': ['U'], 'other': ['G', 'L', 'O', 'T']},
-            'Registration groups differ')
+    require(registration_groups_ok(config['standing']['within_registration']['groups']), 'Registration groups differ')
     log('config verified', actual[:12])
     return config, actual
 
@@ -202,12 +211,13 @@ def numeric(tbl, name):
 
 
 def strings(tbl, name):
+    """A text column as numpy strings; a null (a person with no census block or ZIP) becomes ''."""
     column = tbl.column(name).combine_chunks()
     if hasattr(column, 'dictionary'):
-        dictionary = np.array(column.dictionary.to_pylist(), dtype=object)
-        indices = column.indices.to_numpy(zero_copy_only=False)
+        dictionary = np.array(column.dictionary.to_pylist() + [''], dtype=object)       # the last entry stands for a null
+        indices = column.indices.fill_null(len(dictionary) - 1).to_numpy(zero_copy_only=False)
         return dictionary[indices].astype(str)
-    return np.array(column.to_pylist(), dtype=object).astype(str)
+    return np.array(['' if v is None else v for v in column.to_pylist()], dtype=object).astype(str)
 
 
 # ---- crosswalk W1 ----------------------------------------------------------------------------------------------------
@@ -400,7 +410,7 @@ def build(args, gb, log):
     # ---- assemble the arrays -------------------------------------------------------------------------------------
     gb.stage('running', 'evidence', 'field evidence (40 fields) and person attributes')
     data = {'person_id': person_id, 'hh': hh_code, 'hh_size': hh_size, 'party': party,
-            'age': numeric(cache_tbl, 'sii_age').astype(np.int64)}
+            'age': numeric(cache_tbl, 'sii_age').astype(np.int64), 'k_values': k_values(config)}
     for target, source in (('reg_block', 'registration_block15'), ('reg_precinct', 'svi_registration_precinct_code'),
                            ('reg_tract', 'registration_tract11'), ('reg_zip', 'svi_registration_zip'),
                            ('res_tract', 'sii_tract11'), ('res_zip', 'sii_zip')):
@@ -588,8 +598,8 @@ def verify_written(out, n, receipt, rowfw, log):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Build V3/.local/scores.sqlite3 from the P1 files (fails closed).')
     parser.add_argument('--real', action='store_true', help='use the real P1 files, cache, contacts, street and source CSV')
-    parser.add_argument('--rowfw', default=str(RFB))
-    parser.add_argument('--cache', default=str(RF / 'cache' / 'inputs.parquet'))
+    parser.add_argument('--rowfw')
+    parser.add_argument('--cache')
     parser.add_argument('--district', choices=list(D.DISTRICTS), default=D.DEFAULT,
                         help='fills the defaults below from tools/districts.py (co-05 gives the old literals)')
     parser.add_argument('--contacts')
@@ -598,12 +608,15 @@ def main(argv=None):
     parser.add_argument('--salt-file')
     parser.add_argument('--w1', choices=('verify', 'fixture'), default='verify')
     parser.add_argument('--out')
-    parser.add_argument('--receipt', default=str(V3 / '_build' / 'scores_build_receipt.json'))
+    parser.add_argument('--receipt', help='default: _build/scores_build_receipt.json (co-05), _build/scores_build_receipt_<id>.json')
     parser.add_argument('--low-memory', action='store_true', help='skip the available-RAM floor')
     parser.add_argument('--run-id', default=None)
     args = parser.parse_args(argv)
     district = D.get(args.district)
     home = D.data_dir(district)
+    args.rowfw = args.rowfw or str(D.rowfw_build(district))
+    args.cache = args.cache or str(D.rowfw_cache(district))
+    args.receipt = args.receipt or str(V3 / '_build' / ('scores_build_receipt%s.json' % ('' if district['id'] == D.DEFAULT else '_' + district['id'])))
     args.contacts = args.contacts or str(home / 'contacts.sqlite3')
     args.street = args.street or str(home / 'street.sqlite3')
     args.source_csv = args.source_csv or str(district['source_csv'])

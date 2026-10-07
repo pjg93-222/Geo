@@ -5,6 +5,9 @@
 
 Steps in stage order: copy, source, groups, masks, holdout, frame, labels, partitions, legacy, hhfeat, hmfit,
 control, select, score, apply, export, verify, report; g0 (the Colorado replay comparison) runs after the CO steps.
+Phase 3b (the district row framework, tools/luna_district/rowfw.py): rowfw-copy, rowfw-dict, rowfw-audited, rowfw-cache,
+rowfw-freeze, rowfw-s0, rowfw-p1snap, rowfw-draws (repeat until its receipt says complete), rowfw-finalize, rowfw-populate,
+rowfw-d2, rowfw-cleanup, rowfw-pin; rowfw-g1 compares the co-replay copy with Colorado's cache and config.
 """
 # Must stay first: on Python 3.12 pandas/scipy call platform.machine(), whose WMI query times out under CPU load and an orphaned
 # thread then kills python.exe (0xC000070A). Disabling it makes platform fall back to sys.getwindowsversion() and PROCESSOR_ARCHITECTURE.
@@ -40,6 +43,21 @@ STEPS = {
     'verify': ('verify', 'verify_export'),
     'report': ('report', 'write_reports'),
     'g0': ('g0', 'compare'),
+    # Phase 3b: the district copy of Colorado's row framework (tools/luna_district/rowfw.py); rowfw-g1 is the Colorado-replay gate
+    'rowfw-copy': ('rowfw', 'copy'),
+    'rowfw-dict': ('rowfw', 'dict_fix'),
+    'rowfw-audited': ('rowfw', 'audited'),
+    'rowfw-cache': ('rowfw', 'cache'),
+    'rowfw-freeze': ('rowfw', 'freeze'),
+    'rowfw-g1': ('rowfw', 'g1'),
+    'rowfw-s0': ('rowfw', 's0'),
+    'rowfw-p1snap': ('rowfw', 'p1snap'),
+    'rowfw-draws': ('rowfw', 'draws'),
+    'rowfw-finalize': ('rowfw', 'finalize'),
+    'rowfw-populate': ('rowfw', 'populate'),
+    'rowfw-d2': ('rowfw', 'd2'),
+    'rowfw-cleanup': ('rowfw', 'cleanup'),
+    'rowfw-pin': ('rowfw', 'pin'),
 }
 
 

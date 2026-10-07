@@ -170,7 +170,7 @@ def write_scores_db(path, data, meta, demo_key, log=None, replace=True):
     # ---- metadata derived from the data ------------------------------------------------------------------
     group_counts = {code: int((reg_group == index).sum()) for code, index in REG_GROUP_INDEX.items()}
     balanced = {'groups': list(FL.REG_GROUPS), 'counts': group_counts, 'k': {}}
-    for k in K_VALUES:
+    for k in data.get('k_values', K_VALUES):
         seats = hamilton(k, [group_counts[g] for g in FL.REG_GROUPS])
         actual = [int(((reg_group == REG_GROUP_INDEX[g]) & (reg_rank <= seat)).sum())
                   for g, seat in zip(FL.REG_GROUPS, seats)]

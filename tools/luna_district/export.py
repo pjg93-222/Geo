@@ -322,7 +322,8 @@ def build_dictionary(ctx, header, parsed, field_spec, registry):
             'original_column_preserved': True, 'status_column': t + '__status',
             'estimate_probability_column': t + '__estimate_probability',
             'reference_probability_columns': [n for n in names if '__p_' in n],
-            'completion_probability_columns': [n for n in names if '__completion_p_' in n],
+            # a legacy field has no __completion_p_*: its completion probability is the legacy calibrated __p_* (Colorado's convention)
+            'completion_probability_columns': [n for n in names if '__completion_p_' in n] or [n for n in names if '__p_' in n],
             'majority_code': registry[t]['majority_code'], 'method': registry[t]['method'], 'model_id': registry[t]['model_id'],
             'probabilities': 'Populated only for originally blank targets. __p_* are the district legacy calibrated probabilities; '
                              '__completion_p_* (where present) and __estimate_probability belong to the filling method.',
