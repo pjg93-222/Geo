@@ -40,6 +40,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tools import districts as D               # noqa: E402
 from tools import field_labels as FL           # noqa: E402
 from tools import scores_schema as S           # noqa: E402
 from tools import scores_writer as W           # noqa: E402
@@ -65,6 +66,12 @@ class BuildError(RuntimeError):
 def require(condition, message):
     if not condition:
         raise BuildError(message)
+
+
+def check_rollup(district, rollup, reg_group_text):
+    """The cache rollup must equal the party mapping, unless the district turns the check off (OR: the vendor moves U to O)."""
+    if district['party_rollup_check']:
+        require(np.array_equal(rollup, reg_group_text), 'Cache rollup differs from the party mapping')
 
 
 def available_ram_gb():
@@ -341,7 +348,7 @@ def build(args, gb, log):
     require(counts == {'D': frozen['D'], 'R': frozen['R'], 'U': frozen['U'], 'O': frozen['other']},
             'Registration group counts differ from the frozen counts: %r' % counts)
     rollup = strings(cache_tbl, 'svi_party_registration_rollup')
-    require(np.array_equal(rollup, reg_group_text), 'Cache rollup differs from the party mapping')
+    check_rollup(D.get(args.district), rollup, reg_group_text)
 
     lean = numeric(rows_tbl, 'lean').astype(np.float64)
     lean_band = numeric(rows_tbl, 'lean_band').astype(np.int64)
@@ -583,16 +590,25 @@ def main(argv=None):
     parser.add_argument('--real', action='store_true', help='use the real P1 files, cache, contacts, street and source CSV')
     parser.add_argument('--rowfw', default=str(RFB))
     parser.add_argument('--cache', default=str(RF / 'cache' / 'inputs.parquet'))
-    parser.add_argument('--contacts', default=str(V3 / '.local' / 'contacts.sqlite3'))
-    parser.add_argument('--street', default=str(V3 / '.local' / 'street.sqlite3'))
-    parser.add_argument('--source-csv', default=r'C:\Users\pgoff\Downloads\statara_co_cd005_20260904.csv')
-    parser.add_argument('--salt-file', default=str(ROOT / '.local' / '.street-salt'))
+    parser.add_argument('--district', choices=list(D.DISTRICTS), default=D.DEFAULT,
+                        help='fills the defaults below from tools/districts.py (co-05 gives the old literals)')
+    parser.add_argument('--contacts')
+    parser.add_argument('--street')
+    parser.add_argument('--source-csv')
+    parser.add_argument('--salt-file')
     parser.add_argument('--w1', choices=('verify', 'fixture'), default='verify')
-    parser.add_argument('--out', default=str(V3 / '.local' / 'scores.sqlite3'))
+    parser.add_argument('--out')
     parser.add_argument('--receipt', default=str(V3 / '_build' / 'scores_build_receipt.json'))
     parser.add_argument('--low-memory', action='store_true', help='skip the available-RAM floor')
     parser.add_argument('--run-id', default=None)
     args = parser.parse_args(argv)
+    district = D.get(args.district)
+    home = D.data_dir(district)
+    args.contacts = args.contacts or str(home / 'contacts.sqlite3')
+    args.street = args.street or str(home / 'street.sqlite3')
+    args.source_csv = args.source_csv or str(district['source_csv'])
+    args.salt_file = args.salt_file or str(D.street_salt(district))
+    args.out = args.out or str(home / 'scores.sqlite3')
     run_id = args.run_id or new_run_id('cu-geo-v3-scores')
     gb = GlassBox(run_id, 'cu-geography-v3/tools/build_scores_v3.py')
 

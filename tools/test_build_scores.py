@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tools import districts as D
 from tools import field_labels as FL
 from tools import glassbox
 from tools import make_scores_fixture as MF
@@ -277,6 +278,17 @@ class LoaderTests(unittest.TestCase):
         out = self.root / 'other_source.sqlite3'
         self.assertEqual(self.run_loader(out, self.root / 'other_source.json', contacts=contacts), 2)
         self.assertFalse(out.exists())
+
+
+class RollupCheckTests(unittest.TestCase):
+    def test_co_needs_the_rollup_to_equal_the_party_mapping_and_or_skips_it(self):
+        mapped = np.array(['D', 'R', 'U', 'O'])
+        flipped = mapped.copy()
+        flipped[2] = 'O'
+        B.check_rollup(D.get('co-05'), mapped.copy(), mapped)
+        with self.assertRaises(B.BuildError):
+            B.check_rollup(D.get('co-05'), flipped, mapped)
+        B.check_rollup(D.get('or-05'), flipped, mapped)
 
 
 if __name__ == '__main__':
