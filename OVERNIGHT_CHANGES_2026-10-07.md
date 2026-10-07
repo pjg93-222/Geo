@@ -12,3 +12,5 @@ One dated bullet per change, in plain English. Times are this machine's local ti
   - Relaunch: `launch_run_fast.ps1`; hmfit resumes with `--resume`, so the 9 finished fields are skipped.
 
 - 2026-10-07 (lead): moved .local\or-05\luna-v1\receipts\report.json aside as report.smoke-stale-20261007T091554Z.json. It came from a synthetic report smoke test (outputs in a Temp report-smoke folder), not from the real or-05 run, and would have made the runner skip the real or-05 report step. Nothing deleted.
+
+- 2026-10-07 15:08 (verifier): the Phase 3 imputation code and this log are committed as bbebf92f0 (the "Nothing here is committed" line above no longer applies to them); the .local and _build outputs stay uncommitted.
