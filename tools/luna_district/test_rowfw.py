@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 
 from tools import districts as D
@@ -30,7 +31,7 @@ class CopyTests(unittest.TestCase):
             manifest = rowfw.build_copy(tmp, {'id': 'or-05', 'terrier_district': 'or-05', 'is_co': False, 'rows': 1}, 'Oregon OR-05')
             patched = {k: v['patched_lines'] for k, v in manifest['files'].items() if v['patched_lines']}
             self.assertEqual(set(patched), set(rowfw.PATCHES))                       # every patched file, nothing else
-            self.assertEqual(sum(len(v) for v in patched.values()), 26)
+            self.assertEqual(sum(len(v) for v in patched.values()), 27)
             for rel, info in manifest['files'].items():                              # an unpatched file is the original, byte for byte
                 if not info['patched_lines'] and 'appended_sha256' not in info:
                     self.assertEqual(info['original_sha256'], info['copy_sha256'], rel)
@@ -41,6 +42,14 @@ class CopyTests(unittest.TestCase):
             for forbidden in ('framework_config.json', 'PLAN.receipt.json', 'area_scores_rowfw-1.0.0.csv'):
                 self.assertFalse((docs / forbidden).exists(), forbidden)             # outputs and frozen files are not copied
         self.assertEqual(before, originals.listing(False, roots=[rowfw.RF]))
+
+    @unittest.skipUnless(rowfw.RFB.exists(), 'Colorado row-framework folder is not on this machine')
+    def test_a_blank_area_id_is_the_text_nan_and_does_not_break_unique(self):
+        text = (rowfw.RFB / 'rowfw' / 'areas.py').read_text(encoding='utf-8')
+        line = next(l for l in rowfw.apply_patches(rowfw._B + 'rowfw/areas.py', text)[0].splitlines() if l.strip().startswith('vals = df[col]'))
+        env = {'df': pd.DataFrame({'c': pd.Categorical(['b', None, 'a', 'b'])}), 'col': 'c', 'canon': np.array([0, 1, 2, 3])}
+        exec(line.strip(), env)                                                     # pandas 3 left NaN here and np.unique raised TypeError
+        self.assertEqual(list(np.unique(env['vals'])), ['a', 'b', 'nan'])
 
     def test_a_patch_that_adds_a_line_or_misses_its_anchor_is_refused(self):
         with self.assertRaises(AssertionError):

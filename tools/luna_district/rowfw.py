@@ -90,6 +90,10 @@ PATCHES = {
          "DICT = %s['export_dir'] + r'\\column_dictionary.json'" % dj(1), 1, 'a')],
     _B + 'tools/p1_d2_suppression_counts.py': [
         ('int(p0_pub[k])', 'int(p0_pub.get(k, -1))', 1, 'd')],                      # a district has no P0 area_counts.csv (D1 level set)
+    # pandas 3 keeps a blank id as NaN through astype(str) and np.unique then fails; pandas 2 made it the text 'nan', the pseudo-area
+    # build_bundle_v4.drop_pseudo_areas expects. Colorado has no blank area id (0 of 491,308 on all seven area columns), so its run is unchanged.
+    _B + 'rowfw/areas.py': [
+        ('vals = df[col].astype(str).to_numpy(dtype=object)[canon]', "vals = df[col].astype(str).fillna('nan').to_numpy(dtype=object)[canon]", 1, 'c')],
 }
 COPY_DIRS = ('rowfw', 'tools', 'tests/fixtures', 'tests/predicates')
 COPY_FILES = ('rowfw_build.py', 'freeze/freeze_rowfw.py', 'freeze/rulings_verbatim.txt', 'docs/data_dictionary.json',
@@ -149,6 +153,8 @@ def _deviations_entry(label):
             '(`rowfw-dict`; the CSV is unchanged).\n'
             '- `populate` RAM floor 6.0 to 5.0 GB (Colorado measured 3.47 GB). `p1_d2_suppression_counts.py` compares with the district\'s own '
             '`area_counts.csv` (no P0 run exists), so its `D1_reproduces_P0_area_counts_csv` flag is informational.\n'
+            '- Area ids: a blank id (a person with no block, tract or ZIP) is the text `nan` in `areas.py`, as pandas 2 made it and as '
+            '`build_bundle_v4.drop_pseudo_areas` expects (pandas 3 kept NaN and `np.unique` failed). Colorado has no blank area id.\n'
             '- Colorado literals left as text, read by no stage that runs: the per-field expected estimated rows and statuses, the Colorado judge and '
             'study ridits, the spec evidence counts, the T10 tilt block sizes and the spec level counts.\n')
 
@@ -279,13 +285,20 @@ def _district(district):
 # ------------------------------------------------------------------ steps
 def copy(district, redo=False, **_):
     R = dr(district)
-    if (drb(district) / 'PLAN.receipt.json').exists():
-        raise SystemExit(f'{district}: the plan is frozen (PLAN.receipt.json); the copy is not rewritten')
+    frozen = drb(district) / 'PLAN.receipt.json'
+    if frozen.exists() and not redo:
+        raise SystemExit(f'{district}: the plan is frozen (PLAN.receipt.json); a code fix after the freeze needs --redo')
     with RowfwStep(district, 'rowfw-copy', outputs=[R / 'copy-manifest.json'], redo=redo) as st:
         cfg = district_json(district)
         if (R / 'district.json').exists():                         # a redone copy keeps the cache sha the cache step wrote
             cfg['cache_sha256'] = read_json(R / 'district.json').get('cache_sha256')
         manifest = build_copy(R, cfg, DISTRICTS[district]['label'])
+        if frozen.exists():           # a redo after the freeze may change only code the freeze did not read: no outputs are copied, so those stay
+            receipt = read_json(frozen)
+            for key, path in (('freeze_script', drb(district) / 'freeze' / 'freeze_rowfw.py'),
+                              ('rulings_source', drb(district) / 'freeze' / 'rulings_verbatim.txt')):
+                assert sha256_file(path) == receipt[key]['sha256'], f'{key} differs from the frozen plan: re-freeze instead of a redo'
+            st.note(redo_after_freeze=True)
         st.note(files=len(manifest['files']), patched_files=manifest['patched_files'], patched_lines=manifest['patched_lines'],
                 residual_literals=manifest['residual_literal_count'], rowfw_originals_before=sha256_file(RF_BEFORE))
 
