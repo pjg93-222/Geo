@@ -5,7 +5,8 @@
     hand_case()                       Case(rows, expected): 38 people at 27 doors plus a hand-computed oracle
     write_minimal_stores(dir, case)   source.csv and contacts / scores / street / roads .sqlite3 with the table and column
                                       names and types of the real stores: scores.person keeps only the columns the walk
-                                      builder reads, contacts has no full-text `search` table
+                                      builder reads, contacts has no full-text `search` table; scores=False writes no
+                                      scores.sqlite3 (a world for a district whose person fields come from the CSV)
     even_left_for(block, a, b)        1/0: are even numbers on the left walking a -> b along an expected block
 
 The neighbourhood lies near lon -104.80, lat 38.85. Local metres below are x east, y north of that point.
@@ -65,7 +66,8 @@ CSV_COLUMNS = ['sii_persist_id', 'sii_statara_id', 'sii_household_id', 'sii_firs
                'svi_registration_suitename', 'svi_registration_suiterange', 'svi_registration_city',
                'svi_registration_state', 'svi_registration_zip', 'svi_registration_congressional_district',
                'svi_registration_state_house_district', 'svi_registration_state_senate_district',
-               'svi_registration_precinct_code'] + VOTE_COLUMNS
+               'svi_registration_precinct_code', 'svi_registration_precinct_name', 'svi_registration_county',
+               'svi_registration_censusid', 'svi_party_registration'] + VOTE_COLUMNS
 DATE_COLUMNS = ('sii_dob', 'svi_registration_date', 'svi_registration_date_earliest')
 
 Case = namedtuple('Case', 'rows expected')
@@ -124,6 +126,7 @@ _STREETS = {      # key: (label, streetname, suffix, city, zip)
     'pinef': ('Pine St', 'PINE', 'ST', 'FOUNTAIN', '80817'),
 }
 _COMPASS = {'N': (0, 1), 'S': (0, -1), 'E': (1, 0), 'W': (-1, 0)}
+_CENSUS_ID = {name: '08041%06d%04d' % (1, 1000 + i) for i, name in enumerate(_BLOCKS)}    # 15 digits per road block
 
 
 def lonlat(x, y):
@@ -383,7 +386,9 @@ def _rows(doors):
             'svi_registration_suiterange': door['unit'], 'svi_registration_city': city,
             'svi_registration_state': 'CO', 'svi_registration_zip': zip_code,
             'svi_registration_congressional_district': '005', 'svi_registration_state_house_district': sh,
-            'svi_registration_state_senate_district': ss, 'svi_registration_precinct_code': precinct})
+            'svi_registration_state_senate_district': ss, 'svi_registration_precinct_code': precinct,
+            'svi_registration_precinct_name': precinct, 'svi_registration_county': '08041',
+            'svi_registration_censusid': _CENSUS_ID[door['block']], 'svi_party_registration': party})
         record.update(_votes(votes))
         rows.append({'key': key, 'door': door_key, 'household': hh,
                      'person_id': opaque_id(SALT, 'p', record['sii_persist_id']), 'csv': record,
@@ -710,20 +715,22 @@ def _write_roads(path):
     return Path(path)
 
 
-def write_minimal_stores(data_dir, case=None, *, date_format='%Y-%m-%d'):
+def write_minimal_stores(data_dir, case=None, *, date_format='%Y-%m-%d', scores=True):
     """Write source.csv, contacts.sqlite3, scores.sqlite3, street.sqlite3 and roads.sqlite3 into data_dir (replacing
     them); same content for the same case, byte for byte. CSV row i is contacts rowid i+1, and the same person id is
     in scores.person.person_id and street.people.id (registration basis, when the row has coordinates).
-    There is no .street-salt and no walk.sqlite3."""
+    scores=False leaves scores.sqlite3 out (and removes an older one). There is no .street-salt and no walk.sqlite3."""
     case = hand_case() if case is None else case
     directory = Path(data_dir)
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / 'source.csv'
     sha = write_source_csv(source, case.rows, date_format)
+    if not scores:
+        _fresh(directory / 'scores.sqlite3')
     return Stores(directory=directory, source_csv=source, source_sha256=sha, salt=SALT, case=case,
                   expected=case.expected,
                   contacts_path=_write_contacts(directory / 'contacts.sqlite3', case.rows, sha),
-                  scores_path=_write_scores(directory / 'scores.sqlite3', case.rows, sha),
+                  scores_path=_write_scores(directory / 'scores.sqlite3', case.rows, sha) if scores else None,
                   street_path=_write_street(directory / 'street.sqlite3', case.rows, sha),
                   roads_path=_write_roads(directory / 'roads.sqlite3'),
                   person_ids=[r['person_id'] for r in case.rows])

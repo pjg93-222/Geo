@@ -1,21 +1,25 @@
 """Build the walk-list store `walk.sqlite3` (schema walk-v1) from the source voter CSV and the local stores.
 
-    <app venv python> tools/build_walk.py [--source CSV] [--data-dir DIR] [--out FILE] [--force]
+    <app venv python> tools/build_walk.py [--district ID] [--source CSV] [--data-dir DIR] [--out FILE] [--force]
 
 CSV data row i is contacts.rowid i+1 and carries the person id every store uses (never recomputed: .street-salt is
 gone). The row count and the sha256 of the file must agree with the contact, score and street stores; a mismatch is an
 error (exit 1, --force does not override it). Per person the store keeps the walk address (street, stop, unit), the
-area codes exactly as the file spells them, the vote-history tallies of the contract window (server/research/
-walk_names.py) and an HMAC voter key (.walk-salt in the data directory, created on first use, never printed). It holds
-no name, address text or birth date. Cities are canonicalised (CO SPGS / COLO SPRINGS -> COLORADO SPRINGS) so one
-street is one row; dates are read in whichever of DATE_FORMATS the file uses (qa.dates names the format, never a value).
+area codes exactly as the file spells them, the vote-history tallies of the district's window (tools/districts.py;
+Colorado's is server/research/walk_names.py) and an HMAC voter key (.walk-salt in the data directory, created on first
+use, never printed). It holds no name, address text or birth date. Cities are canonicalised (CO SPGS / COLO SPRINGS ->
+COLORADO SPRINGS) so one street is one row; dates are read in whichever of DATE_FORMATS the file uses (qa.dates names
+the format, never a value). --district (default co-05) picks the config entry: UTM zone, primary dates, mail rule and
+its gate, city column and spelling rules, precinct key. A district with person_fields 'csv' (OR, CT: no score store
+yet) takes age, party, precinct and census block from the source CSV and records person_fields = csv in meta.
 Everyone with a street gets a stop (a blank house number too: house '', parity NULL) and every stop a place on a
 network that is one component (tools/walk_geo.py: virtual streets, connectors, tiers a-e and g).
 
 Quality gates (all must hold, else the qa metrics are printed, any existing file stays and the exit code is 2;
 --force replaces the file anyway and records it in qa):
   no stop without a map position, no stop without a span     largest road component = 100% of the network length
-  side agreement >= 85%            G-abs: M*/A* >= 85% of recorded votes in each of 2020g, 2022g, 2024g
+  side agreement >= 85%            G-abs: M*/A* >= 85% of recorded votes in each of 2020g, 2022g, 2024g (only where the
+                                   district sets abs_gate; the shares are always reported in qa.g_abs)
 Exit codes: 0 built and in place, 1 error, 2 gate failure. Output is aggregates only.
 """
 import os
@@ -49,10 +53,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from server.research import walk_names as N  # noqa: E402
+from tools import districts as D  # noqa: E402
 from tools import walk_geo as G  # noqa: E402
 
 SCHEMA = 'walk-v1'
-SOURCE = Path('C:/Users/pgoff/Downloads/statara_co_cd005_20260904.csv')
 ENCODING = 'cp1252'
 CHUNK_ROWS = 20000                      # the C parser tokenises all ~620 columns of a chunk: keep chunks small
 BATCH_ROWS = 50000
@@ -67,8 +71,6 @@ VOTE_FIELDS = [N.VH_FIELD.format(e) for e in ELECTIONS]
 TEXT = {'house': P + 'addressrange', 'predir': P + 'predirection', 'name': P + 'streetname', 'suffix': P + 'suffix',
         'postdir': P + 'postdirection', 'city': P + 'city', 'zip': P + 'zip', 'ss': P + 'state_senate_district',
         'sh': P + 'state_house_district', 'gender': 'sii_gender'}
-NEEDED = list(dict.fromkeys(['svi_voter_id', 'sii_dob', P + 'date', P + 'suitename', P + 'suiterange',
-                             *TEXT.values(), *VOTE_FIELDS]))
 PLACED_BY = ('geocode', 'fuzzy', 'nearest', 'interpolated')
 TIERS = ('a', 'b', 'c', 'd', 'e', 'g')                   # tools/walk_geo.py
 AREAS = ('block', 'precinct', 'zip', 'all')               # tier g centres, most local first
@@ -135,20 +137,11 @@ class Clock:
 
 
 # ---- text normalisers (applied once per distinct value, never per row) -----------------------------------------------
-_CITY_WORDS = {'SPG': 'SPRING', 'SPGS': 'SPRINGS', 'SPRNGS': 'SPRINGS', 'COLO': 'COLORADO', 'FT': 'FORT',
-               'MTN': 'MOUNTAIN', 'MTNS': 'MOUNTAINS', 'GRN': 'GREEN', 'FLS': 'FALLS', 'HTS': 'HEIGHTS',
-               'LK': 'LAKE', 'VLY': 'VALLEY'}
-_SPRINGS = ('SPG', 'SPGS', 'SPRING', 'SPRINGS', 'SPRNGS')
-
-
-@lru_cache(maxsize=None)
-def canonical_city(text):
-    """Upper case, punctuation dropped, the usual postal abbreviations spelled out: 'CO SPGS', 'COLO SPRINGS' and
-    'Colorado Spgs.' are all 'COLORADO SPRINGS'; 'GRN MTN FLS' is 'GREEN MOUNTAIN FALLS'."""
-    tokens = re.sub(r'[^A-Z0-9]+', ' ', re.sub(r"['\u2018\u2019`\u00b4.]", '', str(text).upper())).split()
-    if len(tokens) > 1 and tokens[0] == 'CO' and tokens[1] in _SPRINGS:
-        tokens[0] = 'COLORADO'
-    return ' '.join(_CITY_WORDS.get(t, t) for t in tokens)
+def canonical_city(text, district=None):
+    """Upper case, punctuation dropped, the district's postal abbreviations spelled out (tools/districts.py): in
+    Colorado 'CO SPGS', 'COLO SPRINGS' and 'Colorado Spgs.' are all 'COLORADO SPRINGS'; 'GRN MTN FLS' is 'GREEN
+    MOUNTAIN FALLS'."""
+    return D.canonical_city(text, district)
 
 
 def unit_label(text):
@@ -256,19 +249,21 @@ def iso_dates(keys):
 
 
 # ---- votes -----------------------------------------------------------------------------------------------------------
-def vote_flags(column):
-    """(voted, mail) boolean arrays of one vote-history column: blank = did not vote, M*/A* codes are mail ballots."""
+def vote_flags(column, prefixes=N.ABS_PREFIXES):
+    """(voted, mail) boolean arrays of one vote-history column: blank = did not vote; a code counts as a mail ballot
+    when its first letter is in `prefixes` (None: every recorded vote counts, as in Oregon)."""
     codes, uniques = pd.factorize(column.fillna('').to_numpy(dtype=object))
     texts = [u.strip().upper() for u in uniques]
     voted = np.array([t != '' for t in texts], dtype=bool)
-    mail = np.array([t != '' and t[:1] in N.ABS_PREFIXES for t in texts], dtype=bool)
+    mail = voted if prefixes is None else np.array([t != '' and t[:1] in prefixes for t in texts], dtype=bool)
     return voted[codes], mail[codes]
 
 
-def history(voted, mail, reg, dob):
-    """Per-person tallies. eligible(election) = voted in it, or registered on/before its day and 18 by then."""
-    registered = (reg[:, None] > 0) & (reg[:, None] <= ELECTION_KEYS)
-    adult = (dob[:, None] > 0) & (dob[:, None].astype(np.int64) + 180000 <= ELECTION_KEYS)
+def history(voted, mail, reg, dob, keys=ELECTION_KEYS):
+    """Per-person tallies. eligible(election) = voted in it, or registered on/before its day (`keys`: yyyymmdd of each
+    election, the district's calendar) and 18 by then."""
+    registered = (reg[:, None] > 0) & (reg[:, None] <= keys)
+    adult = (dob[:, None] > 0) & (dob[:, None].astype(np.int64) + 180000 <= keys)
     eligible = voted | (registered & adult)
     pri, gen = slice(0, N_PRI), slice(N_PRI, None)
     return {'pri_voted': voted[:, pri].sum(1), 'pri_elig': eligible[:, pri].sum(1),
@@ -307,35 +302,81 @@ def read_or_create_salt(path):
     return salt
 
 
-def load_people(data_dir, checksum):
-    """Contact ids in rowid order, the score-store fields of each (reg_block '' where the store has no such column)
-    and the registration household (id, lon, lat) of each person that has one. Every store must have been built from
-    the CSV with this sha256."""
+def missing_columns(path, names):
+    with Path(path).open(encoding=ENCODING, newline='') as stream:
+        header = next(csv.reader(stream), [])
+    return [c for c in names if c not in header]
+
+
+def read_person_fields(path, count, d):
+    """(age with -1 for blank, party, precinct key, census block) of every CSV row, in row order, from one chunked pass
+    over the file: what a district without a score store (person_fields 'csv') has instead of scores.person. The party
+    is the raw code, stripped; the precinct key is districts.precinct_key (county / name columns read only when the
+    key needs them), checked against the district's pattern."""
+    code, county, name = P + 'precinct_code', P + 'county', P + 'precinct_name'
+    area = {'code': (code, None, None), 'county-code': (code, county, None),
+            'code-name': (code, None, name)}[d['precinct_key']]          # the columns of precinct_key(code, county, name)
+    names = ['sii_age', 'svi_party_registration', *(c for c in area if c), 'svi_registration_censusid']
+    missing = missing_columns(path, names)
+    if missing:
+        raise BuildError('Source columns missing: ' + ', '.join(missing))
+    key = lru_cache(maxsize=None)(lambda *parts: D.precinct_key(d, *parts))
+    age, party, precinct, block = [], [], [], []
+    with pd.read_csv(path, usecols=names, dtype=str, encoding=ENCODING, na_filter=False, chunksize=CHUNK_ROWS) as reader:
+        for chunk in reader:
+            years = pd.to_numeric(chunk['sii_age'].str.strip(), errors='coerce').fillna(-1)
+            age.append(years.to_numpy(dtype=np.int32))
+            party.extend(chunk['svi_party_registration'].str.strip().tolist())
+            blank = [''] * len(chunk)
+            precinct.extend(key(*parts) for parts in zip(*(chunk[c].tolist() if c else blank for c in area)))
+            block.extend(chunk['svi_registration_censusid'].str.strip().tolist())
+    if len(party) != count:
+        raise BuildError('Source has %d rows, the contacts store %d' % (len(party), count))
+    wrong = sum(1 for k in set(precinct) if k and (len(k) > 64 or not re.fullmatch(d['precinct_pattern'], k)))
+    if wrong:
+        raise BuildError('%d precinct keys are longer than 64 characters or do not match the %s pattern'
+                         % (wrong, d['id']))
+    return np.concatenate(age) if age else np.array([], dtype=np.int32), party, precinct, block
+
+
+def load_people(data_dir, checksum, source=None, district=None):
+    """Contact ids in rowid order, the person fields of each (age, party, precinct, census block; from the score store,
+    with block '' where it has no such column, or from `source` when the district's person_fields is 'csv', see
+    read_person_fields) and the registration household (id, lon, lat) of each person that has one. Every store must
+    have been built from the CSV with this sha256."""
+    d = D.get(district)
+    from_csv = d['person_fields'] == 'csv'
     contacts = sqlite3.connect(_uri(data_dir / 'contacts.sqlite3'), uri=True)
     try:
-        contacts.execute('ATTACH DATABASE ? AS sc', (_uri(data_dir / 'scores.sqlite3'),))
+        if not from_csv:
+            contacts.execute('ATTACH DATABASE ? AS sc', (_uri(data_dir / 'scores.sqlite3'),))
         contacts.execute('ATTACH DATABASE ? AS st', (_uri(data_dir / 'street.sqlite3'),))
         for label, recorded in (('contacts', _stored(contacts, '', 'source_sha256')),
-                                ('scores', _stored(contacts, 'sc.', 'contacts_source_sha256')),
+                                *(() if from_csv else (('scores', _stored(contacts, 'sc.', 'contacts_source_sha256')),)),
                                 ('street', _stored(contacts, 'st.', 'source_sha256'))):
             if recorded != checksum:
                 raise BuildError('The %s store was built from a different source file (sha256 differs)' % label)
         count, low, high = contacts.execute('SELECT count(*), min(rowid), max(rowid) FROM contacts').fetchone()
         if not count or low != 1 or high != count:
             raise BuildError('contacts rowids are not 1..N (%d rows)' % count)
-        ids, found, age, party, precinct, block = [], 0, [], [], [], []
-        has_block = any(r[1] == 'reg_block' for r in contacts.execute('PRAGMA sc.table_info(person)'))
-        for person_id, has_score, years, group, area, census in contacts.execute(
-                'SELECT c.id, p.person_id IS NOT NULL, p.age, p.party, p.reg_precinct, %s FROM contacts c '
-                'LEFT JOIN sc.person p ON p.person_id = c.id ORDER BY c.rowid' % ('p.reg_block' if has_block else "''")):
-            ids.append(person_id)
-            found += has_score
-            age.append(-1 if years is None else years)
-            party.append(group or '')
-            precinct.append(area or '')
-            block.append(census or '')
-        if found != count:
-            raise BuildError('%d contacts have no row in the score store' % (count - found))
+        if from_csv:
+            ids = [r[0] for r in contacts.execute('SELECT id FROM contacts ORDER BY rowid')]
+            age, party, precinct, block = read_person_fields(source, count, d)
+        else:
+            ids, found, age, party, precinct, block = [], 0, [], [], [], []
+            has_block = any(r[1] == 'reg_block' for r in contacts.execute('PRAGMA sc.table_info(person)'))
+            for person_id, has_score, years, group, area, census in contacts.execute(
+                    'SELECT c.id, p.person_id IS NOT NULL, p.age, p.party, p.reg_precinct, %s FROM contacts c '
+                    'LEFT JOIN sc.person p ON p.person_id = c.id ORDER BY c.rowid'
+                    % ('p.reg_block' if has_block else "''")):
+                ids.append(person_id)
+                found += has_score
+                age.append(-1 if years is None else years)
+                party.append(group or '')
+                precinct.append(area or '')
+                block.append(census or '')
+            if found != count:
+                raise BuildError('%d contacts have no row in the score store' % (count - found))
         household = np.full(count, None, dtype=object)
         lon, lat = np.full(count, np.nan), np.full(count, np.nan)
         for rowid, household_id, x, y in contacts.execute(
@@ -353,36 +394,40 @@ def load_people(data_dir, checksum):
         household_values=np.asarray(handles, dtype=object), lon=lon, lat=lat)
 
 
-def read_source(path, ids, salt):
+def read_source(path, ids, salt, district=None):
     """One pass over the CSV (usecols only, chunked): street/area text as vocabulary codes, dates as yyyymmdd ints,
-    vote flags, voter keys. Returns an attribute bag; raises BuildError when the row count differs from `ids`."""
-    with Path(path).open(encoding=ENCODING, newline='') as stream:
-        header = next(csv.reader(stream), [])
-    missing = [c for c in NEEDED if c not in header]
+    vote flags, voter keys. The city comes from the district's city column and spelling rules. Returns an attribute
+    bag; raises BuildError when the row count differs from `ids`."""
+    d = D.get(district)
+    text = {**TEXT, 'city': d['city_field']}
+    needed = list(dict.fromkeys(['svi_voter_id', 'sii_dob', P + 'date', P + 'suitename', P + 'suiterange',
+                                 *text.values(), *VOTE_FIELDS]))
+    missing = missing_columns(path, needed)
     if missing:
         raise BuildError('Source columns missing: ' + ', '.join(missing))
-    norms = {'house': house_label, 'city': canonical_city, 'unit': unit_label}
-    vocab = {name: Vocab(norms.get(name, str.strip)) for name in (*TEXT, 'unit')}
+    city = lru_cache(maxsize=None)(lambda value: D.canonical_city(value, d))
+    norms = {'house': house_label, 'city': city, 'unit': unit_label}
+    vocab = {name: Vocab(norms.get(name, str.strip)) for name in (*text, 'unit')}
     codes = {name: [] for name in vocab}
     dates = {'dob': DateColumn('sii_dob'), 'reg': DateColumn(P + 'date')}
     keys = {'dob': [], 'reg': []}
     voted, mail, digests = [], [], []
     recorded = np.zeros((2, len(ELECTIONS)), dtype=np.int64)
     blank_ids = rows = 0
-    reader = pd.read_csv(path, usecols=NEEDED, dtype=str, encoding=ENCODING, na_filter=False, chunksize=CHUNK_ROWS)
+    reader = pd.read_csv(path, usecols=needed, dtype=str, encoding=ENCODING, na_filter=False, chunksize=CHUNK_ROWS)
     with reader:
         for chunk in reader:
             size = len(chunk)
             if rows + size > len(ids):
                 raise BuildError('The source has more rows than the contacts store (%d)' % len(ids))
-            for name, field in TEXT.items():
+            for name, field in text.items():
                 codes[name].append(vocab[name].encode(chunk[field]))
             codes['unit'].append(vocab['unit'].encode(chunk[P + 'suitename'] + ' ' + chunk[P + 'suiterange']))
             keys['dob'].append(dates['dob'].parse(chunk['sii_dob']))
             keys['reg'].append(dates['reg'].parse(chunk[P + 'date']))
             v, m = np.empty((size, len(ELECTIONS)), dtype=bool), np.empty((size, len(ELECTIONS)), dtype=bool)
             for j, field in enumerate(VOTE_FIELDS):
-                v[:, j], m[:, j] = vote_flags(chunk[field])
+                v[:, j], m[:, j] = vote_flags(chunk[field], d['abs_prefixes'])
             voted.append(v)
             mail.append(m)
             recorded[0] += v.sum(0)
@@ -476,7 +521,7 @@ def make_stops(src, street_row, household_code, lon, lat):
 
 
 def area_points(src, people, stops):
-    """Tier g centres (EPSG:26913 metres) per stop and their basis: the mean of the geocoded registration households
+    """Tier g centres (district UTM metres) per stop and their basis: the mean of the geocoded registration households
     of the census block most common among the stop's people, else of its precinct, else of its ZIP, else of all of
     them (ties between equally common areas: the first code). Returns (xy array stops x 2, [basis per stop])."""
     located = ~np.isnan(people.lon) & (people.household_code >= 0)
@@ -619,9 +664,10 @@ def combo_rows(ctx):
 # ---- gates -------------------------------------------------------------------------------------------------------------
 def judge(raw, thresholds):
     """{gate: {value, min | max, pass}} from the unrounded numbers (CEILINGS hold at or below their limit, the rest at
-    or above); a gate without a value fails."""
+    or above); a gate without a value fails. No abs_share_* gates where thresholds['abs_share'] is None."""
     gates = {name: raw[name] for name in ('unplaced_stops', 'stops_without_span', 'largest_component', 'side_agreement')}
-    gates.update({'abs_share_' + year: share for year, share in raw['abs_share'].items()})
+    if thresholds['abs_share'] is not None:
+        gates.update({'abs_share_' + year: share for year, share in raw['abs_share'].items()})
     out = {}
     for name, value in gates.items():
         limit = thresholds['abs_share' if name.startswith('abs_share_') else name]
@@ -651,13 +697,27 @@ def backup_existing(database):
 
 
 # ---- build -------------------------------------------------------------------------------------------------------------
-def build(source=SOURCE, data_dir=None, out=None, *, force=False, gates=None, log=None):
-    """Build the store; see the module docstring. `gates` overrides GATES entries (tests only). Returns a dict:
-    passed, failed (gate names), replaced, forced, qa, out, backup (path of the copy of the replaced file), bytes."""
-    source = Path(source)
-    data_dir = Path(data_dir or os.environ.get('CU_DATA_DIR') or ROOT / '.local')
+def default_data_dir(d):
+    """co-05: CU_DATA_DIR or .local, as always; any other district: its own folder under .local."""
+    return Path((d['id'] == D.DEFAULT and os.environ.get('CU_DATA_DIR')) or D.data_dir(d))
+
+
+def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=None, district=None):
+    """Build the store; see the module docstring. `source` defaults to the district's CSV (`district`: an id or a config
+    dict, default co-05). `gates` overrides GATES entries (tests only); a district without abs_gate has no abs_share
+    gates whatever `gates` says. Returns a dict: passed, failed (gate names), replaced, forced, qa, out, backup (path of
+    the copy of the replaced file), bytes."""
+    d = D.get(district)
+    G.EPSG = d['utm_epsg']
+    if list(d['primaries']) != list(N.PRIMARIES):
+        raise BuildError('The district primaries must be keyed %s (the vote columns are the same in every state)'
+                         % ', '.join(N.PRIMARIES))
+    source = Path(source or d['source_csv'])
+    data_dir = Path(data_dir or default_data_dir(d))
     out = Path(out) if out else data_dir / 'walk.sqlite3'
     thresholds = {**GATES, **(gates or {})}
+    if d['abs_gate'] is None:
+        thresholds['abs_share'] = None
     out.parent.mkdir(parents=True, exist_ok=True)
     lock = out.with_suffix('.build.lock')
     try:
@@ -667,7 +727,7 @@ def build(source=SOURCE, data_dir=None, out=None, *, force=False, gates=None, lo
     temporary = None
     clock = Clock(log)
     try:
-        for name in ('contacts', 'scores', 'street', 'roads'):
+        for name in ('contacts', *(('scores',) if d['person_fields'] == 'scores' else ()), 'street', 'roads'):
             if not (data_dir / (name + '.sqlite3')).is_file():
                 raise BuildError('%s.sqlite3 is missing from the data directory' % name)
         if not source.is_file():
@@ -676,15 +736,15 @@ def build(source=SOURCE, data_dir=None, out=None, *, force=False, gates=None, lo
         with clock.phase('checksums'):
             checksum, roads_sha = sha256_of(source), sha256_of(data_dir / 'roads.sqlite3')
         with clock.phase('stores'):
-            people = load_people(data_dir, checksum)
+            people = load_people(data_dir, checksum, source, d)
         with clock.phase('read_csv'):
-            src = read_source(source, people.ids, read_or_create_salt(data_dir / '.walk-salt'))
+            src = read_source(source, people.ids, read_or_create_salt(data_dir / '.walk-salt'), d)
         latest = source.stat()
         if (original.st_size, original.st_mtime_ns) != (latest.st_size, latest.st_mtime_ns):
             raise BuildError('The source changed during the build')
 
         with clock.phase('streets'):
-            tally = history(src.voted, src.mail, src.reg, src.dob)
+            tally = history(src.voted, src.mail, src.reg, src.dob, np.array(D.election_keys(d), dtype=np.int64))
             street_rows, street_row = make_streets(src)
             stops = make_stops(src, street_row, people.household_code, people.lon, people.lat)
             areas = area_points(src, people, stops)
@@ -706,7 +766,7 @@ def build(source=SOURCE, data_dir=None, out=None, *, force=False, gates=None, lo
                     src=src, people=people, stops=stops, tally=tally, street_row=street_row, party=people.party,
                     precinct=people.precinct, party_code=people.party_code, precinct_code=people.precinct_code,
                     household_code=people.household_code, household_values=people.household_values,
-                    reg_iso=iso_dates(src.reg))
+                    reg_iso=iso_dates(src.reg), district=d)
                 db.executemany('INSERT INTO person VALUES (%s)' % ','.join('?' * 21), person_rows(ctx))
                 db.executemany('INSERT INTO combo VALUES (?,?,?,?,?,?)', combo_rows(ctx))
                 for sql in INDEXES:
@@ -722,8 +782,10 @@ def build(source=SOURCE, data_dir=None, out=None, *, force=False, gates=None, lo
             qa['peak_memory_mb'] = peak_memory_mb()
             meta = [('schema', SCHEMA), ('source_sha256', checksum), ('roads_sha256', roads_sha),
                     ('built_utc', datetime.now(timezone.utc).isoformat()), ('n_people', str(src.rows)),
-                    ('n_stops', str(stops.count)), ('abs_rule', N.ABS_RULE), ('window', json.dumps(N.WINDOW)),
+                    ('n_stops', str(stops.count)), ('abs_rule', d['abs_rule']), ('window', json.dumps(D.window(d))),
                     ('qa', json.dumps(qa, sort_keys=True))]
+            if d['person_fields'] == 'csv':
+                meta.append(('person_fields', 'csv'))
             db.executemany('INSERT INTO meta VALUES (?,?)', meta)
             db.commit()
             with clock.phase('integrity'):
@@ -793,7 +855,7 @@ def quality(src, people, stops, placements, street_rows, network, agreement, bas
         'dates': {d.name: d.report() for d in src.dates.values()},
         'cities': {'in_file': len(src.vocab['city'].raw), 'canonical': len(src.vocab['city'].values)},
         'voter_ids_blank': src.blank_voter_ids, 'voter_keys_duplicated': src.duplicate_voter_keys,
-        'window': N.WINDOW,
+        'window': D.window(ctx.district),
     }
     return qa, raw
 
@@ -807,13 +869,24 @@ def safe_trace(error):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--source', type=Path, default=SOURCE)
-    parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('CU_DATA_DIR') or ROOT / '.local'))
+    parser.add_argument('--district', default=D.DEFAULT, choices=list(D.DISTRICTS), help='default co-05')
+    parser.add_argument('--source', type=Path, default=None, help="default: the district's source CSV")
+    parser.add_argument('--data-dir', type=Path, default=None,
+                        help="default: .local for co-05 (CU_DATA_DIR if set), else the district's folder under .local")
     parser.add_argument('--out', type=Path, default=None, help='default: <data-dir>/walk.sqlite3')
     parser.add_argument('--force', action='store_true', help='replace the store although a quality gate failed')
     args = parser.parse_args(argv)
+    d = D.get(args.district)
+    source = args.source
+    if source is None:       # the district's file must be the one its config names; an explicit --source is trusted
+        source = Path(d['source_csv'])
+        if source.is_file() and sha256_of(source) != d['sha256']:
+            print('error: %s has a different sha256 than the %s source in tools/districts.py' % (source.name, d['id']),
+                  file=sys.stderr)
+            return 1
     try:
-        result = build(args.source, args.data_dir, args.out, force=args.force, log=lambda text: print(text, flush=True))
+        result = build(source, args.data_dir, args.out, force=args.force, district=d,
+                       log=lambda text: print(text, flush=True))
     except BuildError as error:
         print('error: %s' % error, file=sys.stderr)
         return 1
