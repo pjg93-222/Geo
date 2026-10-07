@@ -2,8 +2,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  RANGE,binOf,blockLabel,leanBand,leanBandByCode,leanCellPos,leanLinearPos,likelyRange,likelyShare,ordinal,precinctLabel,
-  rateText,round,seconds,shareText,signed,titleName,tractLabel,zipLabel
+  RANGE,binOf,blockLabel,districtHref,districtOptions,leanBand,leanBandByCode,leanCellPos,leanLinearPos,likelyRange,likelyShare,ordinal,
+  precinctLabel,rateText,round,seconds,shareText,signed,titleName,tractLabel,zipLabel
 } from '../../src/v3/lib/format.ts';
 
 test('display rounding: half goes away from zero (framework_config display.rounding_rule)', () => {
@@ -74,4 +74,25 @@ test('names: contacts store upper case; title case keeps Mc, JR and apostrophes'
 
 test('readout seconds: one decimal, minimum 0.1', () => {
   assert.equal(seconds(0), '0.1'); assert.equal(seconds(400), '0.4'); assert.equal(seconds(1449), '1.4'); assert.equal(seconds(1451), '1.5');
+});
+
+test('district selector: a district page is the same host at its own port', () => {
+  assert.equal(districtHref({port: 8775}, {protocol: 'http:', hostname: '127.0.0.1'}), 'http://127.0.0.1:8775/');
+  assert.equal(districtHref({port: 8777}, {protocol: 'https:', hostname: 'terrier.local'}), 'https://terrier.local:8777/');
+});
+
+test('district selector: not-built districts are disabled and say so; the current one stays enabled', () => {
+  const list = [
+    {id: 'co-05', label: 'Colorado · District 05', ready: true},
+    {id: 'or-05', label: 'Oregon · District 05', ready: false},
+    {id: 'ct-01', label: 'Connecticut · District 01', ready: false},
+  ];
+  assert.deepEqual(districtOptions(list, 'co-05'), [
+    {id: 'co-05', label: 'Colorado · District 05', disabled: false},
+    {id: 'or-05', label: 'Oregon · District 05 (not built yet)', disabled: true},
+    {id: 'ct-01', label: 'Connecticut · District 01 (not built yet)', disabled: true},
+  ]);
+  const onOregon = districtOptions(list, 'or-05');
+  assert.deepEqual(onOregon[1], {id: 'or-05', label: 'Oregon · District 05', disabled: false}, 'the served district is never disabled, even without a snapshot');
+  assert.equal(onOregon[2].disabled, true);
 });

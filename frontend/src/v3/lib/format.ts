@@ -126,3 +126,14 @@ export function titleName(raw:string):string{
 }
 
 export function seconds(ms:number):string{return (Math.max(100,Math.round(ms/100)*100)/1000).toFixed(1);}
+
+/** One row of GET /api/v3/districts (schema v3-districts-1). Each district runs as its own server instance at `port`. */
+export interface DistrictEntry{id:string;label:string;short_label:string;state:string;port:number;ready:boolean;center:[number,number];zoom:number}
+export interface DistrictList{schema:string;current:string;districts:DistrictEntry[]}
+/** The page of another district: same host, that district's port. */
+export const districtHref=(d:Pick<DistrictEntry,'port'>,loc:Pick<Location,'protocol'|'hostname'>):string=>`${loc.protocol}//${loc.hostname}:${d.port}/`;
+/** Menu rows of the header selector. A district that is not built yet is disabled unless it is the one being served. */
+export const districtOptions=(list:Pick<DistrictEntry,'id'|'label'|'ready'>[],current:string)=>list.map(d=>{
+  const disabled=!d.ready&&d.id!==current;
+  return {id:d.id,label:disabled?`${d.label} (not built yet)`:d.label,disabled};
+});

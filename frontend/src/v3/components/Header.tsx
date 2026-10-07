@@ -4,8 +4,8 @@ import {Search} from 'lucide-react';
 import {TerrierMark} from './TerrierMark';
 import {Segmented,cx} from './ui';
 import {navigate,withKept,LOCATION_EVENT,type RouteName} from '../lib/router';
-import {int,countLabel,areaLabel,LEVELS,LEVEL_LABEL,type Level} from '../lib/format';
-import {getAreas,searchPeople} from '../api/client';
+import {int,countLabel,areaLabel,districtHref,districtOptions,LEVELS,LEVEL_LABEL,type DistrictList,type Level} from '../lib/format';
+import {getAreas,localJson,searchPeople} from '../api/client';
 import type {Group,Meta} from '../types';
 
 export const INDEX_ITEMS:{id:Group;label:string}[]=[
@@ -29,6 +29,24 @@ function Brand({busy=false}:{busy?:boolean}){
     <span className="brand-mark"><TerrierMark busy={busy}/></span>
     <span className="brand-copy"><span className="brand-text">Terrier</span><span className="demo-label">Local data</span></span>
   </Link>;
+}
+
+// One server instance per district: the list is read once per page load, and the menu jumps to the other instance's port.
+// It stays hidden when the call fails or only one district exists.
+let districtList:Promise<DistrictList|null>|null=null;
+function DistrictSelect(){
+  const [list,setList]=useState<DistrictList|null>(null);
+  useEffect(()=>{
+    let live=true;
+    districtList??=localJson<DistrictList>('/api/v3/districts').catch(()=>null);
+    districtList.then(l=>{if(live)setList(l);});
+    return ()=>{live=false;};
+  },[]);
+  if(!list||list.districts.length<2)return null;
+  return <select className="district-select" aria-label="District" value={list.current} onChange={e=>{
+    const d=list.districts.find(x=>x.id===e.target.value);
+    if(d&&d.id!==list.current)location.assign(districtHref(d,location));
+  }}>{districtOptions(list.districts,list.current).map(o=><option key={o.id} value={o.id} disabled={o.disabled}>{o.label}</option>)}</select>;
 }
 
 interface Hit{kind:'area'|'person';key:string;label:string;sub:string;go:()=>void}
@@ -103,7 +121,7 @@ function SearchBox({meta}:{meta:Meta|null}){
 
 export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:Group;level:Level;onIndex:(g:Group)=>void;onLevel:(l:Level)=>void}){
   return <header className="topbar map">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active="map"/>
     <div className="map-toolbar">
       <div className="seg-slot index"><Segmented variant="index" label="Index" items={INDEX_ITEMS} value={p.index} onChange={p.onIndex}/></div>
@@ -144,7 +162,7 @@ function SectionNav({active}:{active:Section}){
 }
 export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:Section}){
   return <header className="topbar page">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active={p.active}/>
   </header>;
 }
