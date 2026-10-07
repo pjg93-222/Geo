@@ -15,6 +15,8 @@ export interface Meta{
   district_rate:Record<'ovr'|'cua'|'part'|'soi',number>;
   share_breaks:number[];lean_cuts:[number,number];measured_breaks:number[];household_breaks:number[];
   weights:{cua:number;part:number;soi:number};
+  /** Present only for a district whose overall is interim (OR, CT); Colorado's meta has no such key. Shown as given under the overall weights. */
+  overall_note?:string;
   levels:Level[];bbox:[number,number,number,number];
   floors:{min_n:number;min_households:number};
   /** District means from the score store (live only): expected scores, % measured per group, mean lean. Authoritative for the empty-selection rail. */

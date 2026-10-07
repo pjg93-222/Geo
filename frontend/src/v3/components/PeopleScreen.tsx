@@ -118,6 +118,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
     <main className="people">
       <h1 className="page-title">People</h1>
       <p className="page-sub">{meta?sub:<Sk w={520} h={16}/>}</p>
+      {meta?.overall_note&&<p className="page-sub">{meta.overall_note}</p>}
       <div className="filters">
         <Select label="Registration" shown={REG.find(r=>r.id===q.reg)!.label} value={q.reg} options={REG} onChange={v=>change({reg:v as PeopleQuery['reg']})}/>
         <Select label="Grade" shown={GRADE.find(r=>r.id===q.grade)!.label} value={q.grade} options={GRADE} onChange={v=>change({grade:v as PeopleQuery['grade']})}/>
