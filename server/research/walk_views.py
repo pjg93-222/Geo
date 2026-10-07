@@ -32,6 +32,8 @@ from django.db import DatabaseError, IntegrityError, transaction
 from django.db.models.fields.json import KT
 from django.utils import timezone
 
+from tools import districts as D
+
 from . import walk_context as C
 from . import walk_names as N
 from . import walk_route
@@ -60,7 +62,8 @@ NEAR_EQUAL = 0.05           # a street within this of the best reading is as lik
 MAX_SUGGESTIONS = 3
 LISTS_SHOWN = 50
 CODES = ('S', 'U', 'O', 'NH', 'MV')
-AREA = r'[0-9A-Za-z._-]{1,24}'
+# an area id as the store holds it: at most 24 characters, but a CT precinct key is the code and the name (build_walk caps it at 64)
+AREA = r'[0-9A-Za-z._-]{1,%d}' % (64 if settings.DISTRICT['precinct_key'] == 'code-name' else 24)
 QUERY_KEYS = {'streets', 'ss', 'sh', 'precinct'}
 KEY = re.compile(r'[0-9a-f]{10}')
 PRIVATE = '_voter_keys'     # {person id: voter key}, kept in the stored payload and never sent out
@@ -231,17 +234,9 @@ def streets(request):
 
 # ---- uploaded street lists -----------------------------------------------------------------------------------------
 
-_CITY_WORDS = {'SPG': 'SPRING', 'SPGS': 'SPRINGS', 'SPRNGS': 'SPRINGS', 'COLO': 'COLORADO', 'FT': 'FORT',
-               'MTN': 'MOUNTAIN', 'MTNS': 'MOUNTAINS', 'GRN': 'GREEN', 'FLS': 'FALLS', 'HTS': 'HEIGHTS',
-               'LK': 'LAKE', 'VLY': 'VALLEY'}
-
-
 def city_key(text):
-    """The spelling the store uses for a city (tools/build_walk.py canonical_city): 'Colo Spgs.' is 'COLORADO SPRINGS'."""
-    tokens = re.sub(r'[^A-Z0-9]+', ' ', re.sub(r"['\u2018\u2019`\u00b4.]", '', text.upper())).split()
-    if len(tokens) > 1 and tokens[0] == 'CO' and tokens[1] in ('SPG', 'SPGS', 'SPRING', 'SPRINGS', 'SPRNGS'):
-        tokens[0] = 'COLORADO'
-    return ' '.join(_CITY_WORDS.get(token, token) for token in tokens)
+    """The spelling the store uses for a city (tools/districts.py canonical_city): in Colorado 'Colo Spgs.' is 'COLORADO SPRINGS'."""
+    return D.canonical_city(text, settings.DISTRICT)
 
 
 def match_row(row):
@@ -423,7 +418,7 @@ def plan_payload(store, rows, query):
     payload = {
         'schema': 'walk-list-1', 'generated_on': date.today().isoformat(),
         'list': {'key': None, 'title': '', 'kind': 'standard', 'created_at': None}, 'query': query,
-        'window': dict(N.WINDOW),
+        'window': json.loads(store.info.meta['window']) if 'window' in store.info.meta else dict(N.WINDOW),
         'totals': {'streets': len({run['street_id'] for run in runs}), 'stops': len(runs), 'doors': n_doors,
                    'voters': len(rows), 'walk_m': plan.total_m},
         'bbox': bounds(runs), 'runs': runs}

@@ -8,7 +8,10 @@ and it fails closed: any mismatch rejects the whole bundle.
 import math
 import re
 
+from django.conf import settings
+
 from tools import area_layers as AL
+from tools import districts as D
 from tools.geography_levels import area_label
 
 AREA_FILE_KEYS = {'schema', 'rowfw_version', 'columns', 'rows'}
@@ -21,7 +24,7 @@ D1_AUDIT = {'exactly_disclosed': 0, 'symdiff_violations': 0, 'remainder_violatio
 GEOMETRY_METHOD_KEYS = {'block', 'tract', 'precinct', 'zip', 'concordance'}
 CONCORDANCE_KEYS = {'precinct_person_share', 'zip_person_share', 'precincts_without_block_majority', 'zips_without_zcta',
                     'blocks_added_from_source', 'withheld_without_polygon'}
-SNAPSHOT_RE = re.compile(r'co-cd005-[a-f0-9]{12}')
+SNAPSHOT_RE = re.compile(D.snapshot_pattern(settings.DISTRICT))
 # Keys that must never appear anywhere in an area file: a person or a source row is not an area.
 FORBIDDEN_KEYS = {'person_id', 'model_source_row', 'name', 'address', 'email', 'phone', 'persist_id', 'household_code',
                   'hh', 'p_id', 'h_id'}

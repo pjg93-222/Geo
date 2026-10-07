@@ -1,6 +1,7 @@
 """Aggregate v3 endpoints: the area index layers of a cu-summary-v4 snapshot (no person-level data).
 
   GET /api/v3/meta                                         static facts, the score-store status, the demo flag
+  GET /api/v3/districts                                    the districts of the header selector, each with its instance port
   GET /api/v3/areas/<snapshot>/<basis>/<level>.json        columnar values of one level (registration or residence)
   GET /api/v3/geometry/<snapshot>/<level>/<coarse|fine>.json  polygons with label points
 
@@ -11,10 +12,12 @@ here reads the person table; the only score-store fields used are the totals and
 import json
 import logging
 from functools import lru_cache
+from pathlib import Path
 
 from django.conf import settings
 
 from tools import area_layers as AL
+from tools import districts as D
 
 from . import v3_cache
 from .models import Snapshot
@@ -84,6 +87,24 @@ def meta(request):
         payload['households'] = None
         payload['district_rate'] = {g: 0.1 for g in ('ovr', 'cua', 'part', 'soi')}
     return json_etag_response(request, payload, REVALIDATE)
+
+
+@get_only
+@signed_in
+def districts(request):
+    """The districts of the header selector. One server process serves one district (settings.DISTRICT); each other
+    district has its own instance at its port. `ready`: the district's data directory (this process's DATA_DIR for the
+    current district) holds scores.sqlite3, walk.sqlite3 and a snapshot, so choosing it opens a working app."""
+    params(request, set())
+    current = settings.DISTRICT['id']
+    listed = []
+    for d in D.DISTRICTS.values():
+        directory = Path(settings.DATA_DIR) if d['id'] == current else D.data_dir(d, settings.LOCAL_ROOT)
+        ready = (all((directory / name).is_file() for name in ('scores.sqlite3', 'walk.sqlite3'))
+                 and any((directory / 'snapshots').glob(d['snapshot_prefix'] + '*')))
+        listed.append({'id': d['id'], 'label': d['label'], 'short_label': d['short_label'], 'state': d['state'],
+                       'port': d['port'], 'ready': ready, 'center': list(d['center']), 'zoom': d['zoom']})
+    return json_etag_response(request, {'schema': 'v3-districts-1', 'current': current, 'districts': listed}, REVALIDATE)
 
 
 def _snapshot_or_404(key):

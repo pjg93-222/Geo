@@ -16,6 +16,7 @@ import re
 from functools import wraps
 
 import numpy as np
+from django.conf import settings
 from django.http import JsonResponse
 
 from tools import area_layers as AL
@@ -40,7 +41,6 @@ AREA_LEVELS = {'registration': {'block': 'reg_block', 'precinct': 'reg_precinct'
 AREA_ID = {'block': r'\d{15}', 'precinct': r'\d{10}', 'tract': r'\d{11}', 'zip': r'\d{5}'}
 PERSON_ID = r'p_[0-9a-f]{64}'
 HOUSEHOLD_ID = r'h_[0-9a-f]{64}'
-COLORADO = (-109.1, 36.9, -102.0, 41.1)
 MAX_BBOX = 0.06
 
 
@@ -405,8 +405,9 @@ def parse_bbox(text):
     w, s, e, n = (float(p) for p in parts)
     if not all(math.isfinite(v) for v in (w, s, e, n)) or not (w < e and s < n):
         raise BadRequest('Invalid extent')
-    if w < COLORADO[0] or e > COLORADO[2] or s < COLORADO[1] or n > COLORADO[3]:
-        raise BadRequest('Extent outside Colorado')
+    bounds = settings.DISTRICT['bounds']
+    if w < bounds[0] or e > bounds[2] or s < bounds[1] or n > bounds[3]:
+        raise BadRequest('Extent outside ' + settings.DISTRICT['state_name'])
     if e - w > MAX_BBOX or n - s > MAX_BBOX:
         raise BadRequest('Extent too large')
     return w, s, e, n

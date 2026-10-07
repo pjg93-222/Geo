@@ -8,8 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from server.wsgi import application
+from tools import districts as D
 
 log = logging.getLogger('cu.warm')
 
@@ -72,8 +73,9 @@ def warm():
             # pull the first pages of the large local files into the operating system's cache: the street directory
             # (748 MB) is otherwise read cold by the first street view, and demo mode parses the block polygons once
             conn = scoresdb.connection(street=True)
+            cx, cy = settings.DISTRICT['center']
             conn.execute("SELECT COUNT(*) FROM street.households WHERE basis='registration' AND longitude BETWEEN ? "
-                         "AND ? AND latitude BETWEEN ? AND ?", (-104.90, -104.85, 38.80, 38.85)).fetchone()
+                         "AND ? AND latitude BETWEEN ? AND ?", (cx - 0.025, cx + 0.025, cy - 0.025, cy + 0.025)).fetchone()
             conn.execute('SELECT * FROM person WHERE pos=1').fetchone()
             if settings.DEMO_MODE and snap is not None and snap.manifest.get('schema') == 'cu-summary-v4':
                 from server.research import v3_demo_geo
@@ -96,6 +98,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **o):
         from waitress import serve
+        if os.environ.get('CU_DISTRICT'):               # the stores in this directory must be this district's
+            try:
+                D.check_data_dir(settings.DISTRICT, settings.DATA_DIR)
+            except ValueError as problem:
+                raise CommandError(str(problem)) from problem
         self.stdout.write(f'Credit Union Geography: http://127.0.0.1:{o["port"]}')
         enable_fault_log(o['port'])
         if not o['no_warm']:

@@ -10,6 +10,7 @@ from tools.measures import MEASURES, MEASURE_RANGES
 from tools.geography_levels import BASE_LEVELS, EXTRA_LEVELS, SOURCES as HIERARCHY_SOURCES, pattern as level_pattern, label as area_label
 from tools.geography_levels import V4_GEOMETRY_LEVELS, area_label as v4_label, area_pattern as v4_pattern
 from tools import area_layers as AL
+from tools import districts as D
 from .bundle_v4 import validate_v4
 
 FILES={'manifest.json','rows.json','geometry.json','streets.geojson','district.geojson'}
@@ -95,7 +96,7 @@ def validate(payload):
         for measure in m['measures']:keys(measure,MEASURE_KEYS)
         if m['measures']!=MEASURES:raise ValueError('Unapproved measure catalog')
         text(m['measure_methodology'],1200)
-    if not re.fullmatch(r'co-cd005-[a-f0-9]{12}',m['snapshot']):raise ValueError('Invalid snapshot key')
+    if not re.fullmatch(D.snapshot_pattern(settings.DISTRICT),m['snapshot']):raise ValueError('Invalid snapshot key')
     if not re.fullmatch(r'[a-f0-9]{64}',m['source_sha256']):raise ValueError('Invalid source checksum')
     if m['support_likelihood']!='Not measured' or m['persistent_voices']!='Not measured':raise ValueError('Modeled supporter metrics are not part of this app')
     for k in ['label','source_name','source_date','source_date_basis','created_at','encoding','scope','vintage_validation','privacy']:text(m[k],1200)
@@ -210,7 +211,7 @@ def validate(payload):
             if filename=='streets.geojson':
                 keys(p,{'id'})
                 if not re.fullmatch(r'street-[a-f0-9]{16}',p['id']):raise ValueError('Unexpected street identifier')
-            elif p!={'id':'0805','label':'Colorado · District 05'}:raise ValueError('Unexpected district label')
+            elif p!={'id':settings.DISTRICT['district_id'],'label':settings.DISTRICT['label']}:raise ValueError('Unexpected district label')
     if version=='cu-summary-v4':validate_v4(payload,m)
     return m
 
@@ -286,7 +287,7 @@ def _lock_for(key,filename):
 
 @lru_cache(maxsize=14)
 def _load_cached(key,filename):
-    if filename not in FILES_V4 or not re.fullmatch(r'co-cd005-[a-f0-9]{12}',key):raise ValueError('Invalid snapshot resource')
+    if filename not in FILES_V4 or not re.fullmatch(D.snapshot_pattern(settings.DISTRICT),key):raise ValueError('Invalid snapshot resource')
     return json.loads((settings.DATA_DIR/'snapshots'/key/filename).read_text(encoding='utf-8'))
 
 def load(key,filename):

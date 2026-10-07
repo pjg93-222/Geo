@@ -24,7 +24,6 @@ MAX_HOUSEHOLDS = 300
 MAX_PEOPLE = 100
 MAX_PRELOAD_BATCH = 5000
 MAX_BBOX_WIDTH = 0.06
-COLORADO_BOUNDS = (-109.1, 36.9, -102.0, 41.1)
 BASES = {"registration", "residential"}
 
 
@@ -127,7 +126,7 @@ def viewport(request):
     zoom = float(request.GET["zoom"])
     if not all(math.isfinite(value) for value in (west, south, east, north, zoom)):
         raise ValueError("Coordinates and zoom must be finite")
-    bounds = COLORADO_BOUNDS
+    bounds = settings.DISTRICT["bounds"]
     if not (bounds[0] <= west < east <= bounds[2] and bounds[1] <= south < north <= bounds[3]):
         raise ValueError("Viewport is outside the local geographic scope")
     if east - west > MAX_BBOX_WIDTH + 1e-10 or north - south > MAX_BBOX_WIDTH + 1e-10 or zoom < 15:

@@ -1,4 +1,6 @@
+from django.conf import settings
 from django.urls import path, re_path
+from tools import districts as D
 from server.research import views as v
 from server.research import street_views as street
 from server.research.quality_views import credit_quality
@@ -9,13 +11,15 @@ from server.research.v3_http import error as v3_error
 from server.research.terrier_health import health as terrier_health
 from server.research import terrier_contacts, terrier_workspace
 from server.research import walk_views
+SNAPSHOT = D.snapshot_pattern(settings.DISTRICT)   # one district per process: its snapshot keys only
 v3_routes = [
     path('api/v3/contacts', terrier_contacts.contacts),
     path('api/v3/contacts/export', terrier_contacts.export_contacts),
     path('api/v3/workspace', terrier_workspace.workspace),
     path('api/v3/meta', v3a.meta),
-    re_path(r'^api/v3/areas/(?P<snap>co-cd005-[a-f0-9]{12})/(?P<basis>registration|residence)/(?P<level>block|precinct|tract|zip)\.json$', v3a.areas),
-    re_path(r'^api/v3/geometry/(?P<snap>co-cd005-[a-f0-9]{12})/(?P<level>block|precinct|tract|zip)/(?P<variant>coarse|fine)\.json$', v3a.geometry),
+    path('api/v3/districts', v3a.districts),
+    re_path(r'^api/v3/areas/(?P<snap>' + SNAPSHOT + r')/(?P<basis>registration|residence)/(?P<level>block|precinct|tract|zip)\.json$', v3a.areas),
+    re_path(r'^api/v3/geometry/(?P<snap>' + SNAPSHOT + r')/(?P<level>block|precinct|tract|zip)/(?P<variant>coarse|fine)\.json$', v3a.geometry),
     path('api/v3/people', v3p.people), path('api/v3/person', v3p.person), path('api/v3/household', v3p.household),
     path('api/v3/street', v3p.street), path('api/v3/search', v3p.search),
     path('api/v3/walk/options', walk_views.options), path('api/v3/walk/streets', walk_views.streets),

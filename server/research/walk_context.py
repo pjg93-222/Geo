@@ -3,7 +3,7 @@ homes near its runs. Computed for each response and never stored with a saved li
 
 Around the list's bbox grown by pad_m metres:
   roads      every block (road_span) with an edge in the box (R*Tree road_edge_box), one polyline each, simplified 4 m
-             in EPSG:26913 with its topology kept (Douglas-Peucker; the topology-preserving simplifier for the few lines
+             in district UTM metres with its topology kept (Douglas-Peucker; the topology-preserving simplifier for the few lines
              DP would make cross themselves or collapse). k is the kind, 'V' for a generated street or connector; n is
              the label the voter streets of that name carry, else the name key title-cased, '' when unnamed. At most
              MAX_ROADS: unnamed blocks are dropped first, shortest first.
@@ -21,6 +21,8 @@ import threading
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from django.conf import settings
+
 from . import v3_cache
 from . import walk_names as N
 from . import walk_store as W
@@ -33,7 +35,7 @@ log = logging.getLogger(__name__)
 PAD_M = 300                 # metres around the list's bbox
 MAX_ROADS = 6000
 MAX_HOMES = 8000
-ROAD_TOLERANCE_M = 4.0      # simplification of the road lines, EPSG:26913 metres
+ROAD_TOLERANCE_M = 4.0      # simplification of the road lines, district UTM metres
 DECIMALS = 6
 CHUNK = 900                 # ids per IN (...)
 PRECINCTS = ('precinct', 'fine')
@@ -182,7 +184,7 @@ def roads(conn, box, walk=None):
 
 
 def simplified(lines, tolerance_m):
-    """Each [[lon, lat], ...] line simplified by tolerance_m in EPSG:26913, at DECIMALS, without repeated points (a line
+    """Each [[lon, lat], ...] line simplified by tolerance_m in district UTM metres, at DECIMALS, without repeated points (a line
     may end up shorter than two points). Douglas-Peucker; a line it would make cross itself, or a closed one it would
     collapse, goes through the topology-preserving simplifier instead (as shapely's preserve_topology, 10 times faster)."""
     import numpy as np
@@ -193,14 +195,15 @@ def simplified(lines, tolerance_m):
         return []
     counts = np.array([len(line) for line in lines])
     flat = np.array([point[:2] for line in lines for point in line], dtype=float)
-    x, y = to_metres(flat[:, 0], flat[:, 1])
+    epsg = settings.DISTRICT['utm_epsg']
+    x, y = to_metres(flat[:, 0], flat[:, 1], epsg)
     shapes = shapely.linestrings(np.column_stack([x, y]), indices=np.repeat(np.arange(len(lines)), counts))
     simple = shapely.simplify(shapes, tolerance_m, preserve_topology=False)
     redo = ~shapely.is_simple(simple) | (shapely.is_closed(shapes) & (shapely.get_num_coordinates(simple) < 4))
     if redo.any():
         simple[redo] = shapely.simplify(shapes[redo], tolerance_m, preserve_topology=True)
     points, at = shapely.get_coordinates(simple, return_index=True)
-    lon, lat = to_lonlat(points[:, 0], points[:, 1])
+    lon, lat = to_lonlat(points[:, 0], points[:, 1], epsg)
     points = np.round(np.column_stack([lon, lat]), DECIMALS)
     keep = np.ones(len(points), dtype=bool)
     keep[1:] = (at[1:] != at[:-1]) | np.any(points[1:] != points[:-1], axis=1)

@@ -34,7 +34,7 @@ def area_focus(request):
 
 _road_blobs = {}
 _road_lock = threading.Lock()
-ATTRIBUTION = 'U.S. Census TIGER/Line 2025 · El Paso County roads'
+ATTRIBUTION = 'U.S. Census TIGER/Line 2025 · %s roads' % settings.DISTRICT['roads_label']
 
 
 @protected()

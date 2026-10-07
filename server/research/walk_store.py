@@ -8,6 +8,9 @@ the file (the checked metadata, the street directory) is cached once per file ve
 walk_store() is the gate. The file must exist and carry schema walk-v1, and its source_sha256 must be the one the
 contact, score and street stores record: the checks of terrier_contacts.verified_stores, except that a synthetic
 crosswalk ('fixture', as scoresdb accepts) passes too.
+
+A store built from the source CSV (meta person_fields = csv, the OR and CT districts, which have no score store yet)
+is checked against the contact and street stores only: it has no scores.sqlite3 to attach.
 """
 import re
 import sqlite3
@@ -78,9 +81,10 @@ def verify():
     walk = directory / 'walk.sqlite3'
     if not walk.is_file():
         raise SourceStoreError(NOT_BUILT, 503)
+    names = [name for name in SOURCES if name != 'scores' or (directory / 'scores.sqlite3').is_file()]
     try:
         stamp = tuple((stat.st_mtime_ns, stat.st_size) for stat in (
-            (directory / (name + '.sqlite3')).stat() for name in SOURCES))
+            (directory / (name + '.sqlite3')).stat() for name in names))
     except OSError as error:
         raise SourceStoreError('The local source stores are unavailable.', 503) from error
     cached = _checked
@@ -107,23 +111,26 @@ def _read(directory, stamp):
     checksum = meta.get('source_sha256')
     if not isinstance(checksum, str) or not re.fullmatch(r'[a-f0-9]{64}', checksum):
         raise SourceStoreError(UNREADABLE, 503)
+    csv_built = meta.get('person_fields') == 'csv'
+    attached = ('street',) if csv_built else ('scores', 'street')
     try:
         with closing(sqlite3.connect(_uri(paths['contacts']), uri=True, timeout=3)) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute('PRAGMA query_only=ON')
-            for name in ('scores', 'street'):
+            for name in attached:
                 connection.execute('ATTACH DATABASE ? AS ' + name, (_uri(paths[name]),))
             recorded = {name: metadata(connection, 'main' if name == 'contacts' else name)
-                        for name in ('contacts', 'scores', 'street')}
+                        for name in ('contacts', *attached)}
     except sqlite3.Error as error:
         raise SourceStoreError('The local source stores are unavailable.', 503) from error
-    if (recorded['contacts'].get('schema') != 'contacts-v1' or recorded['scores'].get('schema') != 'scores-v1'
+    if (recorded['contacts'].get('schema') != 'contacts-v1'
+            or (not csv_built and recorded['scores'].get('schema') != 'scores-v1')
             or recorded['street'].get('schema_version') != '1'):
         raise SourceStoreError('The local source stores use an unsupported schema.')
-    if recorded['scores'].get('w1', {}).get('status') not in S.W1_ACCEPTED:
+    if not csv_built and recorded['scores'].get('w1', {}).get('status') not in S.W1_ACCEPTED:
         raise SourceStoreError('The person crosswalk has not been verified against the source file.', 409)
     if not (checksum == recorded['contacts'].get('source_sha256') == recorded['street'].get('source_sha256')
-            == recorded['scores'].get('contacts_source_sha256')):
+            and (csv_built or checksum == recorded['scores'].get('contacts_source_sha256'))):
         raise SourceStoreError('The walk list data was built from a different source file than the contact stores. '
                                'Run tools/build_walk.py.', 409)
     return Info(directory, stamp, meta)

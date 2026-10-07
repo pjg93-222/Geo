@@ -21,6 +21,7 @@ from pathlib import Path
 from django.conf import settings
 
 from tools import area_layers as AL
+from tools import districts as D
 from tools.geography_levels import area_label
 
 log = logging.getLogger('cu.v3')
@@ -29,7 +30,7 @@ DERIVED_VERSION = 'v2'
 COARSE, FINE = 0.00055, 0.00006          # simplification tolerances in degrees (about 55 m and 6 m)
 COORD_DECIMALS = 5
 LEVELS = AL.LEVEL_ORDER
-SNAPSHOT_RE = re.compile(r'co-cd005-[a-f0-9]{12}')
+SNAPSHOT_RE = re.compile(D.snapshot_pattern(settings.DISTRICT))
 VALUE_DECIMALS = 8                         # values are served at 8 decimals ...
 SHARE_DECIMALS = 8
 DISPLAY_SCALES = (1, 100, 1000)            # ... and at full precision where 8 decimals would change a displayed digit

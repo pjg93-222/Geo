@@ -1,8 +1,13 @@
 import os
 from pathlib import Path
 
+from tools import districts as D
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.environ.get('CU_DATA_DIR', str(BASE_DIR / '.local'))).resolve()
+# One server process serves one district (CU_DISTRICT, default co-05): its data directory, cookies, snapshot keys and bounds.
+DISTRICT = D.get(os.environ.get('CU_DISTRICT') or None)
+LOCAL_ROOT = BASE_DIR / '.local'
+DATA_DIR = Path(os.environ.get('CU_DATA_DIR', str(D.data_dir(DISTRICT, LOCAL_ROOT)))).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SECRET_KEY = os.environ.get('CU_SECRET_KEY')
 if not SECRET_KEY:
@@ -27,7 +32,8 @@ USE_TZ = True
 TIME_ZONE = 'UTC'
 # v3 preview (127.0.0.1:8766): cookies are per host, not per port, so a second local instance would overwrite 8765's
 # session and CSRF cookies. CU_COOKIE_PREFIX (for example 'cu_v3_') gives this instance its own cookie names.
-COOKIE_PREFIX = os.environ.get('CU_COOKIE_PREFIX', '')
+# Another district's instance adds its own tag, so two districts never share a session or CSRF cookie.
+COOKIE_PREFIX = os.environ.get('CU_COOKIE_PREFIX', '') + ('' if DISTRICT['id'] == D.DEFAULT else DISTRICT['id'].replace('-', '') + '_')
 SESSION_COOKIE_NAME = COOKIE_PREFIX + 'sessionid'
 CSRF_COOKIE_NAME = COOKIE_PREFIX + 'csrftoken'
 # CU_DEMO=1 forces demo mode for the whole instance (display-only pseudonymisation; cannot be switched off from the browser).
