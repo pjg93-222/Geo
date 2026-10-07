@@ -265,6 +265,10 @@ test against 8767; take full memory dumps of the Python processes; delete .local
 3. GPU fill step SKIPPED for OR/CT.
 4. Parallel lanes use Claude Code's built-in background agents with worktree isolation (agent-manager needs tmux/WSL; DevFleet needs its own server). Same rules: one worktree per lane off claude/walk-list, report on exit, no polling.
 
+5. One server process per district APPROVED: CO 8767, OR 8775, CT 8777; a header menu jumps between them (CU_DISTRICT picks the config entry; no accounts.sqlite3 migration).
+6. Walk-list Abs wording APPROVED: OR "Abs = mail ballots (Oregon votes by mail; every recorded vote counts)"; CT "Abs = absentee or mail ballots (A or M)"; CO unchanged.
+7. Extra census.gov downloads APPROVED: OR/CT state legislative districts (SLDL, SLDU) and one TIGERweb ZCTA query per district. DONE 2026-10-07 (manifest work\geography\DOWNLOADS_2026-10-07.json, 20 rows). Notes for Phase 3b: drop CT's 09ZZZ water rows; the ZCTA files over-reach the district (keep only ZCTAs intersecting it; CT-01 has 34 Massachusetts ZCTAs); 1 OR and 5 CT ZCTAs have self-intersecting rings, so apply make_valid before any overlay.
+
 ## Open for Paul (answered above; kept for the record)
 
 1. **Weights and street-plan formulas.** Do you approve the overall weights (with a candidate: industry 30, candidate support 25, participation 25, sphere 20; without a candidate, Colorado's 40/35/25 unchanged) and the three street-plan formulas written in Phase 4E?
