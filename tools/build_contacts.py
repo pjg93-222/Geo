@@ -1,4 +1,5 @@
 """Create a local contact registry from supplied values, without enrichment."""
+import argparse
 import csv
 from contextlib import closing
 import hashlib
@@ -6,20 +7,24 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
-from tools.build_street import opaque_id
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path('C:/Users/pgoff/Downloads/statara_co_cd005_20260904.csv')
+sys.path.insert(0, str(ROOT))
+
+from tools import districts as D  # noqa: E402
+from tools.build_street import opaque_id  # noqa: E402
+
 FIELDS = ['sii_persist_id', 'sii_statara_id', 'sii_first_name', 'sii_middle_name',
           'sii_last_name', 'sii_name_suffix', 'sii_email', 'sii_email_match_level',
           'sii_phone', 'sii_phone_wireless', 'sii_phone_wireless_match_level',
           'svi_registration_address', 'sii_address']
 
 
-def build(source, directory):
+def build(source, directory, salt_path=None):
     directory = Path(directory)
-    salt = (directory/'.street-salt').read_bytes()
+    salt = (Path(salt_path) if salt_path else directory/'.street-salt').read_bytes()
     if len(salt) != 32:
         raise ValueError('Street salt unavailable')
     with source.open('rb') as stream:
@@ -95,5 +100,12 @@ def build(source, directory):
         temporary.unlink(missing_ok=True)
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--district', default=D.DEFAULT)
+    district = D.get(parser.parse_args(argv).district)
+    print(json.dumps(build(district['source_csv'], D.data_dir(district), D.street_salt(district))), flush=True)
+
+
 if __name__ == '__main__':
-    print(json.dumps(build(SOURCE, ROOT/'.local')), flush=True)
+    main()

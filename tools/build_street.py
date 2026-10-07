@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
@@ -23,10 +24,13 @@ import pandas as pd
 from shapely import prepare
 from shapely.geometry import shape
 
-from tools.ingest import BASES, classify
-
-
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tools import districts as D  # noqa: E402
+from tools.ingest import BASES, classify  # noqa: E402
+
+
 SCHEMA_VERSION = "1"
 NAME_FIELDS = ["sii_first_name", "sii_middle_name", "sii_last_name", "sii_name_suffix"]
 GEO_FIELDS = [prefix + "_" + part for prefix in BASES.values()
@@ -86,7 +90,7 @@ def read_source(path, encoding):
     }
 
 
-def load_geography(directory):
+def load_geography(directory, state="CO", cd="005"):
     directory = Path(directory)
     blocks = gpd.read_file(directory / "blocks.gpkg").to_crs(4326)
     if "geoid" not in blocks or blocks.geoid.duplicated().any():
@@ -101,7 +105,7 @@ def load_geography(directory):
     return lookup, district, {
         "block_vintage": provenance.get("block_vintage"),
         "district_vintage": provenance.get("district_vintage"),
-        "validation": "ROOFTOP; CO; source CD005; point covered by its exact official block and district",
+        "validation": "ROOFTOP; %s; source CD%s; point covered by its exact official block and district" % (state, cd),
     }
 
 
@@ -157,7 +161,8 @@ def backup_existing(database):
     return backup
 
 
-def build_database(csv_path, geography, database, encoding="cp1252", progress=None):
+def build_database(csv_path, geography, database, encoding="cp1252", progress=None, *,
+                   state="CO", cd="005", salt_file=None):
     csv_path, database = Path(csv_path).resolve(), Path(database).resolve()
     database.parent.mkdir(parents=True, exist_ok=True)
     lock = database.with_suffix(".build.lock")
@@ -172,8 +177,8 @@ def build_database(csv_path, geography, database, encoding="cp1252", progress=No
         frame, receipt = read_source(csv_path, encoding)
         if progress:
             progress({"stage": "parsed", **receipt})
-        lookup, district, geographic_metadata = load_geography(geography)
-        salt = read_or_create_salt(database.parent / ".street-salt")
+        lookup, district, geographic_metadata = load_geography(geography, state, cd)
+        salt = read_or_create_salt(Path(salt_file) if salt_file else database.parent / ".street-salt")
         fd, filename = tempfile.mkstemp(prefix=".street-build-", suffix=".sqlite3", dir=database.parent)
         os.close(fd)
         temporary = Path(filename)
@@ -184,7 +189,7 @@ def build_database(csv_path, geography, database, encoding="cp1252", progress=No
             connection.execute("PRAGMA cache_size=-65536")
             create_schema(connection)
             for basis, prefix in BASES.items():
-                status, _, _, _ = classify(frame, prefix, lookup, district)
+                status, _, _, _ = classify(frame, prefix, lookup, district, state, cd)
                 mapped = frame.loc[status == "mapped"]
                 households, people = {}, []
                 missing_address = 0
@@ -248,16 +253,32 @@ def build_database(csv_path, geography, database, encoding="cp1252", progress=No
         lock.unlink(missing_ok=True)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--csv", required=True, type=Path)
-    parser.add_argument("--geography", required=True, type=Path)
-    parser.add_argument("--database", type=Path,
-                        default=Path(os.environ.get("CU_DATA_DIR", ROOT / ".local")) / "street.sqlite3")
+    parser.add_argument("--district", default=D.DEFAULT)
+    parser.add_argument("--csv", type=Path, help="default: the district's source file")
+    parser.add_argument("--geography", type=Path, help="default: the district's geography folder")
+    parser.add_argument("--database", type=Path, help="default: street.sqlite3 in the district data directory")
+    parser.add_argument("--salt-file", type=Path, help="default: the district's street salt")
     parser.add_argument("--encoding", default="cp1252")
-    args = parser.parse_args()
-    receipt = build_database(args.csv, args.geography, args.database, args.encoding,
-                             progress=lambda result: print(json.dumps(result), flush=True))
+    args = parser.parse_args(argv)
+    district = D.get(args.district)
+    csv_path = args.csv or district["source_csv"]
+    geography = args.geography or district["geography"]
+    data_dir = D.data_dir(district)
+    if district["id"] == D.DEFAULT:
+        data_dir = Path(os.environ.get("CU_DATA_DIR", data_dir))
+    database = args.database or data_dir / "street.sqlite3"
+    salt_file = args.salt_file or D.street_salt(district)
+    with Path(csv_path).open("rb") as source:
+        if hashlib.file_digest(source, "sha256").hexdigest() != district["sha256"]:
+            parser.error("%s is not the source file of %s" % (csv_path, district["id"]))
+    if district["street_salt"] and not args.salt_file and not salt_file.is_file():
+        parser.error("The street salt of %s is missing (%s); a new one would re-key every person id"
+                     % (district["id"], salt_file))
+    receipt = build_database(csv_path, geography, database, args.encoding,
+                             progress=lambda result: print(json.dumps(result), flush=True),
+                             state=district["state"], cd=district["cd"], salt_file=salt_file)
     print(json.dumps({"stage": "complete", **receipt}), flush=True)
 
 
