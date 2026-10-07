@@ -1,0 +1,863 @@
+{
+ "endpoints": {
+  "areas_registration_block": {
+   "bytes": 3529267,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/areas/{snapshot}/registration/block.json",
+   "sha256": "ca6d90f9ef5c6dacf0b6834bb644dac98dc02fe57189cc497312c4d89ba61a19",
+   "status": 200
+  },
+  "areas_registration_precinct": {
+   "bytes": 165130,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/areas/{snapshot}/registration/precinct.json",
+   "sha256": "93478e8a1aefbdfbe0d6461b17fd82ac97171aea74c9ce1ddc1dd132fc5481c4",
+   "status": 200
+  },
+  "areas_registration_tract": {
+   "bytes": 84707,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/areas/{snapshot}/registration/tract.json",
+   "sha256": "4c0963c6d44337aaf7c737c06851b5a52715fe3b31f8165da2f48c91f8cfe0dc",
+   "status": 200
+  },
+  "areas_registration_zip": {
+   "bytes": 20401,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/areas/{snapshot}/registration/zip.json",
+   "sha256": "845e26aabfab643bc07180411e7b91d1506e2dd784329edf47eb900a7c2a15d1",
+   "status": 200
+  },
+  "areas_residence_tract": {
+   "bytes": 94187,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/areas/{snapshot}/residence/tract.json",
+   "sha256": "502cf9247823ef68aafd5653cc691162efc1b3ab6242d68e7781586dc148fdb7",
+   "status": 200
+  },
+  "areas_residence_zip": {
+   "bytes": 36078,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/areas/{snapshot}/residence/zip.json",
+   "sha256": "0460c8dd0b8d40490de3747f42020fa621130dd0f26863bf296cca6d532fdd9b",
+   "status": 200
+  },
+  "contacts_export_csv": {
+   "bytes": 103437,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/contacts/export?q=Maple&channel=email",
+   "sha256": "e477d7daf9d0a4bb9d210e0b8c16753522dfd5e9b004be6de1e5108ad57f5f14",
+   "status": 200
+  },
+  "contacts_filtered_page": {
+   "bytes": 16452,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/contacts?q=Maple&channel=email",
+   "sha256": "01767ea9c134cf940f8b2c912f4cb0254de51f31527e308b2ecc75f750da0722",
+   "status": 200
+  },
+  "contacts_first_page": {
+   "bytes": 16090,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/contacts",
+   "sha256": "f7c02b7b12fbec9895ac54dc5f62bba214cc3cd0775988987a259b6ed33ed354",
+   "status": 200
+  },
+  "criteria_csv": {
+   "bytes": 59881,
+   "content_type": "text/csv",
+   "method": "GET",
+   "path": "/api/criteria?format=csv",
+   "sha256": "946192af4619b5739da4ecf13ab603e998b6ad6dac46f961181abcecc113f43e",
+   "status": 200
+  },
+  "criteria_json": {
+   "bytes": 7053,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/criteria",
+   "sha256": "2277a8d462a9df0147e236f97b148105c30374141a182177eb2e13f0811c6ebb",
+   "status": 200
+  },
+  "geometry_block_coarse": {
+   "bytes": 2496526,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/block/coarse.json",
+   "sha256": "7a232f36d52c620a942cc76759964ad18d190f2ab01d1d32754ef583e17f882f",
+   "status": 200
+  },
+  "geometry_block_fine": {
+   "bytes": 3774775,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/block/fine.json",
+   "sha256": "9cbbd5d34f226b4b3921791ce276c60ab9560a5b989409e133f4db3f8ea3e997",
+   "status": 200
+  },
+  "geometry_district": {
+   "bytes": 48555,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/geometry?level=district",
+   "sha256": "1778e823c953276db110c39151816473e7aad9cb7cdfcc1658b230a863db8af0",
+   "status": 200
+  },
+  "geometry_precinct_coarse": {
+   "bytes": 588373,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/precinct/coarse.json",
+   "sha256": "db37672ab5bdc55074758947bf2415f9e81588d20e470f25a32603529b53d76b",
+   "status": 200
+  },
+  "geometry_precinct_fine": {
+   "bytes": 914362,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/precinct/fine.json",
+   "sha256": "bb28b467a629b3d1ea798a5c4d5482041421ffe1a6586cf3492acf4944b21312",
+   "status": 200
+  },
+  "geometry_tract_coarse": {
+   "bytes": 563855,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/tract/coarse.json",
+   "sha256": "8b1c01e3a04910d467b762f3a9d926855d8d770b5ea5b7c15e3f6cfb99c2e85a",
+   "status": 200
+  },
+  "geometry_tract_fine": {
+   "bytes": 820062,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/tract/fine.json",
+   "sha256": "d95f47805bc61f4fc7fb590b97fc27cd15800dc7b8577e7c199a74209b7b97d6",
+   "status": 200
+  },
+  "geometry_zip_coarse": {
+   "bytes": 85167,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/zip/coarse.json",
+   "sha256": "4a31f272cd998e2fc2678dc6ddc404bc36790d47a1bb93a87f5200bbd09400bf",
+   "status": 200
+  },
+  "geometry_zip_fine": {
+   "bytes": 255742,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/geometry/{snapshot}/zip/fine.json",
+   "sha256": "bd46fe57c952c02828118aa64161a26583bf2add61d716281ac391f53e9e85ce",
+   "status": 200
+  },
+  "health_api": {
+   "bytes": 43,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/health",
+   "sha256": "3fc2927b9e9f684a99489649054de4546232b3966be0805a2a9f4e70b524eabc",
+   "status": 200
+  },
+  "health_terrier": {
+   "bytes": 152,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/_terrier/health",
+   "sha256": "7a511898e802f4d8cb41f14954c770f9e2927596813d4cfc23d7947a7612dfc0",
+   "status": 200
+  },
+  "household_popover": {
+   "bytes": 334,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/household?id={household_id}&basis=registration",
+   "sha256": "a9787820b92c26ad2603df7a38111b1262b11517ce82c8440bd9e1f5c8749b1d",
+   "status": 200
+  },
+  "meta": {
+   "bytes": 3130,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/meta",
+   "sha256": "1e32ed47681e7cb4c2d3aac0653fdaa143d3b65a100e44d058b80a5f04d8897b",
+   "status": 200
+  },
+  "method_snapshots": {
+   "bytes": 77795,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/snapshots",
+   "sha256": "a78d16a2a0e1327a22afd1044c4114646f47fd2c630d06f8181e08dba0007e3a",
+   "status": 200
+  },
+  "people_cursor_page": {
+   "bytes": 18469,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/people?after=50",
+   "sha256": "7c1d80cba536ef3af513b86c59a29830259ccd4f9c01e4512787d05e860c5a21",
+   "status": 200
+  },
+  "people_filtered_page": {
+   "bytes": 18520,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/people?reg=D&grade=AB&sort=cua",
+   "sha256": "ec932708c131748bd86b92c07cc83aa17a112ca2a2b46c4c0c51b21a9d2c2b32",
+   "status": 200
+  },
+  "people_first_page": {
+   "bytes": 18525,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/people",
+   "sha256": "c980d63a11c7eaa6a100b029071537a4eb563ab987e3c7ac530c6afa7975760a",
+   "status": 200
+  },
+  "people_within_page": {
+   "bytes": 18637,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/people?reg=U&sort=within",
+   "sha256": "b0f9087fd76542dd8d2bd21455b5ae290b1b45a449fc0ff40833d02bc7170eee",
+   "status": 200
+  },
+  "person_profile": {
+   "bytes": 8484,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/person?id={person_id}",
+   "sha256": "ee98d677c6687c7257b13d73e7096e28de0992c201c62f1b82e38ac809193824",
+   "status": 200
+  },
+  "roads_view": {
+   "bytes": 326557,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/roads?bbox=-104.83,38.82,-104.80,38.85&zoom=14",
+   "sha256": "189308ed9b3f5c302d0327a25e1465a64744591bf413144c30d51d38fb5db6d6",
+   "status": 200
+  },
+  "street_view": {
+   "bytes": 509011,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/street?basis=registration&bbox=-104.830,38.825,-104.800,38.850&zoom=16",
+   "sha256": "babcaca2b4f43c943477eca053862d203e79c84c33ede65199a21c7b7ab50e58",
+   "status": 200
+  },
+  "summaries_count_json": {
+   "bytes": 13062,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/summaries?basis=registration&level=zcta&metric=count&scale=raw",
+   "sha256": "b0a22b8e5b3ec0a9c3b4c3090a8f769c6966644fcfe7d8cd86329fc586e364c7",
+   "status": 200
+  },
+  "summaries_index_csv": {
+   "bytes": 7782,
+   "content_type": "text/csv; charset=utf-8",
+   "method": "GET",
+   "path": "/api/summaries?basis=registration&level=zcta&metric=area_participation&scale=raw&format=csv",
+   "sha256": "321f60415bb94d74a337956fa5e95767fbaf463e8c10a17a1771a0820f04a13a",
+   "status": 200
+  },
+  "walk_list_a": {
+   "bytes": 138415,
+   "content_type": "application/json",
+   "method": "GET",
+   "normalised": [
+    "generated_on"
+   ],
+   "path": "/api/v3/walk/list?streets=39:both",
+   "sha256": "9a9386b028eab0cde1a3ca825115d560026262a7b87ae1507942c2446cd9eee8",
+   "status": 200
+  },
+  "walk_list_b": {
+   "bytes": 223655,
+   "content_type": "application/json",
+   "method": "GET",
+   "normalised": [
+    "generated_on"
+   ],
+   "path": "/api/v3/walk/list?streets=377:even,1236:odd,6435:both&precinct=5102221155",
+   "sha256": "063d05433b2a4742900897fa653675e12922befd9741eb0c5bd0f7b22bade3f8",
+   "status": 200
+  },
+  "walk_list_c": {
+   "bytes": 1810261,
+   "content_type": "application/json",
+   "method": "GET",
+   "normalised": [
+    "generated_on"
+   ],
+   "path": "/api/v3/walk/list?streets=58:both,135:both,195:both",
+   "sha256": "75c6ea2f06dab227e83958a54a54a4525ed10b4c83f3dd41bbe873aa02f97e42",
+   "status": 200
+  },
+  "walk_options_precinct": {
+   "bytes": 24478,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/walk/options?level=precinct",
+   "sha256": "a285fabb193678d0f6af7efff01bee209f270c5a537478d438f5441eb43f1633",
+   "status": 200
+  },
+  "walk_options_senate": {
+   "bytes": 360,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/walk/options?level=ss",
+   "sha256": "274ae72eebf3e9ea97d0ba6820dc96df3457a70ecb561a1aaa511e1321423047",
+   "status": 200
+  },
+  "walk_overview_precinct": {
+   "bytes": 24103,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/walk/overview?precinct=5102221155",
+   "sha256": "7c80b7d1f58397e7f8be84ec17871f291abe326bb25b94542046ca8a57ca5e8f",
+   "status": 200
+  },
+  "walk_streets_precinct": {
+   "bytes": 3590,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/walk/streets?precinct=5102221155",
+   "sha256": "10e0513707a43c1019c5051afbc74ab35a9a556d9bed3df4af957b1fd6530050",
+   "status": 200
+  },
+  "walk_streets_search": {
+   "bytes": 142,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/walk/streets?q=Abrams",
+   "sha256": "2957bec2cf463c523141ccc169893fd300fe2bafc9fa89cdc4d3b2df0bac8bca",
+   "status": 200
+  },
+  "workspace": {
+   "bytes": 7844,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/workspace",
+   "sha256": "e4d75d56a4f37e84b0da660b18d5690f74d6e51c93e54f4b8a21d117f29e154d",
+   "status": 200
+  }
+ },
+ "files": {
+  "rowfw": {
+   "PLAN_rowfw-1.0.0.md": "f1ffa1a097605c781e8b6eaa65641308e7ec192f983de96f01b13db7d3da5e3a",
+   "area_scores_rowfw-1.0.0.csv": "13ce7884ac6dfab176d191fc396087da73ca31c68ace3a0f6e55f37939974e98",
+   "criteria_rowfw-1.0.0.json": "114a051cdbf2ed00fccb94ab44551a1592e570354c06c66d9dac7eacd0aeb90b",
+   "framework_config.json": "28e8d53db7e258d60d9eba87d0e186e877ac3cb4f4b0e6863e53d72b03cfc95a",
+   "household_scores_rowfw-1.0.0.manifest.json": "3c34ef85d27cd55a7b4636bcdc833a069d985a5b8098fa7ce86ec26c72b160eb",
+   "household_scores_rowfw-1.0.0.parquet": "dbc46ea3ce6c74efc9ba6944e12f14b6484234bd6ba6d61e7ac580ed6730504c",
+   "profiles_rowfw-1.0.0.manifest.json": "ed0bf35a603bd6045cf2bd3e6f4e195363cac54e04a5a408633c2d363fb2d1ed",
+   "profiles_rowfw-1.0.0.parquet": "7e76c6ff0e9c2c0b2f28dceac7cd7d1b0c197ca83fb7af39d8b28b7ae4e9b0e7",
+   "row_scores_rowfw-1.0.0.manifest.json": "1b6ea92ccf0ed017d07be72af06360a569757d322088cbb525cd498b3c6c2fde",
+   "row_scores_rowfw-1.0.0.parquet": "89f760eaf1c6dbd1f67d0ec903cc99271775b1a3c3db335174f168abfc820ced",
+   "summaries/area_suppressed_ids.csv": "cf9217e948d4a4d79fc6f320439fde72cc441247e588e99cbac2313a2dad433e"
+  },
+  "snapshots": {
+   "co-cd005-6cf898496ca2": {
+    "core": {
+     "adjacency.json": "30bd2a0b69554ae42502a25648c820b3b9e9120f2a556d24cfa43eff1210c6f8",
+     "area_indices.json": "63c5d82ef50b8d17a5c6618ddf96393430ab120a1a84a68e25155d15f406bb59",
+     "district.geojson": "b96745b3d669190341b55d8735670ff8a10411d5d7466f2a7cffebf55f23db02",
+     "geometry.json": "e7616a05ff1114bf91f756b984f2b7c524f4623e637d2c1fbab10a66758b7f59",
+     "manifest.json": "1d8317210aca6e65ccfda652de358d24fa842160e708e93ead515e5d7f19f3e0",
+     "rows.json": "b1db4ab59c1505a6861c94aa05f0365980afec4f89671f43aa9632fc37bdc523",
+     "streets.geojson": "3860cb66fa99d67eafec30ef10e8aa50a5da1862bf0df49cf4c209f21d785fef"
+    },
+    "derived_cache": {
+     "derived/v2_areas_registration_block.json": "ca6d90f9ef5c6dacf0b6834bb644dac98dc02fe57189cc497312c4d89ba61a19",
+     "derived/v2_areas_registration_block.json.gz": "5bd602d017d92ae7bb0e0aa3522f5405d5dd0997db20d3434b63e657ada3afbc",
+     "derived/v2_areas_registration_precinct.json": "93478e8a1aefbdfbe0d6461b17fd82ac97171aea74c9ce1ddc1dd132fc5481c4",
+     "derived/v2_areas_registration_precinct.json.gz": "b9213373768fc0a145660aaaa78ce192d88bb4fa3586fa31c87a03ced2a3cbf9",
+     "derived/v2_areas_registration_tract.json": "4c0963c6d44337aaf7c737c06851b5a52715fe3b31f8165da2f48c91f8cfe0dc",
+     "derived/v2_areas_registration_tract.json.gz": "5a1014eecc2c63423d16e8725efbbe9342fb1325e2f087002ca606d465da1f43",
+     "derived/v2_areas_registration_zip.json": "845e26aabfab643bc07180411e7b91d1506e2dd784329edf47eb900a7c2a15d1",
+     "derived/v2_areas_registration_zip.json.gz": "8d8a9d280c851eddad12dfa9aef1a214a735238a17863388f94bf66df42ce5a4",
+     "derived/v2_areas_residence_tract.json": "502cf9247823ef68aafd5653cc691162efc1b3ab6242d68e7781586dc148fdb7",
+     "derived/v2_areas_residence_tract.json.gz": "9a6f00c7628587cb8c2439cd5c571463595c1e0a6eced990fa21dd91424e35d9",
+     "derived/v2_areas_residence_zip.json": "0460c8dd0b8d40490de3747f42020fa621130dd0f26863bf296cca6d532fdd9b",
+     "derived/v2_areas_residence_zip.json.gz": "e169fd9b8ab746d3f626ca91860ad918d8f83f2916cbca6b915ad045a085ad0f",
+     "derived/v2_geometry_block_coarse.json": "7a232f36d52c620a942cc76759964ad18d190f2ab01d1d32754ef583e17f882f",
+     "derived/v2_geometry_block_coarse.json.gz": "887383594916f3d8875a1a8ad81931d2a792b02f121aca1bfb55233aae1efbe9",
+     "derived/v2_geometry_block_fine.json": "9cbbd5d34f226b4b3921791ce276c60ab9560a5b989409e133f4db3f8ea3e997",
+     "derived/v2_geometry_block_fine.json.gz": "248be03ea5cb10a7c7fa76b7fbf949ccc85e1eefc3d250529a4c2cd66a874798",
+     "derived/v2_geometry_precinct_coarse.json": "db37672ab5bdc55074758947bf2415f9e81588d20e470f25a32603529b53d76b",
+     "derived/v2_geometry_precinct_coarse.json.gz": "7b814fe33f2c2230a61eab8688b844d110c5acd2753849a63d95e845a30de9d6",
+     "derived/v2_geometry_precinct_fine.json": "bb28b467a629b3d1ea798a5c4d5482041421ffe1a6586cf3492acf4944b21312",
+     "derived/v2_geometry_precinct_fine.json.gz": "50669c234d6e167378dafbf32e0d9a74b0efd783e72f1c939d45821396d8b72f",
+     "derived/v2_geometry_tract_coarse.json": "8b1c01e3a04910d467b762f3a9d926855d8d770b5ea5b7c15e3f6cfb99c2e85a",
+     "derived/v2_geometry_tract_coarse.json.gz": "faf16afabd0085d86bbc6a42beea117e407f003894d415c676c42b6891a9fa0b",
+     "derived/v2_geometry_tract_fine.json": "d95f47805bc61f4fc7fb590b97fc27cd15800dc7b8577e7c199a74209b7b97d6",
+     "derived/v2_geometry_tract_fine.json.gz": "ee58c3c878c6d345a8006870ced1649921deda169fa372187af19391c4cdc298",
+     "derived/v2_geometry_zip_coarse.json": "4a31f272cd998e2fc2678dc6ddc404bc36790d47a1bb93a87f5200bbd09400bf",
+     "derived/v2_geometry_zip_coarse.json.gz": "e52c95ced4fc5909d1a1f38231a59df3e46464531ba7a7acd0a6c05b540b6b94",
+     "derived/v2_geometry_zip_fine.json": "bd46fe57c952c02828118aa64161a26583bf2add61d716281ac391f53e9e85ce",
+     "derived/v2_geometry_zip_fine.json.gz": "4ec307e23bc7b1f823d4d29839e882b7ad0632b1dda821130a83621c81f98325",
+     "derived/v2_meta.json": "a7f9a198d455a05a61191fe3e9df12a4d97ce7a4896e5b39cfbe5c76630aeb61",
+     "derived/v2_meta.json.gz": "efeb60e654caa6dba24f4ac1f9c433d591182351744bb295d6e32ebff7bb3b44"
+    }
+   },
+   "co-cd005-b0edb0f04d6c": {
+    "core": {
+     "district.geojson": "b96745b3d669190341b55d8735670ff8a10411d5d7466f2a7cffebf55f23db02",
+     "geometry.json": "fdc96ab5efa6efff3cef436ba47a6128cb655e67d0c599a89f27920ea64aa90f",
+     "manifest.json": "3c6253fb695c29f18349dd2216beaeb7ae851ec8aff068776e93e9411ea5d482",
+     "rows.json": "b1db4ab59c1505a6861c94aa05f0365980afec4f89671f43aa9632fc37bdc523",
+     "streets.geojson": "3860cb66fa99d67eafec30ef10e8aa50a5da1862bf0df49cf4c209f21d785fef"
+    },
+    "derived_cache": {}
+   }
+  },
+  "walk_salt": {
+   "sha256": "9b204e843a0f2d1fc6092e787b8b97fa412ed5a6bfaf6f7480a6c49f95af1ba8"
+  }
+ },
+ "normalised": [
+  {
+   "endpoint_prefix": "walk_list_",
+   "field": "generated_on",
+   "reason": "the day the list was built (date.today() in walk_views.plan_payload)"
+  }
+ ],
+ "notes": [
+  "Hashes, counts and templates only; raw bodies stay under .local/baseline-co/golden (gitignored).",
+  "accounts.sqlite3 is read-write user state (saved walk lists, results): a legitimate edit shows as a diff.",
+  "derived_cache files of a snapshot are rebuilt by the server on first use.",
+  "spare-server start retries: spare server start 1 of 3 failed: exited early with code 3221227274 (0xc000070a); see C:\\Users\\pgoff\\AppData\\Local\\Temp\\claude\\C--Users-pgoff-OneDrive-Desktop-Melange-Systems\\6a9a62a7-b92b-4112-9f5f-1785563e0cec\\scratchpad\\phase0\\server-8769-run1-pass1-try1.err.log",
+  "The walk-list PDF is drawn in the browser (frontend/src/v3/lib/walkPdf.ts); the server has no PDF endpoint, so the walk_list_* bodies (its only input) are recorded, not PDF bytes."
+ ],
+ "recorded_utc": "2026-10-07T05:02:18+00:00",
+ "repo_head": "8c7a8178fecf6b14be4b50c1f72cde49d3645fe3",
+ "schema": "co-baseline-1",
+ "snapshot": "co-cd005-6cf898496ca2",
+ "spare_server": {
+  "pids": [
+   {
+    "launcher": 30276,
+    "serving": 65588
+   },
+   {
+    "launcher": 85304,
+    "serving": 43160
+   }
+  ],
+  "port": 8769
+ },
+ "stores": {
+  "accounts": {
+   "objects": 42,
+   "schema_sha256": "d9013705b259e73d16c510f6cdc66116f12bb53beb522bbc884fbbc3b00a29cc",
+   "tables": {
+    "auth_group": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "auth_group_permissions": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "auth_permission": {
+     "columns": 4,
+     "order": "primary key",
+     "rows": 48,
+     "sha256": "3b28cd6e98548565a2438035003df2086cbea6f1aabedd40d3a5c9ea74bd2e70"
+    },
+    "auth_user": {
+     "columns": 11,
+     "order": "primary key",
+     "rows": 1,
+     "sha256": "58e209d961a5681e5e391a4cce0dcf7cb386e5022a178d1546a2da1afbf68432"
+    },
+    "auth_user_groups": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "auth_user_user_permissions": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "django_content_type": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 12,
+     "sha256": "19ea1963ff6de343b0967627ffd6fcdafa5b1378f0f7e3cfd7542b7faee490df"
+    },
+    "django_migrations": {
+     "columns": 4,
+     "order": "primary key",
+     "rows": 17,
+     "sha256": "32cf71fae787af379b3e57249190ddcb6d05cd115ae77b1d2e31b36310e40764"
+    },
+    "django_session": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "research_auditevent": {
+     "columns": 5,
+     "order": "primary key",
+     "rows": 3,
+     "sha256": "4cd28da44e6eb35d9ac441d4a10e5ec9acb2df1daa07fd721451167fa60caa62"
+    },
+    "research_disposition": {
+     "columns": 7,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "research_invitation": {
+     "columns": 7,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "research_loginattempt": {
+     "columns": 4,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "research_savedview": {
+     "columns": 5,
+     "order": "primary key",
+     "rows": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "research_snapshot": {
+     "columns": 5,
+     "order": "primary key",
+     "rows": 2,
+     "sha256": "a1597d32b7b649e57b5b9c482ed70932facedc4704fd828911592d491dc4163d"
+    },
+    "research_walklist": {
+     "columns": 9,
+     "order": "primary key",
+     "rows": 10,
+     "sha256": "4b95fb7046ba44c8ea308ca5cde3d08589d86fcb1c55fcc33124bd4bcfdd759d"
+    },
+    "sqlite_sequence": {
+     "columns": 2,
+     "order": "all columns",
+     "rows": 8,
+     "sha256": "07b189e7b098f62b56e9e7d20e25d44bfaa1bbbdff998cb59dc086ce8424119d"
+    }
+   },
+   "user_version": 0
+  },
+  "contacts": {
+   "objects": 10,
+   "schema_sha256": "5864fd536ea78cddd672be85ccd0964194d6e3e3d459be31c054bef646cd7d8f",
+   "tables": {
+    "contacts": {
+     "columns": 9,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "9931eca8422ed3e86d8da016e8df0d9a11a7eb9277e30a390980c389886c4f78"
+    },
+    "metadata": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 3,
+     "sha256": "96d6bd9025572362192389d8d8ca3e2e55e6f510675d84d1efc015b2050e0689"
+    },
+    "search": {
+     "columns": 4,
+     "order": "rowid",
+     "rows": 491308,
+     "sha256": "b44f436d6ab75b863daaf6c5128a41df3a1502df25b71d6414b4ab51370098ab",
+     "virtual": true
+    },
+    "search_config": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 1,
+     "sha256": "ba1a0d18b803d7c07e5da8383a6b41942a58e26d2716125a9ac1494419385671"
+    },
+    "search_data": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 8755,
+     "sha256": "541f696bac661781717a53e8ae3a12d8f4353c6260ac3c43fdf2287826084c03"
+    },
+    "search_docsize": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "af3db0999bbc73ea098ba5e28ff7a06fb1c9c0f6ee4f95890e073acb41e7a660"
+    },
+    "search_idx": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 8967,
+     "sha256": "2d4eedfd623b4bfdca91908e99cb502d7525cbe58f385e420e334f009d2d485a"
+    }
+   },
+   "user_version": 0
+  },
+  "roads": {
+   "objects": 5,
+   "schema_sha256": "79fc4563318886411f0046b52d43b26d403d27a046a4a38f8a286579e1f3f4b8",
+   "tables": {
+    "extents": {
+     "columns": 5,
+     "order": "rowid",
+     "rows": 25453,
+     "sha256": "78365a7570aea9dbebc6008e57f57a18d76630afe4d82d0bf274e363856e3904",
+     "virtual": true
+    },
+    "extents_node": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 786,
+     "sha256": "042aa4e925aebe97f80003e45e48a6ea27c03395340504b9e9c61b972bf6ccc1"
+    },
+    "extents_parent": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 785,
+     "sha256": "164a41dd03675d8e9738065da09b21244921abb038daa8c9febd15b91750f0f1"
+    },
+    "extents_rowid": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 25453,
+     "sha256": "198e3204d55f5e97d5162831e7bd1ae09acfe907f0a747aaeb522b6fc275ed05"
+    },
+    "roads": {
+     "columns": 4,
+     "order": "primary key",
+     "rows": 25453,
+     "sha256": "52a491b39b916d8768d7be0b6814b839f0c6671c2bbdcceae1245dc0a787af60"
+    }
+   },
+   "user_version": 0
+  },
+  "scores": {
+   "objects": 31,
+   "schema_sha256": "7feee718c648398a8323adad5bc98143deef3286426c60401a0a041cb3f32a2d",
+   "tables": {
+    "demo_name": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "0dad15c368b0b3e30a6b78d39bbf7b43a4693e1b66bbdfa4fd36cac2cac3aa13"
+    },
+    "demo_search": {
+     "columns": 1,
+     "order": "rowid",
+     "rows": 491308,
+     "sha256": "6d732afb662e267c9076e7475b6db1c7d37637d00332c0e3a718b911a339d4c9",
+     "virtual": true
+    },
+    "demo_search_config": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 1,
+     "sha256": "ba1a0d18b803d7c07e5da8383a6b41942a58e26d2716125a9ac1494419385671"
+    },
+    "demo_search_data": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 900,
+     "sha256": "559839c5186a09fa9698d5edf0dfab054ff446568d2dc54f2abc6222d1e1ff43"
+    },
+    "demo_search_docsize": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "4ec835e613d8b615d9018d392d720f627303f0ba6852ee7637abec142ee97f6f"
+    },
+    "demo_search_idx": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 1025,
+     "sha256": "5b7394ea20b33e670648e6aab91d853f51f581a8f79641f0603113990dc158b6"
+    },
+    "evidence": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "ddb16bc3731e1f1f8a2b0bbe7c234c76d7434935bb38c0f8c1121a0407467386"
+    },
+    "household": {
+     "columns": 14,
+     "order": "primary key",
+     "rows": 343000,
+     "sha256": "35faf5948c145817d577311ba080c8e0c38221c8a77e125810206062eaea6bae"
+    },
+    "list_column": {
+     "columns": 4,
+     "order": "primary key",
+     "rows": 15,
+     "sha256": "ca1d5bef50f9472df89a8ee3ba65ee8731c685cea96e5251ceb2098e466a3991"
+    },
+    "list_dict": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 6,
+     "sha256": "18ad784f52e09a399c5e0d5a4544ba26a66930e1d61092f25d14e65d2c6c9afb"
+    },
+    "metadata": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 22,
+     "sha256": "2ae8287d101065d9ab072ea53c762ecbb6ef92c37b3eacf6967eaf07ab2a19da"
+    },
+    "person": {
+     "columns": 64,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "2aababeb9c47171bc2dfb6452c606905624170baf3f78468cc3bd81443432d0b"
+    },
+    "sqlite_stat1": {
+     "columns": 3,
+     "order": "all columns",
+     "rows": 25,
+     "sha256": "38dc7996ee7c4c48ab444b133267b78e6804d73ac4aa7755942016f2b9379c01"
+    },
+    "street_household": {
+     "columns": 7,
+     "order": "primary key",
+     "rows": 299800,
+     "sha256": "de98050a32b0661d31aafa0223d88aeb40ce1e81452ad5548a50b824fb043b35"
+    },
+    "value_dict": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 998,
+     "sha256": "a102162d01378cc6d51fd8ff8ad39f03d80be67627d29a9b582d86f7af87b9ec"
+    }
+   },
+   "user_version": 0
+  },
+  "street": {
+   "objects": 10,
+   "schema_sha256": "273aa49b5512e240ed92c60dac061022d5cc63b14b663f3d29080cd79345aa48",
+   "tables": {
+    "households": {
+     "columns": 6,
+     "order": "primary key",
+     "rows": 596307,
+     "sha256": "ea76d67047ee108830cd6a67a89b47c85ddf9f1dbad25fc5a2c3ba68b4af4a23"
+    },
+    "metadata": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 9,
+     "sha256": "04cdc1b4f6f936cfea807894b8327eea0dc16b9fcaaa9ac9612b556debfee0a8"
+    },
+    "people": {
+     "columns": 3,
+     "order": "primary key",
+     "rows": 871024,
+     "sha256": "7d5f9ea7700fa4b1cfe73909e6098801fa8fde6c9dc523189171dff49b1dd6f8"
+    }
+   },
+   "user_version": 0
+  },
+  "walk": {
+   "objects": 20,
+   "schema_sha256": "864d92ee1f0f0e954083c29643550870492a29bbddf564e3343c9276d1e013f9",
+   "tables": {
+    "combo": {
+     "columns": 6,
+     "order": "all columns",
+     "rows": 11809,
+     "sha256": "b7ba07111d657768d4512e5e61b740d1c8ae4d830ae37002d8485be70b5d618f"
+    },
+    "meta": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 9,
+     "sha256": "fd1e8c86e035c3a07d5cf7bbd99f37149c710476396c7ee623f9a9959e3e3d0a"
+    },
+    "person": {
+     "columns": 21,
+     "order": "primary key",
+     "rows": 491308,
+     "sha256": "ba67d9828faf6d0ad0bb99d5a253c7720cf9db09389848624c3e08c1728a74f2"
+    },
+    "road_edge": {
+     "columns": 9,
+     "order": "primary key",
+     "rows": 70654,
+     "sha256": "3ed97323b92fe01d788d777088560609ae15c83abee1b63372ea89f20d00e7fa"
+    },
+    "road_edge_box": {
+     "columns": 5,
+     "order": "rowid",
+     "rows": 70654,
+     "sha256": "3ae53bae03bb6aaead562047642e8f25750e0889767199333c95d9466a968ed1",
+     "virtual": true
+    },
+    "road_edge_box_node": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 2549,
+     "sha256": "53ef251c352b0f2a664328a02392ea1b3b08b322e9be064eff012fa29183efbc"
+    },
+    "road_edge_box_parent": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 2548,
+     "sha256": "f5a8ffe8844d8bc2eb376391c0047cc3579c77658ee0323a14deab3ec4e6282e"
+    },
+    "road_edge_box_rowid": {
+     "columns": 2,
+     "order": "primary key",
+     "rows": 70654,
+     "sha256": "645abf55fa97308224722dd7fc2f2cad23873705e8f6775acded55fa1eba9129"
+    },
+    "road_node": {
+     "columns": 6,
+     "order": "primary key",
+     "rows": 55156,
+     "sha256": "f55fd727e6f0b15ff1f5b6817b117111a091f02d389024c3a33e119e26ebe4f8"
+    },
+    "road_span": {
+     "columns": 10,
+     "order": "primary key",
+     "rows": 58465,
+     "sha256": "4ec1b6e28a7afe413169a3ec291937ad70e7323c66881e91b376b6a52814c634"
+    },
+    "stop": {
+     "columns": 11,
+     "order": "primary key",
+     "rows": 207198,
+     "sha256": "df38f55a897c458481991ef4b227286a0e9c1b8de2515dc0262e702b1b041360"
+    },
+    "street": {
+     "columns": 5,
+     "order": "primary key",
+     "rows": 10319,
+     "sha256": "f080bfdbfc1e35a8a0275d303f7c0b4e2e7fc98ad5aaee1b773fa88a0ca0c23e"
+    }
+   },
+   "user_version": 0
+  }
+ }
+}
