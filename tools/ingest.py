@@ -40,14 +40,14 @@ def read_profiles(path, encoding='cp1252', extra_fields=()):
     for key in conflicts:records.pop(key,None)
     return pd.DataFrame(records.values(),columns=fields),{'input_rows':rows,'column_count':len(header),'duplicate_rows_collapsed':duplicates,'conflicting_ids_quarantined':len(conflicts),'accepted_unique_profiles':len(records),'malformed_width_rows':0}
 
-def classify(df, prefix, block_lookup, district):
+def classify(df, prefix, block_lookup, district, state='CO', cd='005'):
     geoid=df[prefix+'_censusid'];lat=pd.to_numeric(df[prefix+'_latitude'],errors='coerce');lon=pd.to_numeric(df[prefix+'_longitude'],errors='coerce')
     coords=lat.between(-90,90)&lon.between(-180,180)&~(lat.eq(0)&lon.eq(0))
     points=shapely.points(lon.fillna(0).to_numpy(),lat.fillna(0).to_numpy())
     geoms=np.empty(len(df),dtype=object);geoms[:]=[block_lookup.get(g) for g in geoid]
     known=np.array([g is not None for g in geoms])
     covered=shapely.covers(geoms,points)
-    in_scope=shapely.covers(district,points)&df[prefix+'_state'].eq('CO').to_numpy()&df['svi_registration_congressional_district'].eq('005').to_numpy()
+    in_scope=shapely.covers(district,points)&df[prefix+'_state'].eq(state).to_numpy()&df['svi_registration_congressional_district'].eq(cd).to_numpy()
     status=np.full(len(df),'mapped',dtype=object)
     status[~covered]='spatial_conflict'
     status[~known | ~geoid.str.fullmatch(r'\d{15}').to_numpy()]='invalid_geography'

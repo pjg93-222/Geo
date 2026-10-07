@@ -2,7 +2,7 @@
 voter streets TIGER lacks and connectors that make it one component, load it, snap stops to it, place the rest by house
 number or by area, and settle which side of each block carries the even numbers.
 
-Build-time library for the walk builder (vectorised shapely 2 + pyproj, no Django). Geometry is EPSG:26913 metres;
+Build-time library for the walk builder (vectorised shapely 2 + pyproj, no Django). Geometry is district UTM metres (EPSG);
 stored coordinates are EPSG:4326 [lon, lat]. Typical use:
 
     build_network(out, roads.execute('SELECT id, name, kind, geometry FROM roads'))
@@ -50,20 +50,23 @@ def _transformer(source, target):
     return Transformer.from_crs(source, target, always_xy=True)
 
 
-def to_metres(lon, lat):
-    """EPSG:4326 lon/lat -> EPSG:26913 x/y metres (scalars or arrays)."""
-    return _transformer(4326, 26913).transform(lon, lat)
+EPSG = 26913                                 # the district's UTM zone; build tools set it (tools/districts.py utm_epsg)
 
 
-def to_lonlat(x, y):
-    """EPSG:26913 x/y metres -> EPSG:4326 lon/lat (scalars or arrays)."""
-    return _transformer(26913, 4326).transform(x, y)
+def to_metres(lon, lat, epsg=None):
+    """EPSG:4326 lon/lat -> the district's UTM zone (EPSG) x/y metres (scalars or arrays)."""
+    return _transformer(4326, epsg or EPSG).transform(lon, lat)
+
+
+def to_lonlat(x, y, epsg=None):
+    """The district's UTM zone (EPSG) x/y metres -> EPSG:4326 lon/lat (scalars or arrays)."""
+    return _transformer(epsg or EPSG, 4326).transform(x, y)
 
 
 # ---- build -----------------------------------------------------------------------------------------------------
 def build_network(conn, roads_rows):
     """Write road_node / road_edge / road_edge_box / road_span from (id, name, kind, GeoJSON LineString EPSG:4326)
-    rows. Keeps S1200 + S1400, nodes all lines on a 1 m grid in EPSG:26913 (snap-rounded union), re-attaches each
+    rows. Keeps S1200 + S1400, nodes all lines on a 1 m grid in district UTM metres (snap-rounded union), re-attaches each
     noded piece to the TIGER line under it (nearest; ties prefer a named line, then the lowest road id) and chains
     same-name edges through degree-2 nodes into spans. Ids are canonical (nodes by x, y; edges by u, v, geometry), so
     the output does not depend on row order. Replaces existing road_* rows and commits. Returns build stats."""
@@ -154,7 +157,7 @@ def _write(conn, lines):
 
 def augment_network(conn, streets):
     """Add virtual streets to the network in conn and make it one component; rewrites the road_* tables (new ids).
-    streets: [(name_key, [(x, y), ...], city)] polylines in EPSG:26913 metres (virtual_streets; city optional). Each
+    streets: [(name_key, [(x, y), ...], city)] polylines in district UTM metres (virtual_streets; city optional). Each
     becomes one edge (virtual = 1, kind S1400) whose ends are joined to the nearest real node by straight virtual
     connectors (name_key ''); then every component but the longest gets one connector from its node nearest to the
     longest one. Connectors are walkable, never snapped to. Returns the _write stats plus virtual_streets (names),
@@ -566,7 +569,7 @@ def snap_stops(net, stops, chunk=50000):
     -> 'fuzzy', c) any edge within 150 m -> 'nearest' (rural setbacks, streets TIGER lacks), e) the nearest edge at any
     distance -> 'nearest'; a lower tier only places stops the higher ones left, so every located stop is placed.
     Virtual connectors are never snapped to. Unnamed edges and unnamed stops never match by name. stops: dicts with
-    id, key, x, y (EPSG:26913 metres or None); house_int / parity are carried into the Placement. Returns a list
+    id, key, x, y (district UTM metres or None); house_int / parity are carried into the Placement. Returns a list
     aligned with stops: Placement, or None for a stop without a location."""
     out = [None] * len(stops)
     rows = [i for i, s in enumerate(stops) if _finite(s.get('x')) and _finite(s.get('y'))]
@@ -672,7 +675,7 @@ def interpolate(net, stops, placements):
 
 
 def place_near(net, stops, placements, targets):
-    """Tier g: every stop index in `targets` ({index: (x, y) EPSG:26913 metres}, e.g. the centre of the geocoded
+    """Tier g: every stop index in `targets` ({index: (x, y) district UTM metres}, e.g. the centre of the geocoded
     households of its census block) goes onto the nearest walkable road at any distance as 'interpolated', lon/lat
     the centreline point, side_lr 0 (assign_sides fills it in). Returns a new list aligned with stops."""
     out, order = list(placements), sorted(targets)
