@@ -18,10 +18,11 @@ from . import static_files, v3_cache
 from .v3_http import blob_response
 from .terrier_contacts import csv_value
 from tools.measures import MEASURES
-from tools.geography_levels import LEVELS, EXTRA_LEVELS, POLYGON_LEVELS, available as available_levels
+from tools.geography_levels import LEVELS, EXTRA_LEVELS, POLYGON_LEVELS, available as _available_levels
 from tools.area_indices import CATALOG as INDEX_CATALOG, BY_ID as INDEX_BY_ID, METHOD as INDEX_METHOD, reference as index_reference, summarize as index_summaries, evaluate as index_evaluate
 
 MEASURE_BY_ID={measure['id']:measure for measure in MEASURES}
+def available_levels(schema):return _available_levels(schema,settings.DISTRICT)
 LEGACY_METRICS={'count','share','coverage'}
 METRIC_IDS=LEGACY_METRICS|set(MEASURE_BY_ID)|set(INDEX_BY_ID)
 

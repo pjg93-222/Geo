@@ -34,6 +34,7 @@ SNAPSHOT_RE = re.compile(D.snapshot_pattern(settings.DISTRICT))
 VALUE_DECIMALS = 8                         # values are served at 8 decimals ...
 SHARE_DECIMALS = 8
 DISPLAY_SCALES = (1, 100, 1000)            # ... and at full precision where 8 decimals would change a displayed digit
+OVERALL_NOTE = 'Interim overall: candidate support not yet included; final weights 30/25/25/20 arrive with candidate support'
 
 
 class Blob:
@@ -167,7 +168,7 @@ def build_areas(key, basis, level):
     columns = {g: {name: k for k, name in enumerate(AL.COLUMNS[g])} for g in AL.GROUPS}
     out = {
         'schema': 'v3-areas-1', 'snapshot': key, 'basis': basis, 'level': level, 'ids': ids,
-        'labels': [area_label(level, i) for i in ids],
+        'labels': [area_label(level, i, settings.DISTRICT) for i in ids],
         'status': [by_id[i]['status'] if i in by_id else 'withheld' for i in ids],
         'n': [], 'households': [], 'parent': [], 'precinct': [], 'tract': [], 'blocks': [],
     }
@@ -275,10 +276,10 @@ def build_meta(key):
     bounds = shape(district['features'][0]['geometry']).bounds
     rf = manifest['row_framework']
     return {
-        'schema': 'v3-meta-1', 'snapshot': key, 'district_label': 'District 5',
+        'schema': 'v3-meta-1', 'snapshot': key, 'district_label': settings.DISTRICT['short_label'],
         'share_breaks': list(AL.SHARE_BREAKS), 'lean_cuts': list(AL.LEAN_CUTS),
         'measured_breaks': list(AL.MEASURED_BREAKS), 'household_breaks': list(AL.BREAKS),
-        'weights': {'cua': 40, 'part': 35, 'soi': 25},
+        'weights': settings.DISTRICT['interim_overall'] or settings.DISTRICT['score_weights'],
         'levels': list(LEVELS), 'bbox': [round(v, 5) for v in bounds],
         'floors': {'min_n': AL.MIN_N, 'min_households': AL.MIN_HOUSEHOLDS},
         'bases': {basis: list(levels) for basis, levels in AL.BASIS_LEVELS.items()},
@@ -290,6 +291,7 @@ def build_meta(key):
         'support_likelihood': manifest['support_likelihood'], 'persistent_voices': manifest['persistent_voices'],
         'people': manifest['bases']['registration']['imported'],
         'registered_people': manifest['bases']['registration']['mapped'],
+        **({'overall_note': OVERALL_NOTE} if settings.DISTRICT['interim_overall'] else {}),   # absent for Colorado
     }
 
 

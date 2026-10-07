@@ -22,7 +22,7 @@ from django.http import JsonResponse
 from tools import area_layers as AL
 from tools import field_labels as FL
 from tools import scores_schema as S
-from tools.geography_levels import area_label
+from tools.geography_levels import area_label, area_pattern
 
 from . import scoresdb as DB
 from .street_views import local_only
@@ -38,7 +38,6 @@ RANK_COLUMNS = {'ovr': ('ovr_rank', 'ovr_tie_n'), 'cua': ('cua_rank', 'cua_tie_n
                 'soi': ('soi_rank', 'soi_tie_n'), 'within': ('reg_rank', None)}
 AREA_LEVELS = {'registration': {'block': 'reg_block', 'precinct': 'reg_precinct', 'tract': 'reg_tract', 'zip': 'reg_zip'},
                'residence': {'tract': 'res_tract', 'zip': 'res_zip'}}
-AREA_ID = {'block': r'\d{15}', 'precinct': r'\d{10}', 'tract': r'\d{11}', 'zip': r'\d{5}'}
 PERSON_ID = r'p_[0-9a-f]{64}'
 HOUSEHOLD_ID = r'h_[0-9a-f]{64}'
 MAX_BBOX = 0.06
@@ -142,7 +141,7 @@ def list_query(request):
     if bool(out['level']) != bool(out['area']):
         raise BadRequest('Level and area go together')
     if out['level']:
-        if out['level'] not in AREA_LEVELS[out['basis']] or not re.fullmatch(AREA_ID[out['level']], out['area']):
+        if out['level'] not in AREA_LEVELS[out['basis']] or not re.fullmatch(area_pattern(out['level'], settings.DISTRICT), out['area']):
             raise BadRequest('Invalid area filter')
     after = q.get('after', '')
     if after and not re.fullmatch(r'\d{1,9}', after):
@@ -271,7 +270,7 @@ def area_ref(table, level, ident):
     if not ident:
         return {'level': level, 'id': '', 'label': '', 'pct': None, 'top10': None, 'withheld': True}
     cell = table.get((level, ident))
-    return {'level': level, 'id': ident, 'label': area_label(level, ident),
+    return {'level': level, 'id': ident, 'label': area_label(level, ident, settings.DISTRICT),
             'pct': DB.number(cell[0]) if cell else None, 'top10': DB.number(cell[1]) if cell else None,
             'withheld': cell is None}
 

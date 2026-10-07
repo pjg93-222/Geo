@@ -58,7 +58,7 @@ def _integer(value, low=0, high=10 ** 9, nullable=False):
 def id_pattern(basis, level):
     if basis == 'registration':
         # people registered outside the district appear as withheld areas of other counties, so no county prefix
-        return {'block': r'\d{15}', 'precinct': r'\d{10}', 'tract': r'\d{11}', 'zip': r'\d{5}'}[level]
+        return {'block': r'\d{15}', 'precinct': settings.DISTRICT['precinct_pattern'], 'tract': r'\d{11}', 'zip': r'\d{5}'}[level]
     return {'tract': r'\d{11}', 'zip': r'\d{5}'}[level]
 
 
@@ -160,7 +160,7 @@ def validate_area_indices(file, manifest):
         if previous is not None and order <= previous:
             _fail('Area rows must be unique and sorted')
         previous = order
-        if row['label'] != area_label(level, ident):
+        if row['label'] != area_label(level, ident, settings.DISTRICT):
             _fail('Area label is not the generated label')
         expected_parent = ident[:11] if (basis, level) == ('registration', 'block') else 'file'
         if row['parent_id'] != expected_parent:
@@ -186,7 +186,7 @@ def validate_area_indices(file, manifest):
                     if value is not None:
                         _fail('Residence areas carry no block relations')
                 elif key == 'precinct':
-                    if value is not None and not re.fullmatch(r'\d{10}', str(value)):
+                    if value is not None and not re.fullmatch(settings.DISTRICT['precinct_pattern'], str(value)):
                         _fail('Invalid precinct relation')
                 elif key == 'tract':
                     if value is not None and not re.fullmatch(r'\d{11}', str(value)):
@@ -271,7 +271,10 @@ def validate_v4(payload, manifest):
     _keys(rf, RF_KEYS, 'row framework')
     if rf['version'] != AL.ROWFW_VERSION:
         _fail('Unsupported row framework version')
-    for key, expected in AL.FROZEN_SHA256.items():
+    frozen = AL.FROZEN_SHA256_BY_DISTRICT.get(settings.DISTRICT['id'])
+    if frozen is None:
+        _fail('The row framework inputs of this district are not pinned yet')
+    for key, expected in frozen.items():
         if rf[key] != expected:
             _fail('The bundle was not built from the frozen row framework inputs')
     for key in ('area_table_sha256', 'suppressed_ids_sha256', 'area_indices_sha256', 'withheld_set_sha256',
@@ -285,7 +288,7 @@ def validate_v4(payload, manifest):
     if rf['rulings'] != AL.RULINGS or rf['d1_audit'] != D1_AUDIT:
         _fail('The suppression audit is not clean')
     expected_key = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['suppressed_ids_sha256'],
-                                   rf['framework_config_sha256'])
+                                   rf['framework_config_sha256'], settings.DISTRICT['snapshot_prefix'])
     if manifest['snapshot'] != expected_key:
         _fail('Snapshot key does not follow from its inputs')
     if manifest['area_index_levels'] != {b: list(l) for b, l in AL.BASIS_LEVELS.items()}:

@@ -7,7 +7,7 @@ from django.conf import settings
 from django.db import transaction
 from .models import Snapshot, AuditEvent
 from tools.measures import MEASURES, MEASURE_RANGES
-from tools.geography_levels import BASE_LEVELS, EXTRA_LEVELS, SOURCES as HIERARCHY_SOURCES, pattern as level_pattern, label as area_label
+from tools.geography_levels import BASE_LEVELS, EXTRA_LEVELS, sources as hierarchy_sources, pattern as level_pattern, label as area_label
 from tools.geography_levels import V4_GEOMETRY_LEVELS, area_label as v4_label, area_pattern as v4_pattern
 from tools import area_layers as AL
 from tools import districts as D
@@ -117,10 +117,10 @@ def validate(payload):
     g=m['geography'];keys(g,GEO_KEYS)
     for k in ['block_vintage','district_vintage','zcta_vintage','street_vintage','street_method']:text(g[k],2000)
     keys(g['sources'],{'blocks','districts','roads','zcta'})
-    for url in g['sources'].values():
+    for url in [u for v in g['sources'].values() for u in (v if isinstance(v,list) else [v])]:   # roads: a list of census files for OR and CT
         text(url)
         if not url.startswith(('https://www2.census.gov/','https://tigerweb.geo.census.gov/')):raise ValueError('Unexpected geographic source')
-    keys(g['hashes'],{'blocks.zip','districts.zip','roads.zip'})
+    keys(g['hashes'],{'blocks.zip','districts.zip',*(Path(f).name for f in settings.DISTRICT['road_files'])})
     for v in g['hashes'].values():
         if not re.fullmatch(r'[a-f0-9]{64}',v):raise ValueError('Invalid geographic checksum')
     for k in ['street_polygons','street_unclosed_parts','street_invalid_parts']:number(g[k])
@@ -128,8 +128,8 @@ def validate(payload):
     for n in g['bounds']:number(n,-180,180)
     if version in V3_UP:
         h=m['hierarchy'];keys(h,{'method','sources','hashes','reconciliation','region_definition','assignment'})
-        if h['method']!='geographic-extension-1' or h['sources']!=HIERARCHY_SOURCES:raise ValueError('Unapproved geographic extension')
-        keys(h['hashes'],HIERARCHY_SOURCES)
+        if h['method']!='geographic-extension-1' or h['sources']!=hierarchy_sources(settings.DISTRICT):raise ValueError('Unapproved geographic extension')
+        keys(h['hashes'],hierarchy_sources(settings.DISTRICT))
         for digest in h['hashes'].values():
             if not isinstance(digest,str) or not re.fullmatch(r'[a-f0-9]{64}',digest):raise ValueError('Invalid hierarchy checksum')
         for field in ('region_definition','assignment'):text(h[field],1000)
@@ -148,12 +148,12 @@ def validate(payload):
     for r in rows:
         keys(r,ROW_KEYS|({'measures'} if measured else set()))
         if r['basis'] not in m['bases'] or r['level'] not in levels:raise ValueError('Unsupported aggregate partition')
-        if not isinstance(r['id'],str) or not re.fullmatch(level_pattern(r['level']),r['id']):raise ValueError('Only geographic identifiers are accepted')
+        if not isinstance(r['id'],str) or not re.fullmatch(level_pattern(r['level'],settings.DISTRICT),r['id']):raise ValueError('Only geographic identifiers are accepted')
         ident=(r['basis'],r['level'],r['id'])
         if ident in seen:raise ValueError('Duplicate aggregate key')
         seen.add(ident);partitions.setdefault(ident[:2],[]).append(r)
         # Labels are generated, not user-provided arbitrary strings.
-        expected=area_label(r['level'],r['id'])
+        expected=area_label(r['level'],r['id'],settings.DISTRICT)
         if r['label']!=expected or not isinstance(r['partial'],bool):raise ValueError('Unexpected aggregate label')
         if r['status'] not in ['ok','suppressed','unavailable']:raise ValueError('Invalid status')
         for k in ['count','source_count']:number(r[k],nullable=True)
@@ -189,7 +189,7 @@ def validate(payload):
         if len(features)>100000:raise ValueError('Too many polygons')
         for ident,f in features.items():
             keys(f,{'id','geometry','bbox'})
-            if f['id']!=ident or not re.fullmatch(level_pattern(level),ident):raise ValueError('Invalid geometry key')
+            if f['id']!=ident or not re.fullmatch(level_pattern(level,settings.DISTRICT),ident):raise ValueError('Invalid geometry key')
             polygon(f['geometry'])
             if len(f['bbox'])!=4:raise ValueError('Invalid polygon extent')
             for n in f['bbox']:number(n,-180,180)
