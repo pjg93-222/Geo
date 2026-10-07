@@ -214,6 +214,13 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(sorted(balanced['k']), ['100', '7', '70'])
         self.assertEqual(sum(balanced['k']['70']['K_g'].values()), 70)
 
+    def test_a_group_with_no_seats_is_checked_against_zero_not_the_builds_wrapped_k_actual(self):
+        computed = {'K_g': {'O': 0, 'D': 3}, 'K_actual': {'O': 0, 'D': 4}}
+        self.assertTrue(B.balanced_row_matches(computed, {'K_g': '0', 'K_actual': '851'}, 'O'))      # CT other at K=100: rowfw wrapped to the whole group
+        self.assertFalse(B.balanced_row_matches({'K_g': {'O': 0}, 'K_actual': {'O': 2}}, {'K_g': '0', 'K_actual': '851'}, 'O'))
+        self.assertTrue(B.balanced_row_matches(computed, {'K_g': '3', 'K_actual': '4'}, 'D'))
+        self.assertFalse(B.balanced_row_matches(computed, {'K_g': '3', 'K_actual': '5'}, 'D'))        # a group with seats still must agree
+
     def test_households_map_to_one_household_code_and_street_rows_have_a_bin(self):
         rows = self.db.execute('SELECT h_id, hh, n_people, ovr_mean_pct, bin, reg_block FROM street_household').fetchall()
         self.assertGreater(len(rows), 100)

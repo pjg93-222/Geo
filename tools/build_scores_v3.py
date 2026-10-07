@@ -568,6 +568,14 @@ def check_summaries(rowfw, data, log):
     return done
 
 
+def balanced_row_matches(computed, row, group):
+    """One row of the build's balanced_by_registration_topK.csv against the store's allocation. A group with no seats lists
+    nobody, so the store must say 0; the build's own K_actual is not read there (rowfw outputs.py takes sc[kg - 1], which
+    wraps to the group's lowest score when kg = 0, so CT's 'other' at K=100 reads as the whole group)."""
+    seats = int(row['K_g'])
+    return computed['K_g'][group] == seats and computed['K_actual'][group] == (int(row['K_actual']) if seats else 0)
+
+
 def verify_written(out, n, receipt, rowfw, log):
     """Re-open the finished store read-only and check it against the frozen balanced allocations and counts."""
     path = rowfw / 'summaries' / 'balanced_by_registration_topK.csv'
@@ -576,7 +584,7 @@ def verify_written(out, n, receipt, rowfw, log):
             for row in csv.DictReader(stream):
                 group = 'O' if row['registration_group'] == 'other' else row['registration_group']
                 computed = receipt['balanced']['k'][row['K']]
-                require(computed['K_g'][group] == int(row['K_g']) and computed['K_actual'][group] == int(row['K_actual']),
+                require(balanced_row_matches(computed, row, group),
                         'Balanced allocation differs from the build summary: K=%s %s' % (row['K'], group))
         log('balanced allocations match the build summary')
     connection = sqlite3.connect(Path(out).resolve().as_uri() + '?mode=ro', uri=True)
