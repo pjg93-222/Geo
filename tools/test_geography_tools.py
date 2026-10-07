@@ -1,24 +1,30 @@
 """Synthetic checks for the geography, road, street and contacts tools' district parameters (multi-district build,
-Phase 2, Lane B). Plain unittest, geopandas/shapely only, no Django, no real data, no network.
+Phase 2, Lane B) and for the geography and bundle tools' district parameters (Phase 3b, Lane G). Plain unittest,
+geopandas/shapely only, no Django, no real data, no network.
 
     <venv python> -m unittest tools.test_geography_tools          (from the V3 folder)
 """
 import csv
 import io
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing, redirect_stderr
+import zipfile
+from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 import geopandas as gpd
-from shapely.geometry import LineString, box, mapping
+import pandas as pd
+from shapely.geometry import LineString, Polygon, box, mapping
 
-from tools import build_contacts, build_road_context, build_street, prepare_geography
+from tools import area_layers as AL
+from tools import build_bundle_v4, build_contacts, build_road_context, build_street, extend_geography, ingest, measures, prepare_geography
 from tools import districts as D
+from tools import geography_levels as G
 
 
 class RecodeBlocksTests(unittest.TestCase):
@@ -56,6 +62,16 @@ class RecodeBlocksTests(unittest.TestCase):
         frame, counts = prepare_geography.recode_blocks(blocks, self.regions, '09')
         self.assertEqual(list(frame.geoid), list(blocks.GEOID20))
         self.assertEqual((counts['recoded'], counts['aliases']), (0, 0))
+        self.assertEqual(prepare_geography.alias_map(frame), {})
+
+    def test_alias_map_pairs_each_old_id_with_its_region_id(self):
+        """Phase 3b Lane G (e): the map ingest, extend and the row-framework cache use."""
+        blocks = self.blocks([(.5, .5), (1.5, .5), (.2, .2)])
+        frame, counts = prepare_geography.recode_blocks(blocks, self.regions, '09')
+        aliases = prepare_geography.alias_map(frame)
+        new = ['09' + code + '%06d%04d' % (100 + i, 1000 + i) for i, code in enumerate(['110', '120', '110'])]
+        self.assertEqual(aliases, dict(zip(blocks.GEOID20, new)))
+        self.assertEqual(len(aliases), counts['aliases'])
 
 
 class DistrictShapeTests(unittest.TestCase):
@@ -216,6 +232,320 @@ class OregonStreetAndContactsTests(unittest.TestCase):
         self.assertFalse((folder / '.street-salt').exists())
         with self.assertRaises(FileNotFoundError):       # the default is still directory/.street-salt
             build_contacts.build(self.csv_path, folder)
+
+
+class CanonicalBlocksTests(unittest.TestCase):
+    """Phase 3b Lane G, B-8: the old-county -> planning-region block map applied to the voter file."""
+
+    def test_canonical_blocks_maps_both_bases_and_leaves_other_ids(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'block_aliases.json').write_text(json.dumps({'090010001001001': '091100001001001'}))
+            d = {**D.get('ct-01'), 'geography': folder}
+            frame = pd.DataFrame({'svi_registration_censusid': ['090010001001001', '091100001001002', ''],
+                                  'sii_censusid': ['091100001001001', '090010001001001', '']})
+            ingest.canonical_blocks(frame, d)
+            self.assertEqual(list(frame.svi_registration_censusid), ['091100001001001', '091100001001002', ''])
+            self.assertEqual(list(frame.sii_censusid), ['091100001001001', '091100001001001', ''])
+            other = {**D.get('or-05'), 'geography': Path(folder) / 'none'}            # no alias file: nothing changes
+            again = pd.DataFrame({'svi_registration_censusid': ['090010001001001'], 'sii_censusid': ['090010001001001']})
+            self.assertEqual(list(ingest.canonical_blocks(again, other).sii_censusid), ['090010001001001'])
+
+
+# Colorado's outputs of tools.geography_levels, recorded from the code BEFORE Lane G changed it.
+CO_GOLDEN = {
+    'idents': {'block': '080410001001001', 'zcta': '80903', 'postal_zip': '80903', 'county': '08041', 'state_house': '08014',
+               'state_senate': '08010', 'congressional': '0805', 'region': '0805'},
+    'pattern': {'block': r'\d{15}', 'congressional': '0805', 'county': '08041', 'postal_zip': r'\d{5}', 'precinct': r'\d{10}',
+                'region': '0805', 'state_house': r'08\d{3}', 'state_senate': r'08\d{3}', 'tract': r'\d{11}', 'zcta': r'\d{5}'},
+    'label': {'block': 'Block 1001 · 08041000100', 'congressional': 'Colorado · Congressional District 05',
+              'county': 'El Paso County · Colorado', 'postal_zip': 'Postal ZIP 80903', 'region': 'Colorado CD-05 study region',
+              'state_house': 'Colorado House District 14', 'state_senate': 'Colorado Senate District 10', 'zcta': 'ZCTA 80903'},
+    'area_label': {'block': 'Block 1001', 'precinct': 'Precinct 621', 'tract': 'Tract 1.02', 'zip': 'ZIP 80916'},
+    'area_pattern': {'block': r'\d{15}', 'precinct': r'\d{10}', 'tract': r'\d{11}', 'zip': r'\d{5}'},
+    'sources': {'county': 'https://www2.census.gov/geo/tiger/TIGER2025/COUNTY/tl_2025_us_county.zip',
+                'state_house': 'https://www2.census.gov/geo/tiger/TIGER2025/SLDL/tl_2025_08_sldl.zip',
+                'state_senate': 'https://www2.census.gov/geo/tiger/TIGER2025/SLDU/tl_2025_08_sldu.zip'},
+    'catalog': [
+        {'id': 'region', 'label': 'Regional overview', 'vintage': 'Study region: supplied Colorado CD-05 extract'},
+        {'id': 'congressional', 'label': 'Congressional districts', 'vintage': '119th Congress · TIGER/Line 2025'},
+        {'id': 'county', 'label': 'Counties', 'vintage': 'TIGER/Line 2025 counties'},
+        {'id': 'state_senate', 'label': 'State Senate districts', 'vintage': '2024 legislative plans · TIGER/Line 2025'},
+        {'id': 'state_house', 'label': 'State House districts', 'vintage': '2024 legislative plans · TIGER/Line 2025'},
+        {'id': 'zcta', 'label': 'ZCTAs · ZIP approximation', 'vintage': '2020 ZCTAs'},
+        {'id': 'block', 'label': 'Census blocks', 'vintage': '2020 Census blocks · TIGER/Line 2025'},
+        {'id': 'postal_zip', 'label': 'Postal ZIPs · table only', 'vintage': 'Not applicable: supplied postal ZIP'}],
+}
+AREA_IDS = {'block': '080410001001001', 'precinct': '0804100621', 'tract': '08041000102', 'zip': '80916'}
+
+
+class GeographyLevelsTests(unittest.TestCase):
+    """Phase 3b Lane G, test (a) and (b): Colorado's strings do not move; Oregon and Connecticut get theirs."""
+
+    def test_colorado_outputs_equal_the_golden_table_with_and_without_the_district(self):
+        for d in (None, D.get('co-05')):
+            ids = CO_GOLDEN['idents']
+            self.assertEqual({lv: G.pattern(lv, d) for lv in CO_GOLDEN['pattern']}, CO_GOLDEN['pattern'])
+            self.assertEqual({lv: G.label(lv, ids[lv], d) for lv in CO_GOLDEN['label']}, CO_GOLDEN['label'])
+            self.assertEqual({lv: G.area_label(lv, AREA_IDS[lv], d) for lv in CO_GOLDEN['area_label']}, CO_GOLDEN['area_label'])
+            self.assertEqual({lv: G.area_pattern(lv, d) for lv in CO_GOLDEN['area_pattern']}, CO_GOLDEN['area_pattern'])
+            self.assertEqual(G.sources(d), CO_GOLDEN['sources'])
+            self.assertEqual(G.catalog(d), CO_GOLDEN['catalog'])
+            self.assertEqual(G.available('cu-summary-v4', d), CO_GOLDEN['catalog'])
+            self.assertEqual(G.available('cu-summary-v1', d), [x for x in CO_GOLDEN['catalog'] if x['id'] in G.BASE_LEVELS])
+        self.assertEqual((G.SOURCES, G.CATALOG), (CO_GOLDEN['sources'], CO_GOLDEN['catalog']))
+
+    def test_oregon_labels_and_patterns(self):
+        d = D.get('or-05')
+        self.assertEqual(G.pattern('county', d), '41003|41005|41017|41031|41043|41047|41051')
+        self.assertEqual((G.pattern('region', d), G.pattern('congressional', d), G.pattern('state_house', d)),
+                         ('4105', '4105', r'41\d{3}'))
+        self.assertEqual(G.label('county', '41005', d), 'Clackamas County · Oregon')
+        self.assertEqual(G.label('state_house', '41014', d), 'Oregon House District 14')
+        self.assertEqual(G.label('state_senate', '41007', d), 'Oregon Senate District 7')
+        self.assertEqual(G.label('congressional', '4105', d), 'Oregon · Congressional District 05')
+        self.assertEqual(G.label('region', '4105', d), 'Oregon CD-05 study region')
+        self.assertEqual(G.sources(d)['state_house'], 'https://www2.census.gov/geo/tiger/TIGER2025/SLDL/tl_2025_41_sldl.zip')
+        self.assertEqual(G.sources(d)['county'], G.SOURCES['county'])
+        self.assertEqual(G.catalog(d)[0]['vintage'], 'Study region: supplied Oregon CD-05 extract')
+        self.assertTrue(re.fullmatch(G.area_pattern('precinct', d), '41005-123'))
+        self.assertTrue(re.fullmatch(G.pattern('precinct', d), '123'))
+        self.assertFalse(re.fullmatch(G.area_pattern('precinct', d), '12345'))
+        self.assertEqual(G.area_label('precinct', '41005-123', d), 'Precinct 41005-123')
+        self.assertEqual(G.area_label('precinct', '0804100621', d), 'Precinct 621')       # a 10-digit code keeps Colorado's form
+
+    def test_connecticut_labels_and_patterns(self):
+        d = D.get('ct-01')
+        self.assertEqual(G.pattern('county', d), '09110|09130|09140|09160|09170')
+        self.assertEqual((G.pattern('region', d), G.pattern('state_senate', d)), ('0901', r'09\d{3}'))
+        self.assertEqual(G.label('county', '09110', d), 'Capitol Planning Region · Connecticut')
+        self.assertEqual(G.label('state_senate', '09003', d), 'Connecticut Senate District 3')
+        self.assertEqual(G.label('region', '0901', d), 'Connecticut CD-01 study region')
+        self.assertTrue(re.fullmatch(G.area_pattern('precinct', d), '005-00-WEST-HARTFORD-1'))
+        self.assertFalse(re.fullmatch(G.area_pattern('precinct', d), '0804100621'))
+        self.assertEqual(G.area_label('precinct', '005-00-WEST-HARTFORD-1', d), 'Precinct 005-00-WEST-HARTFORD-1')
+
+
+class SnapshotKeyTests(unittest.TestCase):
+    """Test (f): the district prefix is the only difference."""
+
+    def test_prefix_changes_the_prefix_only(self):
+        sha = 'a' * 64
+        self.assertEqual(measures.snapshot_key(sha), measures.snapshot_key(sha, 'co-cd005-'))
+        self.assertEqual(measures.snapshot_key(sha, 'or-cd005-')[len('or-cd005-'):], measures.snapshot_key(sha)[len('co-cd005-'):])
+        self.assertRegex(measures.snapshot_key(sha, 'ct-cd001-'), r'^ct-cd001-[a-f0-9]{12}$')
+        args = ('b' * 64, 'c' * 64, 'd' * 64, 'e' * 64)
+        self.assertEqual(AL.snapshot_key(*args), AL.snapshot_key(*args, prefix='co-cd005-'))
+        self.assertEqual(AL.snapshot_key(*args, 'or-cd005-')[len('or-cd005-'):], AL.snapshot_key(*args)[len('co-cd005-'):])
+
+    def test_a_manifest_takes_the_district_prefix(self):
+        kwargs = dict(base_key='or-cd005-0123456789ab', area_sha='c' * 64, suppressed_sha='d' * 64,
+                      frozen={'framework_config_sha256': 'e' * 64, 'plan_sha256': 'f' * 64, 'criteria_sha256': '1' * 64},
+                      run_id='r', d1_audit={}, created_at='t', concordance={})
+        manifest = build_bundle_v4.apply_v4_manifest({}, [], {}, prefix='or-cd005-', **kwargs)
+        self.assertRegex(manifest['snapshot'], r'^or-cd005-[a-f0-9]{12}$')
+        self.assertTrue(build_bundle_v4.apply_v4_manifest({}, [], {}, **kwargs)['snapshot'].startswith('co-cd005-'))
+
+    def test_district_pins_fail_closed_until_set(self):
+        self.assertIs(AL.FROZEN_SHA256_BY_DISTRICT['co-05'], AL.FROZEN_SHA256)
+        self.assertEqual(set(AL.FROZEN_SHA256_BY_DISTRICT), set(D.DISTRICTS))
+        self.assertIsNone(AL.FROZEN_SHA256_BY_DISTRICT['or-05'])
+
+
+class ZctaCleanTests(unittest.TestCase):
+    """Test (d): invalid ZCTAs are made valid and keep their polygonal parts; valid ones are the same objects."""
+
+    def test_bowtie_becomes_two_triangles(self):
+        bowtie = Polygon([(0, 0), (2, 2), (2, 0), (0, 2), (0, 0)])
+        self.assertFalse(bowtie.is_valid)
+        fixed = ingest.polygonal(bowtie)
+        self.assertTrue(fixed.is_valid)
+        self.assertIn(fixed.geom_type, ('Polygon', 'MultiPolygon'))
+        self.assertAlmostEqual(fixed.area, 2.0)
+
+    def test_a_spike_loses_its_line_and_keeps_the_polygon(self):
+        spiked = Polygon([(0, 0), (2, 0), (2, 2), (1, 2), (1, 3), (1, 2), (0, 2), (0, 0)])
+        self.assertFalse(spiked.is_valid)
+        fixed = ingest.polygonal(spiked)
+        self.assertTrue(fixed.is_valid)
+        self.assertIn(fixed.geom_type, ('Polygon', 'MultiPolygon'))
+        self.assertAlmostEqual(fixed.area, 4.0)
+
+    def test_valid_geometry_is_returned_unchanged(self):
+        square = box(0, 0, 1, 1)
+        self.assertIs(ingest.polygonal(square), square)
+
+
+class OfficialBoundariesTests(unittest.TestCase):
+    """Test (c): the water-only 'ZZZ' areas of Connecticut's legislative files are dropped; a Colorado file loses nothing."""
+
+    def frame(self, state, ids):
+        return gpd.GeoDataFrame({'STATEFP': [state] * len(ids), 'GEOID': ids},
+                                geometry=[box(0, 0, 1, 1)] * len(ids), crs=4326)
+
+    def test_zzz_other_states_and_non_overlapping_areas_are_dropped(self):
+        frame = pd.concat([self.frame('09', ['09001', '09ZZZ']), self.frame('25', ['25001']),
+                           gpd.GeoDataFrame({'STATEFP': ['09'], 'GEOID': ['09002']}, geometry=[box(5, 5, 6, 6)], crs=4326)])
+        found = extend_geography.official_boundaries(frame, box(0, 0, 2, 2), '09')
+        self.assertEqual(list(found), ['09001'])
+
+    def test_colorado_ids_all_stay(self):
+        found = extend_geography.official_boundaries(self.frame('08', ['08001', '08002']), box(0, 0, 2, 2), '08')
+        self.assertEqual(list(found), ['08001', '08002'])
+
+
+class PseudoAreaTests(unittest.TestCase):
+    """Test (g): the pseudo-area rowfw makes of a blank id is dropped, and the D2 receipt arithmetic counts it."""
+
+    @staticmethod
+    def row(level, ident, suppressed='0', group='ovr', basis='registration'):
+        return {'basis': basis, 'level': level, 'area_id': ident, 'suppressed': suppressed, 'group': group}
+
+    def table(self):
+        area = [self.row('block', '410050001001001'), self.row('block', 'nan'), self.row('block', 'nan', group='cua')]
+        return area, [self.row('block', '410050001001002', '1')]
+
+    def test_the_nan_area_is_dropped_once_and_the_counts_still_reconcile(self):
+        area, suppressed = self.table()
+        receipt = {'D2_counts': {'registration/block': {'areas': 3, 'published': 2}}}
+        kept_area, kept_suppressed, dropped = build_bundle_v4.drop_pseudo_areas(area, suppressed, D.get('or-05'))
+        self.assertEqual([r['area_id'] for r in kept_area], ['410050001001001'])
+        self.assertEqual(len(kept_suppressed), 1)
+        self.assertEqual(dropped, {'registration/block': {'published': 1, 'withheld': 0}})     # two group rows, one area
+        published, withheld = build_bundle_v4.check_area_table([], kept_area, kept_suppressed, receipt, dropped)
+        self.assertEqual((len(published[('registration', 'block')]), len(withheld[('registration', 'block')])), (1, 1))
+        with self.assertRaisesRegex(build_bundle_v4.BuildError, 'Published areas of registration/block'):
+            build_bundle_v4.check_area_table([], kept_area, kept_suppressed, receipt)           # without the drop count
+
+    def test_a_withheld_nan_is_counted_too_and_ids_follow_each_levels_pattern(self):
+        d = D.get('or-05')
+        area = [self.row('precinct', '41005-123'), self.row('precinct', '12345'), self.row('zip', '97045', basis='residence'),
+                self.row('zip', 'nan', basis='residence')]
+        suppressed = [self.row('precinct', 'nan', '1'), self.row('zip', '97999', '1', basis='residence')]
+        kept_area, kept_suppressed, dropped = build_bundle_v4.drop_pseudo_areas(area, suppressed, d)
+        self.assertEqual([r['area_id'] for r in kept_area], ['41005-123', '97045'])
+        self.assertEqual([r['area_id'] for r in kept_suppressed], ['97999'])
+        self.assertEqual(dropped, {'registration/precinct': {'published': 1, 'withheld': 1},
+                                   'residence/zip': {'published': 1, 'withheld': 0}})
+
+    def test_colorado_ids_all_stay(self):
+        area = [self.row('block', '080410001001001'), self.row('precinct', '0804100621'), self.row('tract', '08041000102'),
+                self.row('zip', '80916')]
+        kept_area, _, dropped = build_bundle_v4.drop_pseudo_areas(area, [], D.get('co-05'))
+        self.assertEqual((len(kept_area), dropped), (4, {}))
+
+
+FIELDS_ALL = list(dict.fromkeys(ingest.FIELDS + list(measures.SOURCE_FIELDS)))
+
+
+class DistrictChainTests(unittest.TestCase):
+    """ingest -> extend_geography on a tiny synthetic Connecticut-like district (a re-coded block, an old-county id,
+    an invalid ZCTA, a water-only 'ZZZ' legislative area), no network and no real data."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        root = Path(cls.temporary.name)
+        cls.geography = root / 'geography'
+        (cls.geography / 'hierarchy').mkdir(parents=True)
+        district = box(-72.80, 41.70, -72.60, 41.90)
+        cls.d = {**D.get('ct-01'), 'geography': cls.geography, 'counties': ('09110',),
+                 'county_names': {'09110': 'Test Planning Region'}}
+        new_a, old_a, new_b = '091100001001001', '090010001001001', '091100001001002'
+        block_a, block_b = box(-72.75, 41.75, -72.74, 41.76), box(-72.65, 41.75, -72.64, 41.76)
+        gpd.GeoDataFrame({'geoid': [new_a, new_b, old_a]}, geometry=[block_a, block_b, block_a], crs=4326).to_file(
+            cls.geography / 'blocks.gpkg', driver='GPKG')
+        (cls.geography / 'block_aliases.json').write_text(json.dumps({old_a: new_a}))
+        (cls.geography / 'district.geojson').write_text(json.dumps({'type': 'FeatureCollection', 'features': [{
+            'type': 'Feature', 'properties': {}, 'geometry': mapping(district)}]}))
+        (cls.geography / 'streets.geojson').write_text(json.dumps({'type': 'FeatureCollection', 'features': []}))
+        (cls.geography / 'provenance.json').write_text(json.dumps({'block_vintage': 'synthetic'}))
+        bowtie = Polygon([(-72.9, 42.0), (-72.5, 42.4), (-72.5, 42.0), (-72.9, 42.4), (-72.9, 42.0)])
+        gpd.GeoDataFrame({'geoid': ['06001', '06002', 'XX'], 'geometry': [district, bowtie, box(0, 0, 1, 1)]}, crs=4326).to_file(
+            cls.geography / 'zcta.geojson', driver='GeoJSON')
+        for name, ids in (('county', ['09110']), ('state_house', ['09001', '09ZZZ']), ('state_senate', ['09001', '09ZZZ'])):
+            cls.shapefile_zip(root / 'shp' / name, cls.geography / 'hierarchy' / (name + '.zip'), ids, district)
+        header = FIELDS_ALL
+        cls.csv_path = root / 'statara_ct_cd001_20260904.csv'
+        people = [(new_a, 30), (old_a, 30), (new_b, 25)]
+        with cls.csv_path.open('w', newline='', encoding='cp1252') as stream:
+            writer = csv.DictWriter(stream, fieldnames=header)
+            writer.writeheader()
+            n = 0
+            for geoid, count in people:
+                x, y = (-72.745, 41.755) if geoid != new_b else (-72.645, 41.755)
+                for _ in range(count):
+                    n += 1
+                    row = {field: '' for field in header}
+                    row.update(sii_persist_id='P%d' % n, sii_statara_id='S%d' % n, svi_registration_congressional_district='001')
+                    for prefix in ingest.BASES.values():
+                        row.update({prefix + '_state': 'CT', prefix + '_zip': '06001', prefix + '_censusid': geoid,
+                                    prefix + '_latitude': y, prefix + '_longitude': x, prefix + '_geolevel': 'ROOFTOP'})
+                    writer.writerow(row)
+        cls.v2 = root / 'v2'
+        with redirect_stdout(io.StringIO()):
+            ingest.ingest(cls.csv_path, cls.geography, cls.v2, d=cls.d)
+            extend_geography.build(cls.csv_path, cls.v2, cls.geography, root / 'v3', cls.d)
+        cls.v2_payload = {p.name: json.loads(p.read_text(encoding='utf-8')) for p in cls.v2.glob('*.json')}
+        cls.v3_payload = {p.name: json.loads(p.read_text(encoding='utf-8')) for p in (root / 'v3').glob('*.json')}
+        cls.new_a, cls.new_b, cls.old_a = new_a, new_b, old_a
+
+    @staticmethod
+    def shapefile_zip(folder, archive, ids, district):
+        folder.mkdir(parents=True)
+        gpd.GeoDataFrame({'STATEFP': ['09'] * len(ids), 'GEOID': ids}, geometry=[district] * len(ids), crs=4326).to_file(folder / 'x.shp')
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            for part in folder.iterdir():
+                bundle.write(part, part.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def test_v2_uses_the_district_label_key_scope_and_file_date(self):
+        manifest = self.v2_payload['manifest.json']
+        self.assertEqual((manifest['label'], manifest['source_date']), ('Connecticut · District 01', '2026-09-04'))
+        self.assertRegex(manifest['snapshot'], r'^ct-cd001-[a-f0-9]{12}$')
+        self.assertTrue(manifest['scope'].startswith('Connecticut CD-001 source-file extract'))
+        self.assertEqual(manifest['bases']['registration']['mapped'], 85)
+
+    def test_an_old_county_id_and_its_region_id_are_one_block_area(self):
+        for basis in ('registration', 'residential'):
+            blocks = {r['id']: r for r in self.v2_payload['rows.json'] if r['basis'] == basis and r['level'] == 'block'}
+            self.assertEqual(set(blocks), {self.new_a, self.new_b}, basis)
+            self.assertEqual((blocks[self.new_a]['count'], blocks[self.new_b]['count']), (60, 25), basis)
+        self.assertNotIn(self.old_a, self.v2_payload['geometry.json']['block'])
+
+    def test_zctas_are_five_digit_and_valid(self):
+        self.assertEqual({r['id'] for r in self.v2_payload['rows.json'] if r['level'] == 'zcta'}, {'06001'})
+        self.assertEqual(set(self.v2_payload['geometry.json']['zcta']), {'06001'})
+        self.assertEqual(self.v2_payload['manifest.json']['bases']['registration']['zcta_mapped'], 85)
+
+    def test_v3_hierarchy_is_the_districts_own(self):
+        manifest = self.v3_payload['manifest.json']
+        self.assertEqual(manifest['schema'], 'cu-summary-v3')
+        self.assertRegex(manifest['snapshot'], r'^ct-cd001-[a-f0-9]{12}$')
+        self.assertEqual(manifest['hierarchy']['sources'], G.sources(self.d))
+        self.assertEqual(manifest['hierarchy']['region_definition'],
+                         'The supplied Connecticut CD-01 study region; not statewide or national coverage.')
+        rows = [r for r in self.v3_payload['rows.json'] if r['basis'] == 'registration']
+        by_level = {lv: {r['id']: r['label'] for r in rows if r['level'] == lv} for lv in G.EXTRA_LEVELS}
+        self.assertEqual(by_level['state_house'], {'09001': 'Connecticut House District 1'})          # '09ZZZ' dropped
+        self.assertEqual(by_level['county'], {'09110': 'Test Planning Region · Connecticut'})
+        self.assertEqual(by_level['region'], {'0901': 'Connecticut CD-01 study region'})
+        self.assertEqual(set(self.v3_payload['geometry.json']['state_senate']), {'09001'})
+
+    def test_a_missing_hierarchy_file_is_never_downloaded_for_another_district(self):
+        with tempfile.TemporaryDirectory() as folder:
+            geography = Path(folder) / 'geography'
+            shutil.copytree(self.geography, geography)
+            (geography / 'hierarchy' / 'county.zip').unlink()
+            with self.assertRaisesRegex(FileNotFoundError, 'county'):
+                extend_geography.build(self.csv_path, self.v2, geography, Path(folder) / 'v3', {**self.d, 'geography': geography})
+
+    def test_source_date_needs_a_dated_file_name(self):
+        self.assertEqual(ingest.source_date('statara_or_cd005_20260904.csv'), '2026-09-04')
+        with self.assertRaises(ValueError):
+            ingest.source_date('statara.csv')
 
 
 if __name__ == '__main__':

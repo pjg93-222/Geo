@@ -153,7 +153,7 @@ def definition(measure_id):
     return MEASURE_BY_ID[measure_id]
 
 
-def snapshot_key(source_sha256):
+def snapshot_key(source_sha256, prefix='co-cd005-'):
     config = {
         'schema': SCHEMA, 'method': METHOD_VERSION, 'threshold': THRESHOLD,
         'measures': MEASURES, 'ranges': FIELD_RANGES, 'codes': CODE_DOMAINS,
@@ -161,7 +161,7 @@ def snapshot_key(source_sha256):
     digest = hashlib.sha256((source_sha256 + json.dumps(
         config, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
     )).encode('utf-8')).hexdigest()
-    return 'co-cd005-' + digest[:12]
+    return prefix + digest[:12]
 
 
 def _hidden(status):

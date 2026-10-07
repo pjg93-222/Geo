@@ -113,6 +113,13 @@ def recode_blocks(blocks, regions, state_fips):
                  'regions': {k: int(v) for k, v in hit.COUNTYFP.value_counts().sort_index().items()}}
 
 
+def alias_map(blocks):
+    """{old block id: region block id} out of a recode_blocks frame: each alias row repeats the index of the re-coded row
+    it copies, which comes first. Every alias maps to exactly one region id (a row index holds at most one of each)."""
+    alias = blocks.index.duplicated(keep='first')
+    return dict(zip(blocks.geoid[alias], blocks.geoid[~alias].loc[blocks.index[alias]]))
+
+
 def join_receipt(csv_path, geoids):
     """{column: {rows, blank, joined, rate}} for the two block-id columns of a source CSV (counts only); rate is
     joined / non-blank rows."""
@@ -182,6 +189,12 @@ def prepare_district(d, root, join_check=False, bundle_layers=False, fetch_zcta=
         blocks = blocks.assign(geoid=blocks.GEOID20.astype(str))
     if not blocks.geoid.is_unique:
         raise ValueError('Block identifiers are not unique')
+    if d['block_regions']:
+        # the voter file still carries the old county codes on some rows: ingest, extend and the row-framework cache map them
+        aliases = alias_map(blocks)
+        if len(aliases) != receipt['recode']['aliases']:
+            raise ValueError('Alias count differs from the re-code count')
+        (root / 'block_aliases.json').write_text(json.dumps(aliases, sort_keys=True), encoding='utf-8')
     (root / 'blocks.gpkg').unlink(missing_ok=True)
     blocks[['geoid', 'geometry']].to_file(root / 'blocks.gpkg', driver='GPKG')
     urls = {row['file'].replace('\\', '/'): row['url'] for row in json.loads(DOWNLOADS.read_text(encoding='utf-8'))}

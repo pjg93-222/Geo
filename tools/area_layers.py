@@ -15,6 +15,9 @@ FROZEN_SHA256 = {
     'plan_sha256': 'f1ffa1a097605c781e8b6eaa65641308e7ec192f983de96f01b13db7d3da5e3a',
     'criteria_sha256': '114a051cdbf2ed00fccb94ab44551a1592e570354c06c66d9dac7eacd0aeb90b',
 }
+# The district's own freeze (Phase 3b re-freezes rowfw on each district's data). None fails closed: the builder and the
+# validator reject a bundle for a district until its three shas are pinned here after its freeze.
+FROZEN_SHA256_BY_DISTRICT = {'co-05': FROZEN_SHA256, 'or-05': None, 'ct-01': None}
 GROUPS = ('ovr', 'cua', 'part', 'soi', 'lean')
 INDEX_GROUPS = ('ovr', 'cua', 'part', 'soi')
 BASIS_LEVELS = {'registration': ('block', 'precinct', 'tract', 'zip'), 'residence': ('tract', 'zip')}
@@ -88,10 +91,10 @@ def withheld_set_sha256(rows):
     return hashlib.sha256(('\n'.join(lines) + '\n').encode('utf-8')).hexdigest()
 
 
-def snapshot_key(base_key, area_table_sha256, suppressed_ids_sha256, config_sha256):
+def snapshot_key(base_key, area_table_sha256, suppressed_ids_sha256, config_sha256, prefix='co-cd005-'):
     digest = hashlib.sha256(('|'.join([base_key, area_table_sha256, suppressed_ids_sha256, config_sha256,
                                        ROWFW_VERSION])).encode('utf-8')).hexdigest()
-    return 'co-cd005-' + digest[:12]
+    return prefix + digest[:12]
 
 
 def group_cells(group):

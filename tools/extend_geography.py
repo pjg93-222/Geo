@@ -13,8 +13,9 @@ import numpy as np
 import pandas as pd
 import shapely
 from shapely.geometry import shape
-from tools.geography_levels import SOURCES, EXTRA_LEVELS, label
-from tools.ingest import BASES, read_profiles, classify, protect, feature
+from tools import districts as D
+from tools.geography_levels import sources, EXTRA_LEVELS, label
+from tools.ingest import BASES, read_profiles, classify, protect, feature, canonical_blocks
 from tools.measures import SOURCE_FIELDS, aggregate_measures
 from tools.prepare_geography import download
 
@@ -33,7 +34,14 @@ def assign(points, eligible, features):
     keys[positions[pi[unique]]]=np.asarray(identifiers,dtype=object)[gi[unique]]
     return pd.Series(keys)
 
-def build(csv, base, geo, output):
+def official_boundaries(frame, district, state_fips):
+    """{id: geometry} of the state's official areas that overlap the district. 'ZZZ' ids are the legislative files'
+    water-only areas (Connecticut), never districts."""
+    frame=frame[frame.STATEFP==state_fips]
+    return {str(row.GEOID):row.geometry for row in frame.itertuples() if not str(row.GEOID).endswith('ZZZ') and row.geometry.intersection(district).area>1e-10}
+
+def build(csv, base, geo, output, d=None):
+    d=d or D.current();SOURCES=sources(d)
     output.mkdir(parents=True,exist_ok=True)
     payload={p.name:json.loads(p.read_text(encoding='utf-8')) for p in base.glob('*.json') if p.name in {'manifest.json','rows.json','geometry.json','streets.geojson','district.geojson'}}
     for name in ('streets.geojson','district.geojson'):
@@ -43,26 +51,27 @@ def build(csv, base, geo, output):
     checksum=hashlib.file_digest(csv.open('rb'),'sha256').hexdigest()
     if checksum!=manifest['source_sha256']:raise ValueError('Source does not match the base snapshot')
     extension=geo/'hierarchy';extension.mkdir(exist_ok=True)
+    missing=[level for level in SOURCES if not (extension/(level+'.zip')).exists()]
+    if missing and d['id']!=D.DEFAULT:raise FileNotFoundError('Not downloaded (this tool downloads for co-05 only): '+', '.join(missing))
     with ThreadPoolExecutor(max_workers=3) as pool:
         jobs=[pool.submit(download,url,extension/(level+'.zip')) for level,url in SOURCES.items()]
         for job in jobs:job.result()
     district=shape(payload['district.geojson']['features'][0]['geometry'])
     boundaries={}
     for level in SOURCES:
-        frame=gpd.read_file(extension/(level+'.zip')).to_crs(4326)
-        frame=frame[frame.STATEFP=='08']
-        boundaries[level]={str(row.GEOID):row.geometry for row in frame.itertuples() if row.geometry.intersection(district).area>1e-10}
+        boundaries[level]=official_boundaries(gpd.read_file(extension/(level+'.zip')).to_crs(4326),district,d['state_fips'])
         if any(geom.is_empty or not geom.is_valid for geom in boundaries[level].values()):raise ValueError('Invalid official boundary')
-    if set(boundaries['county'])!={'08041'}:raise ValueError('Unexpected county scope: review the approved pilot catalog')
-    boundaries['congressional']={'0805':district}
-    boundaries['region']={'0805':district}
+    if not set(d['counties'])<=set(boundaries['county'])<=set(d['county_names']):raise ValueError('Unexpected county scope: review the approved pilot catalog')
+    boundaries['congressional']={d['district_id']:district}
+    boundaries['region']={d['district_id']:district}
     frame,receipt=read_profiles(csv,extra_fields=SOURCE_FIELDS)
+    canonical_blocks(frame,d)
     if receipt!=manifest['input']:raise ValueError('Source input receipt changed')
     print('Validated source identity; assigning county and legislative polygons',flush=True)
     blocks=gpd.read_file(geo/'blocks.gpkg').set_index('geoid').geometry.to_dict()
     reconciliation={}
     for basis,prefix in BASES.items():
-        status,points,_,_=classify(frame,prefix,blocks,district)
+        status,points,_,_=classify(frame,prefix,blocks,district,d['state'],d['cd'])
         mapped=status=='mapped';total=int(mapped.sum())
         if total!=manifest['bases'][basis]['mapped']:raise ValueError('Mapped-source baseline changed')
         reconciliation[basis]={}
@@ -71,7 +80,7 @@ def build(csv, base, geo, output):
             counts=keys[eligible].value_counts().to_dict()
             assigned=int(eligible.sum())
             reconciliation[basis][level]={'assigned':assigned,'unassigned':total-assigned}
-            rows=[{'id':ident,'basis':basis,'level':level,'label':label(level,ident),'count':int(counts.get(ident,0)),
+            rows=[{'id':ident,'basis':basis,'level':level,'label':label(level,ident,d),'count':int(counts.get(ident,0)),
                    'source_count':int(counts.get(ident,0)),'status':'ok','partial':not district.covers(geom),
                    'share':None,'coverage':None} for ident,geom in boundaries[level].items()]
             protect(rows,total);aggregate_measures(frame,keys,eligible,rows)
@@ -82,10 +91,10 @@ def build(csv, base, geo, output):
         payload['geometry.json'][level]={ident:feature(ident,geom) for ident,geom in features.items()}
     hashes={level:hashlib.file_digest((extension/(level+'.zip')).open('rb'),'sha256').hexdigest() for level in SOURCES}
     hierarchy={'method':METHOD,'sources':SOURCES,'hashes':hashes,'reconciliation':reconciliation,
-               'region_definition':'The supplied Colorado CD-05 study region; not statewide or national coverage.',
+               'region_definition':'The supplied %s CD-%s study region; not statewide or national coverage.'%(d['state_name'],d['cd119fp']),
                'assignment':'Validated source coordinates intersect exactly one official polygon. Ambiguous boundary matches are unassigned. Legislative layers overlap and are not nested parents.'}
     digest=hashlib.sha256((manifest['snapshot']+json.dumps(hierarchy,sort_keys=True)).encode()).hexdigest()[:12]
-    manifest.update(schema='cu-summary-v3',snapshot='co-cd005-'+digest,created_at=datetime.now(timezone.utc).isoformat(),hierarchy=hierarchy)
+    manifest.update(schema='cu-summary-v3',snapshot=d['snapshot_prefix']+digest,created_at=datetime.now(timezone.utc).isoformat(),hierarchy=hierarchy)
     if hashlib.file_digest(csv.open('rb'),'sha256').hexdigest()!=checksum:raise ValueError('Source changed during aggregation')
     for name,data in payload.items():(output/name).write_text(json.dumps(data,separators=(',',':'),allow_nan=False),encoding='utf-8')
     archive=output.parent/(manifest['snapshot']+'.zip')

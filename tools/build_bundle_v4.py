@@ -7,13 +7,16 @@ Run with the shared work venv (numpy + shapely), never with system Python:
 Inputs (all aggregate; no person row is read):
   * the base bundle ZIP (cu-summary-v3): rows, 2020 block and ZCTA polygons, street outlines, district outline;
   * area_scores_rowfw-1.0.0.csv (published areas) and summaries/area_suppressed_ids.csv (withheld areas);
-  * the frozen framework_config.json, plan and criteria files (sha256 against tools/area_layers.FROZEN_SHA256);
+  * the frozen framework_config.json, plan and criteria files (sha256 against tools/area_layers.FROZEN_SHA256_BY_DISTRICT);
   * release/P1_D2_suppression_counts.json (the D2 suppression receipt and its final audit round);
   * scores.sqlite3 (counts only: block, precinct, tract and ZIP codes of the registered people, to place blocks in
     precincts and to count blocks per area; its recorded area-table and suppressed-ids hashes must equal the files').
 
-Output: data/co-cd005-<key>.zip and data/co-cd005-<key>.zip.sha256 (import with `manage.py import_summary <zip>`), and a
-receipt with counts only in _build/bundle_v4_receipt.json.
+The district comes from CU_DISTRICT (default co-05; the server's variable): its snapshot prefix, rowfw build, score store,
+block file and frozen shas. Another district than co-05 needs --base (its cu-summary-v3 bundle).
+
+Output: data/<snapshot prefix><key>.zip and data/<snapshot prefix><key>.zip.sha256 (import with `manage.py import_summary
+<zip>`), and a receipt with counts only in _build/bundle_v4_receipt.json (_build/bundle_v4_receipt_<district>.json).
 
 Stops (and writes nothing) when: a frozen file, the area table or the suppressed-id list does not match its hash or the
 score store's record; the table has a residence block row or a hatch column; the published and withheld counts differ
@@ -27,6 +30,7 @@ import io
 import json
 import math
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -41,14 +45,12 @@ from shapely.ops import unary_union
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools import area_layers as AL              # noqa: E402
-from tools.geography_levels import area_label    # noqa: E402
+from tools import districts as D                 # noqa: E402
+from tools.geography_levels import area_label, area_pattern    # noqa: E402
 from tools.glassbox import GlassBox, new_run_id  # noqa: E402
 
 V3 = Path(__file__).resolve().parents[1]
-ROOT = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography')
-RFB = ROOT / '.local' / 'row-framework-20260930' / 'build' / 'rowfw-1.0.0'
-BASE_ZIP = V3 / 'data' / 'co-cd005-b0edb0f04d6c.zip'
-BLOCKS_GPKG = Path('C:/Users/pgoff/Documents/Codex/2026-09-27/we-are-going-to-have-an/work/geography/blocks.gpkg')
+BASE_ZIP = V3 / 'data' / 'co-cd005-b0edb0f04d6c.zip'        # co-05 only; another district passes --base
 FILES = ('manifest.json', 'rows.json', 'geometry.json', 'streets.geojson', 'district.geojson')
 GROUP_ROW_KEYS = ('basis', 'level', 'area_id')
 ROUND = 6                  # coordinate decimals, as in the base bundle
@@ -99,7 +101,25 @@ def number(text):
     return float(text)
 
 
-def check_area_table(columns, rows, suppressed, receipt):
+def drop_pseudo_areas(area_rows, suppressed_rows, d):
+    """(area rows, suppressed rows, dropped): the rows whose area_id is not an id of its level are left out. rowfw makes
+    one pseudo-area per level of the people with no block, precinct, tract or ZIP (the id is the text of the blank).
+    dropped = {'basis/level': {'published': areas, 'withheld': areas}}, each area counted once."""
+    patterns = {level: re.compile(area_pattern(level, d)) for level in AL.LEVEL_ORDER}
+    dropped = {}
+
+    def keep(row, status):
+        if patterns[row['level']].fullmatch(str(row['area_id'])):
+            return True
+        dropped.setdefault('%s/%s' % (row['basis'], row['level']), {'published': set(), 'withheld': set()})[status].add(row['area_id'])
+        return False
+    kept_area = [r for r in area_rows if keep(r, 'published')]
+    kept_suppressed = [r for r in suppressed_rows if keep(r, 'withheld')]
+    return kept_area, kept_suppressed, {k: {s: len(ids) for s, ids in v.items()} for k, v in sorted(dropped.items())}
+
+
+def check_area_table(columns, rows, suppressed, receipt, dropped=None):
+    dropped = dropped or {}
     published = {}
     for row in rows:
         require(row['suppressed'] in ('0', '0.0'), 'A suppressed row carries values')
@@ -112,9 +132,10 @@ def check_area_table(columns, rows, suppressed, receipt):
     expected = receipt['D2_counts']
     for key, counts in expected.items():
         basis, level = key.split('/')
-        require(len(published.get((basis, level), ())) == counts['published'],
+        cut = dropped.get(key, {'published': 0, 'withheld': 0})
+        require(len(published.get((basis, level), ())) + cut['published'] == counts['published'],
                 'Published areas of %s differ from the D2 receipt' % key)
-        require(len(withheld.get((basis, level), ())) == counts['areas'] - counts['published'],
+        require(len(withheld.get((basis, level), ())) + cut['withheld'] == counts['areas'] - counts['published'],
                 'Withheld areas of %s differ from the D2 receipt' % key)
         require(not (published.get((basis, level), set()) & withheld.get((basis, level), set())),
                 'An area is both published and withheld in %s' % key)
@@ -270,9 +291,9 @@ GEOMETRY_METHOD = {
 
 
 def apply_v4_manifest(manifest, rows, adjacency, *, base_key, area_sha, suppressed_sha, frozen, run_id, d1_audit,
-                      created_at, concordance):
+                      created_at, concordance, prefix='co-cd005-'):
     """Turn a v3 manifest into the v4 manifest (mutates and returns it)."""
-    key = AL.snapshot_key(base_key, area_sha, suppressed_sha, frozen['framework_config_sha256'])
+    key = AL.snapshot_key(base_key, area_sha, suppressed_sha, frozen['framework_config_sha256'], prefix)
     manifest.update({
         'schema': 'cu-summary-v4', 'snapshot': key, 'created_at': created_at,
         'row_framework': {
@@ -293,6 +314,7 @@ def build(args, log):
     box = GlassBox(args.run_id, 'cu-geography-v3/tools/build_bundle_v4.py')
     box.run('running', 'start', 'cu-summary-v4 bundle build: area table + geometry (counts only, no names)')
     started = time.time()
+    d = D.current()
     rfb = Path(args.rowfw)
 
     # 1. frozen inputs and hashes ------------------------------------------------------------------------------
@@ -300,7 +322,7 @@ def build(args, log):
     frozen = {'framework_config_sha256': sha256_file(rfb / 'framework_config.json'),
               'plan_sha256': sha256_file(rfb / 'PLAN_rowfw-1.0.0.md'),
               'criteria_sha256': sha256_file(rfb / 'criteria_rowfw-1.0.0.json')}
-    require(frozen == AL.FROZEN_SHA256, 'A frozen row-framework file does not match its recorded sha256')
+    require(frozen == AL.FROZEN_SHA256_BY_DISTRICT[d['id']], 'A frozen row-framework file does not match its recorded sha256')
     area_path = rfb / 'area_scores_rowfw-1.0.0.csv'
     suppressed_path = rfb / 'summaries' / 'area_suppressed_ids.csv'
     area_sha, suppressed_sha = sha256_file(area_path), sha256_file(suppressed_path)
@@ -315,9 +337,10 @@ def build(args, log):
     columns, area_rows = read_area_table(area_path)
     with open(suppressed_path, newline='', encoding='utf-8') as stream:
         suppressed_rows = list(csv.DictReader(stream))
-    published, withheld = check_area_table(columns, area_rows, suppressed_rows, receipt)
+    area_rows, suppressed_rows, pseudo_dropped = drop_pseudo_areas(area_rows, suppressed_rows, d)
+    published, withheld = check_area_table(columns, area_rows, suppressed_rows, receipt, pseudo_dropped)
     log('inputs verified', {'published': sum(len(v) for v in published.values()),
-                            'withheld': sum(len(v) for v in withheld.values())})
+                            'withheld': sum(len(v) for v in withheld.values()), 'pseudo_areas_dropped': pseudo_dropped})
 
     # 2. base bundle ----------------------------------------------------------------------------------------------
     box.stage('running', 'read-base', 'base bundle files')
@@ -391,8 +414,8 @@ def build(args, log):
     published_ids = {lv: {r['id'] for r in rows if r['basis'] == 'registration' and r['level'] == lv
                           and r['status'] == 'ok'} for lv in AL.LEVEL_ORDER}
     # a block of the table that the base bundle lacks (a registered block with no placed address) is read from the
-    # same 2020 block file; people registered outside Colorado stay polygon-less withheld areas
-    missing_blocks = sorted(i for i in universe['block'] if i not in block_geoms and i.startswith('08'))
+    # same 2020 block file; people registered outside the state stay polygon-less withheld areas
+    missing_blocks = sorted(i for i in universe['block'] if i not in block_geoms and i.startswith(d['state_fips']))
     added = {}
     if missing_blocks:
         import pyogrio
@@ -469,7 +492,7 @@ def build(args, log):
                    'withheld_without_polygon': withheld_without_polygon}
     apply_v4_manifest(manifest, rows, adjacency, base_key=base_key, area_sha=area_sha, suppressed_sha=suppressed_sha,
                       frozen=frozen, run_id=receipt['run_id'], d1_audit=d1_audit,
-                      created_at=meta_built(args.scores), concordance=concordance)
+                      created_at=meta_built(args.scores), concordance=concordance, prefix=d['snapshot_prefix'])
     key = manifest['snapshot']
     payload_files = {
         'manifest.json': dumps(manifest).encode('utf-8'), 'rows.json': blobs['rows.json'],
@@ -480,7 +503,7 @@ def build(args, log):
 
     # 7. write the ZIP, then check it with the app's own validator -------------------------------------------------
     box.stage('running', 'write', 'writing the ZIP (deterministic)')
-    out = Path(args.out_dir) / ('co-cd005-%s.zip' % key[len('co-cd005-'):])
+    out = Path(args.out_dir) / (key + '.zip')
     out.parent.mkdir(parents=True, exist_ok=True)
     temporary = out.with_suffix('.zip.building')
     with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -497,7 +520,7 @@ def build(args, log):
     result = {
         'snapshot': key, 'zip': out.name, 'zip_sha256': zip_sha, 'zip_bytes': out.stat().st_size,
         'base_snapshot': base_key, 'base_zip_sha256': base_sha, 'area_table_sha256': area_sha,
-        'suppressed_ids_sha256': suppressed_sha, 'rows': len(rows),
+        'suppressed_ids_sha256': suppressed_sha, 'rows': len(rows), 'pseudo_areas_dropped': pseudo_dropped,
         'levels': {'%s/%s' % (bs, lv): {'published': len(published[(bs, lv)]),
                                          'withheld': len(withheld[(bs, lv)])} for (bs, lv) in sorted(published)},
         'geometry': {'tracts': len(tract_geoms), 'precincts': len(precinct_geoms),
@@ -533,14 +556,16 @@ def validate_zip(path):
 
 
 def main(argv=None):
+    d = D.current()
+    co = d['id'] == D.DEFAULT
     parser = argparse.ArgumentParser(description='Build the cu-summary-v4 bundle (fails closed).')
     parser.add_argument('--real', action='store_true', help='use the real rowfw files and the V3 score store')
-    parser.add_argument('--rowfw', default=str(RFB))
-    parser.add_argument('--base', default=str(BASE_ZIP))
-    parser.add_argument('--scores', default=str(V3 / '.local' / 'scores.sqlite3'))
-    parser.add_argument('--blocks-gpkg', default=str(BLOCKS_GPKG))
+    parser.add_argument('--rowfw', default=str(D.rowfw_build(d)))
+    parser.add_argument('--base', default=str(BASE_ZIP) if co else None, required=not co)
+    parser.add_argument('--scores', default=str(D.data_dir(d) / 'scores.sqlite3'))
+    parser.add_argument('--blocks-gpkg', default=str(Path(d['geography']) / 'blocks.gpkg'))
     parser.add_argument('--out-dir', default=str(V3 / 'data'))
-    parser.add_argument('--receipt', default=str(V3 / '_build' / 'bundle_v4_receipt.json'))
+    parser.add_argument('--receipt', default=str(V3 / '_build' / ('bundle_v4_receipt.json' if co else 'bundle_v4_receipt_%s.json' % d['id'])))
     parser.add_argument('--skip-validate', action='store_true')
     parser.add_argument('--run-id', default=new_run_id('cu-geo-v3-bundle-v4'))
     args = parser.parse_args(argv)

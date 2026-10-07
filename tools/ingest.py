@@ -1,5 +1,5 @@
 """Local-only profile validation. The output contains protected aggregates only."""
-import argparse, collections, csv, hashlib, json, math, re, shutil, zipfile
+import argparse, collections, csv, hashlib, json, math, re, shutil, sys, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import geopandas as gpd
@@ -8,8 +8,11 @@ import numpy as np
 import shapely
 from shapely.geometry import mapping, shape
 try:
+    from . import districts as D
     from .measures import MEASURES, SOURCE_FIELDS, SCHEMA, MEASURE_METHODOLOGY, aggregate_measures, snapshot_key
 except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from tools import districts as D
     from measures import MEASURES, SOURCE_FIELDS, SCHEMA, MEASURE_METHODOLOGY, aggregate_measures, snapshot_key
 
 BASES={'registration':'svi_registration','residential':'sii'}
@@ -39,6 +42,27 @@ def read_profiles(path, encoding='cp1252', extra_fields=()):
             else:records[key]=data;signatures[key]=signature
     for key in conflicts:records.pop(key,None)
     return pd.DataFrame(records.values(),columns=fields),{'input_rows':rows,'column_count':len(header),'duplicate_rows_collapsed':duplicates,'conflicting_ids_quarantined':len(conflicts),'accepted_unique_profiles':len(records),'malformed_width_rows':0}
+
+def canonical_blocks(df, d):
+    """Block ids of both bases in the district's block file vintage, in place (Connecticut: 282 voter ids carry the old
+    county codes; the file holds an alias row for each, so one polygon would become two areas). No-op elsewhere."""
+    aliases = D.block_aliases(d)
+    if aliases:
+        for prefix in BASES.values(): df[prefix + '_censusid'] = df[prefix + '_censusid'].replace(aliases)
+    return df
+
+def polygonal(geom):
+    """A valid geometry: a valid one is returned as is; an invalid one is made valid and keeps its polygonal parts only."""
+    if geom.is_valid: return geom
+    fixed = shapely.make_valid(geom)
+    if fixed.geom_type in ('Polygon', 'MultiPolygon'): return fixed
+    return shapely.union_all([g for g in shapely.get_parts(fixed) if g.geom_type in ('Polygon', 'MultiPolygon')])
+
+def source_date(name):
+    """'2026-09-04' from a source file name ending _20260904.csv."""
+    found = re.search(r'_(\d{4})(\d{2})(\d{2})\.csv$', name)
+    if not found: raise ValueError('Source file name carries no _YYYYMMDD date: ' + name)
+    return '-'.join(found.groups())
 
 def classify(df, prefix, block_lookup, district, state='CO', cd='005'):
     geoid=df[prefix+'_censusid'];lat=pd.to_numeric(df[prefix+'_latitude'],errors='coerce');lon=pd.to_numeric(df[prefix+'_longitude'],errors='coerce')
@@ -83,18 +107,21 @@ def protect(rows, total):
 def feature(geoid,geom):
     return {'id':geoid,'geometry':mapping(geom),'bbox':list(geom.bounds)}
 
-def ingest(csv_path, geo, output, encoding='cp1252'):
+def ingest(csv_path, geo, output, encoding='cp1252', d=None):
+    d=d or D.current()
     output.mkdir(parents=True,exist_ok=True)
     source_hash=hashlib.file_digest(csv_path.open('rb'),'sha256').hexdigest()
     df,receipt=read_profiles(csv_path,encoding,extra_fields=SOURCE_FIELDS)
+    canonical_blocks(df,d)
     print(f'Parsed {receipt["input_rows"]:,} source records; validating geometry',flush=True)
     blocks=gpd.read_file(geo/'blocks.gpkg').set_index('geoid')
     lookup=blocks.geometry.to_dict();district=shape(json.loads((geo/'district.geojson').read_text())['features'][0]['geometry'])
     zcta=gpd.read_file(geo/'zcta.geojson');zcta['geoid']=zcta.geoid.astype(str)
+    zcta=zcta[zcta.geoid.str.fullmatch(r'\d{5}')].copy();zcta['geometry']=[polygonal(g) for g in zcta.geometry]
     zlookup=dict(zip(zcta.geoid,zcta.geometry));ztree=shapely.STRtree(zcta.geometry.values)
     all_rows=[];summaries={};geometry={'block':{},'zcta':{}};local_receipt={}
     for basis,prefix in BASES.items():
-        status,points,known,covered=classify(df,prefix,lookup,district)
+        status,points,known,covered=classify(df,prefix,lookup,district,d['state'],d['cd'])
         mapped=status=='mapped';total=int(mapped.sum());counts=collections.Counter(status)
         reason_rows=[{'id':k,'count':int(v),'source_count':int(v)} for k,v in counts.items() if k!='mapped']
         protect(reason_rows,len(df)-total)
@@ -129,8 +156,8 @@ def ingest(csv_path, geo, output, encoding='cp1252'):
                 for row in protected:row['source_count']=None;row['coverage']=None
             all_rows.extend(protected)
     provenance=json.loads((geo/'provenance.json').read_text())
-    key=snapshot_key(source_hash)
-    manifest={'schema':SCHEMA,'snapshot':key,'label':'Colorado · District 05','source_name':csv_path.name,'source_sha256':source_hash,'source_date':'2026-09-04','source_date_basis':'Filename; not a verified date for every underlying field','created_at':datetime.now(timezone.utc).isoformat(),'encoding':encoding,'input':receipt,'bases':summaries,'threshold':THRESHOLD,'scope':'Colorado CD-005 source-file extract; does not establish complete electorate coverage','support_likelihood':'Not measured','persistent_voices':'Not measured','geography':provenance,'vintage_validation':'Vendor Census vintage is unspecified. Accepted fine-grained records match a 2020 Census identifier and their coordinate is covered by that exact official polygon.','privacy':'Fixed summary partitions; no individual records, arbitrary cohort filters, or cross-layer intersection totals. Primary and complementary small-cell suppression applied.','measures':MEASURES,'measure_methodology':MEASURE_METHODOLOGY}
+    key=snapshot_key(source_hash,d['snapshot_prefix'])
+    manifest={'schema':SCHEMA,'snapshot':key,'label':d['label'],'source_name':csv_path.name,'source_sha256':source_hash,'source_date':source_date(csv_path.name),'source_date_basis':'Filename; not a verified date for every underlying field','created_at':datetime.now(timezone.utc).isoformat(),'encoding':encoding,'input':receipt,'bases':summaries,'threshold':THRESHOLD,'scope':'%s CD-%s source-file extract; does not establish complete electorate coverage'%(d['state_name'],d['cd']),'support_likelihood':'Not measured','persistent_voices':'Not measured','geography':provenance,'vintage_validation':'Vendor Census vintage is unspecified. Accepted fine-grained records match a 2020 Census identifier and their coordinate is covered by that exact official polygon.','privacy':'Fixed summary partitions; no individual records, arbitrary cohort filters, or cross-layer intersection totals. Primary and complementary small-cell suppression applied.','measures':MEASURES,'measure_methodology':MEASURE_METHODOLOGY}
     files={'manifest.json':manifest,'rows.json':all_rows,'geometry.json':geometry,'streets.geojson':json.loads((geo/'streets.geojson').read_text()),'district.geojson':json.loads((geo/'district.geojson').read_text())}
     for name,data in files.items():(output/name).write_text(json.dumps(data,separators=(',',':'),allow_nan=False),encoding='utf-8')
     # Local receipt contains only diagnostics, never identifiers or individual coordinates.
