@@ -4,17 +4,20 @@ state/cd parameters. No real data, no Django, no server.
     <venv python> -m unittest tools.test_districts          (from the V3 folder)
 """
 import json
+import os
 import re
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 from shapely.geometry import box
 
 from server.research import walk_names as N
+from tools import build_scores_v3 as BS
 from tools import build_walk as B
 from tools import districts as D
 from tools import ingest
@@ -64,6 +67,49 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(CT['abs_rule'], 'Abs = absentee or mail ballots (A or M)')
         self.assertIsNone(OR['race_mode'])
         self.assertIsNone(CT['race_mode'])
+
+
+class RowfwConfigTests(unittest.TestCase):
+    """Phase 3b Lane 0: the row-framework folder, county names, interim overall, current() and block_aliases()."""
+
+    def test_co_paths_equal_build_scores_defaults(self):
+        self.assertEqual(D.rowfw_build(CO), BS.RFB)
+        self.assertEqual(D.rowfw_cache(CO), BS.RF / 'cache' / 'inputs.parquet')
+        self.assertEqual(D.rowfw_build(OR), D.LOCAL / 'or-05' / 'rowfw' / 'build' / 'rowfw-1.0.0')
+        self.assertEqual(D.rowfw_cache(CT), D.LOCAL / 'ct-01' / 'rowfw' / 'cache' / 'inputs.parquet')
+
+    def test_county_names(self):
+        self.assertEqual(CO['county_names'], {'08041': 'El Paso County'})
+        for d in (CO, OR, CT):
+            self.assertTrue(set(d['counties']) <= set(d['county_names']), d['id'])     # every road county has a name
+            self.assertTrue(all(k.startswith(d['state_fips']) for k in d['county_names']), d['id'])
+        self.assertEqual(OR['county_names']['41005'], 'Clackamas County')
+        self.assertEqual(CT['county_names']['09110'], 'Capitol Planning Region')
+
+    def test_interim_overall(self):
+        self.assertIsNone(CO['interim_overall'])
+        for d in (OR, CT):
+            self.assertEqual(d['interim_overall'], CO['score_weights'], d['id'])      # Colorado's 40/35/25
+
+    def test_current_honours_cu_district(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('CU_DISTRICT', None)
+            self.assertIs(D.current(), CO)
+            os.environ['CU_DISTRICT'] = ''
+            self.assertIs(D.current(), CO)
+            os.environ['CU_DISTRICT'] = 'ct-01'
+            self.assertIs(D.current(), CT)
+            os.environ['CU_DISTRICT'] = 'xx-99'
+            with self.assertRaises(KeyError):
+                D.current()
+
+    def test_block_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = {**CT, 'geography': Path(tmp)}
+            self.assertEqual(D.block_aliases(d), {})                                   # file missing
+            aliases = {'090010101001001': '091100101001001'}
+            (Path(tmp) / 'block_aliases.json').write_text(json.dumps(aliases), encoding='utf-8')
+            self.assertEqual(D.block_aliases(d), aliases)
 
 
 class CityTests(unittest.TestCase):

@@ -7,6 +7,7 @@ itself, its street salt is the sibling cu-geography repo's, its snapshot keys st
 window, vote rule and city words are the ones walk_names.py and build_walk.py have always used.
 """
 import json
+import os
 import re
 import sqlite3
 from contextlib import closing
@@ -46,6 +47,14 @@ def _ct_lead(tokens):
 _OR_COUNTIES = ('41005', '41017', '41031', '41043', '41047', '41051')   # Benton 41003 sliver: virtual streets, no file
 _CT_REGIONS = ('09110', '09130', '09140', '09160')
 _WITH_CANDIDATE = {'cua': 30, 'support': 25, 'part': 25, 'soi': 20}       # Paul 2026-10-07
+_INTERIM = {'cua': 40, 'part': 35, 'soi': 25}     # Colorado's weights, shown for OR/CT until candidate support exists (Phase 4B)
+# NAMELSAD of every county the district polygon meets (area > 1e-10 deg2, the extend_geography rule), read from the
+# TIGER2025 county file on 2026-10-07; CT's TIGER2025 "counties" are the planning regions
+_OR_NAMES = {'41003': 'Benton County', '41005': 'Clackamas County', '41017': 'Deschutes County',
+             '41031': 'Jefferson County', '41043': 'Linn County', '41047': 'Marion County', '41051': 'Multnomah County'}
+_CT_NAMES = {'09110': 'Capitol Planning Region', '09130': 'Lower Connecticut River Valley Planning Region',
+             '09140': 'Naugatuck Valley Planning Region', '09160': 'Northwest Hills Planning Region',
+             '09170': 'South Central Connecticut Planning Region'}   # 09170: touches only; 25 voter blocks are recoded there
 
 DISTRICTS = {
     'co-05': {
@@ -65,6 +74,8 @@ DISTRICTS = {
         'abs_gate': N.ABS_GATE['min_share'],
         'person_fields': 'scores', 'party_rollup_check': True, 'port': 8767,
         'score_weights': {'cua': 40, 'part': 35, 'soi': 25}, 'industries': ('cua',),
+        'county_names': {'08041': 'El Paso County'}, 'rowfw_root': SIBLING_LOCAL / 'row-framework-20260930',
+        'interim_overall': None,
         'candidate': None, 'party': None, 'race_mode': None, 'primary_universe': 'party_only',
     },
     'or-05': {
@@ -93,6 +104,7 @@ DISTRICTS = {
         'abs_gate': None,
         'person_fields': 'csv', 'party_rollup_check': False, 'port': 8775,
         'score_weights': dict(_WITH_CANDIDATE), 'industries': ('cua',),
+        'county_names': _OR_NAMES, 'rowfw_root': LOCAL / 'or-05' / 'rowfw', 'interim_overall': dict(_INTERIM),
         # race_mode is set by Paul per district (O-2), never in code; None until Phase 4B.
         'candidate': 'Janelle Bynum', 'party': 'D', 'race_mode': None, 'primary_universe': 'party_only',
     },
@@ -123,6 +135,7 @@ DISTRICTS = {
         'abs_prefixes': ('A', 'M'), 'abs_rule': 'Abs = absentee or mail ballots (A or M)', 'abs_gate': None,
         'person_fields': 'csv', 'party_rollup_check': True, 'port': 8777,
         'score_weights': dict(_WITH_CANDIDATE), 'industries': ('cua',),
+        'county_names': _CT_NAMES, 'rowfw_root': LOCAL / 'ct-01' / 'rowfw', 'interim_overall': dict(_INTERIM),
         'candidate': 'Luke Bronin', 'party': 'D', 'race_mode': None, 'primary_universe': 'party_only',
     },
 }
@@ -138,6 +151,11 @@ def get(district=None):
         raise KeyError('Unknown district %r (known: %s)' % (district, ', '.join(DISTRICTS))) from None
 
 
+def current():
+    """The entry this process serves: CU_DISTRICT (default co-05), as server/settings.py reads it."""
+    return get(os.environ.get('CU_DISTRICT') or None)
+
+
 def data_dir(d, local=LOCAL):
     return Path(local) / d['data_dir'] if d['data_dir'] else Path(local)
 
@@ -148,6 +166,21 @@ def street_salt(d, local=LOCAL):
 
 def road_paths(d):
     return [Path(d['geography']) / name for name in d['road_files']]
+
+
+def rowfw_build(d):
+    """The frozen rowfw build folder (co-05: the sibling repo's, build_scores_v3.RFB)."""
+    return Path(d['rowfw_root']) / 'build' / 'rowfw-1.0.0'
+
+
+def rowfw_cache(d):
+    return Path(d['rowfw_root']) / 'cache' / 'inputs.parquet'
+
+
+def block_aliases(d):
+    """{old block id: planning-region block id} that prepare_geography writes for CT; {} when the file is missing."""
+    path = Path(d['geography']) / 'block_aliases.json'
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
 
 
 def snapshot_pattern(d):

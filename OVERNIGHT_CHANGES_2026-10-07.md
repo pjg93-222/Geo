@@ -14,3 +14,9 @@ One dated bullet per change, in plain English. Times are this machine's local ti
 - 2026-10-07 (lead): moved .local\or-05\luna-v1\receipts\report.json aside as report.smoke-stale-20261007T091554Z.json. It came from a synthetic report smoke test (outputs in a Temp report-smoke folder), not from the real or-05 run, and would have made the runner skip the real or-05 report step. Nothing deleted.
 
 - 2026-10-07 15:08 (verifier): the Phase 3 imputation code and this log are committed as bbebf92f0 (the "Nothing here is committed" line above no longer applies to them); the .local and _build outputs stay uncommitted.
+
+- 2026-10-07 15:13 (Phase 3b lane 0): added three facts to each district entry in tools/districts.py: the county names the district touches (El Paso for Colorado, seven Oregon counties, five Connecticut planning regions), the folder that holds the district's row-framework copy (Colorado's stays the sibling repo's), and the interim overall weights (Colorado's 40/35/25 for Oregon and Connecticut, none for Colorado). Nothing reads them yet.
+
+- 2026-10-07 15:13 (Phase 3b lane 0): added four small helpers to tools/districts.py: current() (the district this process serves, from CU_DISTRICT), rowfw_build() and rowfw_cache() (where a district's row-framework build and cache live; for Colorado they give exactly the paths build_scores_v3 uses today), and block_aliases() (the Connecticut old-to-new block map, empty when the file is not there). Colorado's behaviour is unchanged.
+
+- 2026-10-07 15:13 (Phase 3b lane 0): added 5 tests for those facts and helpers to tools/test_districts.py (17 pass). The Django suite (333), the walk and measures tests (154) and the Colorado API check (43 endpoints identical to the baseline) pass.
