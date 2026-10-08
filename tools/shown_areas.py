@@ -56,6 +56,13 @@ def check_reproduced(released, shown):
     return m
 
 
+def bands_moved(m):
+    """{'basis/level': released areas whose band or top-10 band changed with the new ranking} (the lean group has no standing)."""
+    index = m[m.group != 'lean']
+    moved = index[(index.band_old != index.band) | (index.top10_band_old != index.top10_band)]
+    return {'%s/%s' % k: int(n) for k, n in moved.groupby(['basis', 'level']).area_id.nunique().items()}
+
+
 def build(d, gb):
     b = D.rowfw_build(d)
     spec = importlib.util.spec_from_file_location('p1_nofloor_area_table', b / 'tools' / 'p1_nofloor_area_table.py')
@@ -94,9 +101,8 @@ def build(d, gb):
     areas = {'%s/%s' % k: int(n) for k, n in shown[shown.group == 'ovr'].groupby(['basis', 'level']).size().items()}
     if areas != {k: v['areas'] for k, v in receipt.items()} or not (shown.n_rows >= 1).all():
         raise SystemExit('FAILED: areas per level differ from the D2 receipt, or an area has no people: %s' % areas)
-    moved = m[(m.band_old != m.band) | (m.top10_band_old != m.top10_band)].groupby(['basis', 'level']).area_id.nunique()
     return shown, {'areas_per_basis_level': areas, 'released_rows': len(released), 'newly_shown_rows': len(shown) - len(released),
-                   'released_rows_differing': 0, 'released_areas_whose_band_moved': {'%s/%s' % k: int(n) for k, n in moved.items()},
+                   'released_rows_differing': 0, 'released_areas_whose_band_moved': bands_moved(m),
                    'method': 'frozen_tau2_all_standings', 'range_method': 'analytic_eb_posterior_90',
                    'inputs': {'row_scores_sha256': sha256_file(b / 'row_scores_rowfw-1.0.0.parquet'),
                               'released_table_sha256': sha256_file(NF.OLD_CSV), 'cache_sha256': cfg['inputs']['cache']['sha256']},

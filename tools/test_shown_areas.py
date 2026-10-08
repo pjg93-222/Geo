@@ -32,7 +32,12 @@ class ReproducedTests(unittest.TestCase):
         shown['band'] = [1.0, 3.0, 5.0]
         merged = SA.check_reproduced(released, shown)
         self.assertEqual(len(merged), 2)                                # one merged row per released row
-        self.assertEqual(int((merged.band_old != merged.band).sum()), 2)
+        self.assertEqual(SA.bands_moved(merged), {'registration/block': 2})       # B1 2 -> 1, B2 2 -> 3
+
+    def test_the_lean_group_has_no_standing_and_never_counts_as_moved(self):
+        released = pd.concat([table(['B1']), table(['B1']).assign(group='lean', band=np.nan, top10_band=np.nan)])
+        shown = pd.concat([table(['B1']), table(['B1']).assign(group='lean', band=np.nan, top10_band=np.nan)])
+        self.assertEqual(SA.bands_moved(SA.check_reproduced(released, shown)), {})
 
     def test_one_ulp_in_a_released_value_stops_it(self):
         released = table(['B1', 'B2'])
