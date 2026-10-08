@@ -467,29 +467,54 @@ class UnmaskSmallBodiesTests(unittest.TestCase):
 
     def test_summaries_json_and_csv(self):
         def body(key, rows):
-            return {'meta': {'snapshot': key, 'metric': 'count', 'threshold': 20, 'coverage': 0.9, 'denominator': 100, 'measure_methodology': key},
-                    'rows': rows}
+            return {'meta': {'snapshot': key, 'metric': 'count', 'threshold': 20, 'coverage': 0.9, 'denominator': 100, 'measure_methodology': key,
+                             'index_method': None}, 'rows': rows}
         row = lambda ident, count, index, status='ok': {'id': ident, 'count': count, 'status': status, 'share': count and count / 100,    # noqa: E731
-                                                          'value': count, 'index': index, 'measure_status': status}
+                                                          'coverage': None, 'source_count': None, 'value': count, 'index': index,
+                                                          'valid_count': count, 'field_coverage': None, 'measure_status': status}
         old = body(OLD_KEY, [row('Z1', 100, 75.0), row('Z2', 50, 25.0), row('Z3', None, None, 'suppressed')])
         new = body(NEW_KEY, [row('Z1', 100, 100 * 2.5 / 3), row('Z2', 50, 50.0), row('Z3', 10, 100 * 0.5 / 3)])
-        new['meta'].update(threshold=0, coverage=1.0)
+        del new['meta']['threshold']
+        new['meta'].update(coverage=1.0)
         self.assertEqual(B.verify_summaries(dumps(old), dumps(new), self.ctx), [])
         self.assertEqual(self.ctx.stats['summary_rows'], 1)
         for name, edit in {'still suppressed': lambda s: s['rows'].__setitem__(2, row('Z3', None, None, 'suppressed')),
                            'a count changed': lambda s: s['rows'][0].update(count=101, value=101),
                            'a share changed': lambda s: s['rows'][1].update(share=0.4),
+                           'a coverage changed': lambda s: s['rows'][1].update(coverage=0.5),
+                           'a valid count changed': lambda s: s['rows'][0].update(valid_count=99),
+                           'a field coverage changed': lambda s: s['rows'][0].update(field_coverage=0.9),
+                           'a raw value changed': lambda s: s['rows'][1].update(value=51),
                            'index not the midrank': lambda s: s['rows'][0].update(index=99.0),
                            'rows reordered': lambda s: s['rows'].reverse(),
                            'meta changed': lambda s: s['meta'].update(metric='other')}.items():
             bad = copy.deepcopy(new)
             edit(bad)
             self.assertNotEqual(B.verify_summaries(dumps(old), dumps(bad), self.ctx), [], name)
-        head = 'snapshot,geographic_id,count,status,measure_status,value,index\n'
-        csv_old = (head + '%s,Z1,100,ok,ok,60.5,70.0\n%s,Z3,,suppressed,suppressed,,\n' % (OLD_KEY, OLD_KEY)).encode()
-        csv_new = (head + '%s,Z1,100,ok,ok,61.5,72.0\n%s,Z3,10,ok,ok,40.0,10.0\n' % (NEW_KEY, NEW_KEY)).encode()
-        self.assertEqual(B.verify_summaries(csv_old, csv_new, self.ctx), [])
-        self.assertEqual(B.verify_summaries(csv_old, csv_new.replace(b'Z1,100', b'Z1,101'), self.ctx), ['$.rows[0]'])
+        # a raw measure (not a count): the value and valid_count of a row that was ok stay, only the percentile moves
+        measure = lambda key, v0, i0, v2, i2, i3: {'meta': {'snapshot': key, 'metric': 'x', 'index_method': None}, 'rows': [    # noqa: E731
+            {'id': 'Z1', 'status': 'ok', 'measure_status': 'ok', 'count': 100, 'value': v0, 'index': i0, 'valid_count': 90},
+            {'id': 'Z2', 'status': 'ok', 'measure_status': 'ok', 'count': 50, 'value': v2, 'index': i2, 'valid_count': 40},
+            {'id': 'Z3', 'status': 'ok' if i3 else 'suppressed', 'measure_status': 'ok' if i3 else 'suppressed', 'count': 10 if i3 else None,
+             'value': 1.0 if i3 else None, 'index': i3, 'valid_count': 9 if i3 else None}]}
+        raw_old, raw_new = measure(OLD_KEY, 2.5, 100.0, 1.5, 50.0, None), measure(NEW_KEY, 2.5, 100.0, 1.5, 66.0, 33.0)
+        self.assertEqual(B.verify_summaries(dumps(raw_old), dumps(raw_new), self.ctx), [])
+        self.assertEqual(B.verify_summaries(dumps(raw_old), dumps(measure(NEW_KEY, 2.6, 100.0, 1.5, 66.0, 33.0)), self.ctx), ['$.rows[0]'])
+        self.assertEqual(B.verify_summaries(dumps(raw_old), dumps(measure(NEW_KEY, 2.5, 100.0, 1.5, 66.0, 33.0) | {'rows': [
+            {**raw_new['rows'][0], 'valid_count': 91}, *raw_new['rows'][1:]]}), self.ctx), ['$.rows[0]'])
+        # the CSV export: a composite index (components_used set) is re-derived, anything else must keep its value
+        head = 'snapshot,geographic_id,count,share,coverage,valid_count,field_coverage,status,measure_status,value,index,components_used\n'
+        old_rows = '%s,Z1,100,0.5,,90,1.0,ok,ok,%s,70.0,%s\n%s,Z3,,,,,,suppressed,suppressed,,,\n'
+        new_rows = '%s,Z1,100,0.5,,90,1.0,ok,ok,%s,72.0,%s\n%s,Z3,10,0.1,,9,1.0,ok,ok,40.0,10.0,%s\n'
+        for used, moved in (('9', True), ('', False)):
+            csv_old = (head + old_rows % (OLD_KEY, '60.5', used, OLD_KEY)).encode()
+            csv_new = (head + new_rows % (NEW_KEY, '61.5' if moved else '60.5', used, NEW_KEY, used)).encode()
+            self.assertEqual(B.verify_summaries(csv_old, csv_new, self.ctx), [], 'composite' if moved else 'raw')
+            self.assertEqual(B.verify_summaries(csv_old, csv_new.replace(b'Z1,100', b'Z1,101'), self.ctx), ['$.rows[0]'])
+            self.assertEqual(B.verify_summaries(csv_old, csv_new.replace(b',90,1.0,ok', b',91,1.0,ok', 1), self.ctx), ['$.rows[0]'])
+        csv_old = (head + old_rows % (OLD_KEY, '60.5', '', OLD_KEY)).encode()
+        csv_moved = (head + new_rows % (NEW_KEY, '61.5', '', NEW_KEY, '')).encode()
+        self.assertEqual(B.verify_summaries(csv_old, csv_moved, self.ctx), ['$.rows[0]'])         # a raw value moved: not allowed
 
     def test_every_other_endpoint_must_be_identical_once_the_keys_are_replaced(self):
         old = dumps({'snapshot': OLD_KEY, 'area': OLD_SHA, 'people': 5})

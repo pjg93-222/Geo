@@ -654,7 +654,8 @@ META_MAY_CHANGE = ('area_table_sha256', 'suppressed_ids_sha256', 'area_table', '
 ACCOUNT_TABLES = ('research_snapshot', 'research_auditevent', 'sqlite_sequence')      # what import_summary writes
 MANIFEST_MASKED = (('snapshot',), ('created_at',), ('row_framework', 'area_table_sha256'), ('row_framework', 'area_indices_sha256'),
                    ('row_framework', 'base_snapshot'), ('threshold',), ('privacy',), ('measure_methodology',))
-SUMMARY_RANKED = ('value', 'index', 'component_coverage', 'components_used', 'components_total')
+SUMMARY_RANKED = ('index',)                        # the percentile moves for every row: more areas have values
+SUMMARY_COMPOSITE = ('value', 'component_coverage', 'components_used', 'components_total')      # an index of indices is re-derived too
 SUMMARY_META = ('snapshot', 'threshold', 'coverage', 'measure_methodology')
 
 
@@ -858,7 +859,9 @@ def summary_rows(body):
 
 def verify_summaries(golden, now, ctx):
     """summaries_* (the old summary layer; its small-count suppression is gone too): same rows in the same order; a row that
-    was ok keeps everything but its rank-derived columns; a suppressed row is now ok with a count; nothing is suppressed."""
+    was ok keeps count, share, coverage, valid_count, field_coverage and a raw measure's value to the byte (only the percentile
+    `index` moves, and for a composite index also its derived value and component counts); a suppressed row is now ok with a
+    count; nothing is suppressed."""
     (old_meta, old_rows), (new_meta, new_rows), found = summary_rows(golden), summary_rows(now), Found()
     ident = lambda r: r.get('id', r.get('geographic_id'))
     if [ident(r) for r in old_rows] != [ident(r) for r in new_rows]:
@@ -869,11 +872,13 @@ def verify_summaries(golden, now, ctx):
                 found.add('$.meta.' + key)
         if new_meta.get('snapshot') != ctx.new_key:
             found.add('$.meta.snapshot')
+    composite = bool(new_meta and new_meta.get('index_method')) or any(r.get('components_used') not in (None, '') for r in new_rows)
+    ranked = SUMMARY_RANKED + (SUMMARY_COMPOSITE if composite else ())
     for i, (before, row) in enumerate(zip(old_rows, new_rows)):
         if row.get('status') != 'ok' or row.get('measure_status', 'ok') != 'ok':
             found.add('$.rows[%d].status' % i)
         elif before.get('status') == 'ok':
-            if any(before.get(k) != row.get(k) for k in set(before) | set(row) if k not in SUMMARY_RANKED + ('snapshot',)):
+            if any(before.get(k) != row.get(k) for k in set(before) | set(row) if k not in ranked + ('snapshot',)):
                 found.add('$.rows[%d]' % i)
             if 'snapshot' in row and row['snapshot'] != ctx.new_key:
                 found.add('$.rows[%d].snapshot' % i)
