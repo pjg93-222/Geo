@@ -33,9 +33,9 @@ MAX_STREET_POINTS = 5000
 MAX_HOUSEHOLD_PEOPLE = 100
 MAX_SEARCH = 8
 LEAN_PARAMS = {'all', '-2', '-1', '0', '1', '2', 'U'}
-SORTS = {'ovr': None, 'cua': 'ord_cua', 'part': 'ord_part', 'soi': 'ord_soi', 'within': 'ord_within'}
+SORTS = {'ovr': None, 'cua': 'ord_cua', 'part': 'ord_part', 'soi': 'ord_soi', 'within': 'ord_within', 'sup': 'ord_sup'}
 RANK_COLUMNS = {'ovr': ('ovr_rank', 'ovr_tie_n'), 'cua': ('cua_rank', 'cua_tie_n'), 'part': ('part_rank', 'part_tie_n'),
-                'soi': ('soi_rank', 'soi_tie_n'), 'within': ('reg_rank', None)}
+                'soi': ('soi_rank', 'soi_tie_n'), 'within': ('reg_rank', None), 'sup': ('sup_rank', 'sup_tie_n')}   # sup: the support table
 AREA_LEVELS = {'registration': {'block': 'reg_block', 'precinct': 'reg_precinct', 'tract': 'reg_tract', 'zip': 'reg_zip'},
                'residence': {'tract': 'res_tract', 'zip': 'res_zip'}}
 PERSON_ID = r'p_[0-9a-f]{64}'
@@ -190,6 +190,8 @@ PEOPLE_COLUMNS = ('pos, person_id, hh, ovr_rank, ovr_tie_n, cua_rank, cua_tie_n,
 def people(request, demo):
     q = list_query(request)
     info = DB.info()
+    if q['sort'] == 'sup' and not info.support:
+        raise BadRequest('No candidate support in this district')
     listing = Listing(info, q)
     total = listing.count
     if q['after']:
@@ -211,17 +213,22 @@ def people(request, demo):
         evidence = {r['pos']: DB.decode_evidence(r['blob'])['values'] for r in conn.execute(
             'SELECT pos, blob FROM evidence WHERE pos IN (%s)' % marks, [p + 1 for p in positions])}
         names = DB.names(conn, info, ordered, demo)
+        support = {r['pos']: r for r in conn.execute(
+            'SELECT pos, sup_pct, sup_rank, sup_tie_n FROM support WHERE pos IN (%s)' % marks, [p + 1 for p in positions])
+        } if info.support else {}
         rank_column, tie_column = RANK_COLUMNS[q['sort']]
         for r in ordered:
             code, label = DB.outlook_fields(DB.outlook_code(info, evidence[r['pos']]))
+            ranked = support[r['pos']] if q['sort'] == 'sup' else r
             rows.append({
-                'rank': rank_text(r[rank_column], r[tie_column] if tie_column else 0),
+                'rank': rank_text(ranked[rank_column], ranked[tie_column] if tie_column else 0),
                 'person_id': r['person_id'], 'name': names.get(r['person_id'], ''),
                 'ovr_pct': DB.number(r['ovr_pct']), 'lo': DB.number(r['ovr_pct_lo90']),
                 'hi': DB.number(r['ovr_pct_hi90']), 'cua_pct': DB.number(r['cua_pct']),
                 'part_pct': DB.number(r['part_pct']), 'soi_pct': DB.number(r['soi_pct']),
                 'lean_code': code, 'lean_label': label, 'ovr_grade': r['ovr_grade'],
                 'within_pct': DB.number(r['ovr_pct_within_reg']), 'within_group': registration_label(r['reg_group']),
+                **({'sup_pct': DB.number(support[r['pos']]['sup_pct'])} if info.support else {}),
             })
     return {
         'rows': rows, 'total': total, 'first': start + 1 if rows else 0, 'last': start + len(rows),
@@ -355,6 +362,11 @@ def person(request, demo):
                 'lo': DB.number(r[prefix + '_pct_lo90']), 'hi': DB.number(r[prefix + '_pct_hi90']),
                 'grade': r[prefix + '_grade']}
 
+    cards = {'cua': card('cua'), 'part': card('part'), 'soi': card('soi'),
+             'lean': {'lean': DB.number(r['lean']), 'grade': r['lean_grade'], 'undetermined': bool(r['lean_undet'])}}
+    if info.support:          # candidate district: a score and a standing, no interval and no grade
+        sup = conn.execute('SELECT sup_score, sup_pct FROM support WHERE pos=?', (r['pos'],)).fetchone()
+        cards['sup'] = {'score': DB.number(sup['sup_score']), 'pct': DB.number(sup['sup_pct'])}
     return {
         'person_id': ident, 'name': names.get(ident, ''), 'age': r['age'], 'household_size': r['hh_size'],
         'registration': FL.REG_GROUPS[r['reg_group']], 'block': r['reg_block'] or '', 'precinct': r['reg_precinct'] or '',
@@ -363,9 +375,7 @@ def person(request, demo):
                    'hi': DB.number(r['ovr_pct_hi90']), 'grade': r['ovr_grade'],
                    'measured_pct': DB.number(r['ovr_measured_pct']), 'within_pct': DB.number(r['ovr_pct_within_reg']),
                    'within_group': registration_label(r['reg_group'])},
-        'cards': {'cua': card('cua'), 'part': card('part'), 'soi': card('soi'),
-                  'lean': {'lean': DB.number(r['lean']), 'grade': r['lean_grade'],
-                           'undetermined': bool(r['lean_undet'])}},
+        'cards': cards,
         'groups': field_rows(info, r, ev),
         'household': {'code': r['hh'], 'mean_pct': DB.number(mean), 'members': members},
         'area_context': {'block': area_ref(table, 'block', r['reg_block']),

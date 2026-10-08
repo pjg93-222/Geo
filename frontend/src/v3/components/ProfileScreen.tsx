@@ -5,8 +5,8 @@ import {ChevronDown,ChevronRight} from 'lucide-react';
 import {PageHeader,Link} from './Header';
 import {GradeBox,RangeBar,Sk,ValueBar,cx} from './ui';
 import {describeOpinions} from '../lib/opinions';
-import type {AreaRef,FieldGroup,IndexCard,Meta,Profile} from '../types';
-import {ENDASH,MIDDOT,RANGE,areaLabel,blockLabel,leanBand,ordinal,precinctLabel,round,signed,REG_LABEL,shareText,int} from '../lib/format';
+import type {AreaRef,CandidateInfo,FieldGroup,IndexCard,Meta,Profile} from '../types';
+import {ENDASH,MIDDOT,RANGE,areaLabel,blockLabel,leanBand,ordinal,precinctLabel,raceModeText,round,signed,REG_LABEL,shareText,int} from '../lib/format';
 import {getProfile} from '../api/client';
 import {begin,end} from '../lib/timing';
 import {GROUP_LABEL} from '../api/fields';
@@ -31,7 +31,7 @@ export function ProfileScreen({meta,route}:{meta:Meta|null;route:Route}){
   return <div className="screen profile-screen">
     <PageHeader meta={meta} active="people"/>
     <main className="profile">
-      {error?<div className="page-error" role="alert">{error}<p><Link to="/people" className="back-link">← People</Link></p></div>:p?<Body p={p}/>:<ProfileSkeleton/>}
+      {error?<div className="page-error" role="alert">{error}<p><Link to="/people" className="back-link">← People</Link></p></div>:p?<Body p={p} candidate={meta?.candidate}/>:<ProfileSkeleton/>}
     </main>
   </div>;
 }
@@ -44,7 +44,7 @@ function ProfileSkeleton(){
   </div>;
 }
 
-function Body({p}:{p:Profile}){
+function Body({p,candidate}:{p:Profile;candidate?:CandidateInfo}){
   const reg=p.registration_label??REG_LABEL[p.registration]??'Unknown';
   const opinions=describeOpinions(p.groups.find(g=>g.id==='lean')?.fields??[]);
   const [open,setOpen]=useState<Record<string,boolean>>({cua:true,part:false,soi:false,lean:false});
@@ -75,8 +75,9 @@ function Body({p}:{p:Profile}){
       </div>
     </div>
 
-    <div className="p-cards">
+    <div className={cx('p-cards',p.cards.sup&&'has-sup')}>
       <IndexPanel title={GROUP_LABEL.cua} card={p.cards.cua}/>
+      {p.cards.sup&&<SupportPanel card={p.cards.sup} candidate={candidate}/>}
       <IndexPanel title={GROUP_LABEL.part} card={p.cards.part}/>
       <IndexPanel title={GROUP_LABEL.soi} card={p.cards.soi}/>
     </div>
@@ -135,6 +136,17 @@ function IndexPanel({title,card}:{title:string;card:IndexCard}){
     <div className="panel-pct">{ordinal(card.pct)} percentile</div>
     <RangeBar variant="profile" value={card.pct} lo={card.lo} hi={card.hi} className="panel-bar"/>
     <div className="panel-range">{single?round(card.pct):RANGE(card.lo,card.hi)}</div>
+  </section>;
+}
+
+/** Candidate districts only: a score and a standing. Support has no likely range and no grade. */
+function SupportPanel({card,candidate}:{card:{score:number;pct:number};candidate?:CandidateInfo}){
+  return <section className="card">
+    <h2 className="panel-title">Candidate support</h2>
+    <div className="panel-number">{round(card.pct)}</div>
+    <div className="panel-pct">{ordinal(card.pct)} percentile</div>
+    <div className="panel-range">Support score {round(card.score)} of 100</div>
+    {candidate&&<div className="support-mode">{raceModeText(candidate.race_mode)}</div>}
   </section>;
 }
 

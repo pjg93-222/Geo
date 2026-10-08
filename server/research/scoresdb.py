@@ -94,6 +94,10 @@ class StoreInfo:
         for name, array in self.columns.items():
             if len(array) != self.n:
                 raise StoreError('List column %s does not match the person count' % name)
+        # candidate district only: the support table (sup_score, sup_pct, ranks) and the ord_sup list column, written together
+        self.support = 'support' in self.meta
+        if self.support and 'ord_sup' not in self.columns:
+            raise StoreError('The score store has candidate support but no support order')
         self.sources_checked = False
         self._balanced = {}
         self._balanced_lock = threading.Lock()

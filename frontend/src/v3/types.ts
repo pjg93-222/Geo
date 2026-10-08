@@ -74,6 +74,8 @@ export interface PeoplePage{
 export interface PeopleQuery{
   reg:'all'|'D'|'R'|'U'|'O';grade:'ABCD'|'AB';lean:'all'|'-2'|'-1'|'0'|'1'|'2'|'U';
   level:Level|'';area:string;balanced:boolean;after:string;dir:'next'|'prev';
+  /** '' is the overall standing; 'sup' (candidate districts) sorts by candidate support. */
+  sort:''|'sup';
 }
 
 // --- profile -----------------------------------------------------------------------------------------------------

@@ -5,7 +5,7 @@ import {ChevronLeft,ChevronRight} from 'lucide-react';
 import {PageHeader,Link} from './Header';
 import {GradeBox,RangeBar,Select,Sk,Switch,cx} from './ui';
 import type {Meta,PeoplePage,PeopleQuery,PeopleRow} from '../types';
-import {ENDASH,MIDDOT,RANGE,int,leanBandByCode,ordinal,round} from '../lib/format';
+import {ENDASH,MIDDOT,RANGE,int,leanBandByCode,ordinal,round,weightsText} from '../lib/format';
 import {LEVELS,LEVEL_LABEL,areaLabel,type Level} from '../lib/format';
 import {getAreas,getPeople} from '../api/client';
 import {begin,endAfterPaint} from '../lib/timing';
@@ -17,6 +17,7 @@ const GRADE:{id:PeopleQuery['grade'];label:string}[]=[{id:'ABCD',label:`A${ENDAS
 const LEAN:{id:PeopleQuery['lean'];label:string}[]=[
   {id:'all',label:'All'},{id:'-2',label:'Very conservative'},{id:'-1',label:'Somewhat conservative'},{id:'0',label:'Middle outlook'},{id:'1',label:'Somewhat liberal'},
   {id:'2',label:'Very liberal'},{id:'U',label:'Unknown / multiple responses'}];
+const SORT:{id:string;label:string}[]=[{id:'ovr',label:'Overall standing'},{id:'sup',label:'Candidate support'}];
 const LEAN_KEY:Record<string,string>={'-2':'strong-r','-1':'lean-r','0':'centre','1':'lean-d','2':'strong-d'};
 const STORE='v3.people.query';
 
@@ -26,6 +27,7 @@ function fromRoute(q:URLSearchParams):PeopleQuery{
   return {
     reg:reg&&REG.some(r=>r.id===reg)?reg:'all',grade:grade==='AB'?'AB':'ABCD',lean:lean&&LEAN.some(l=>l.id===lean)?lean:'all',
     level:level&&LEVELS.includes(level)?level:'',area:level?q.get('area')??'':'',balanced:q.get('balanced')==='1',after:q.get('after')??'',dir:q.get('dir')==='prev'?'prev':'next',
+    sort:q.get('sort')==='sup'?'sup':'',
   };
 }
 
@@ -42,7 +44,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   const [areaOpts,setAreaOpts]=useState<Opt[]|null>(null);
   const [clearOnLoad,setClearOnLoad]=useState(true);
 
-  const key=(x:PeopleQuery)=>[x.reg,x.grade,x.lean,x.level,x.area,x.balanced?1:0,x.after,x.dir].join('|');
+  const key=(x:PeopleQuery)=>[x.reg,x.grade,x.lean,x.level,x.area,x.balanced?1:0,x.after,x.dir,x.sort].join('|');
 
   const previousRoute=useRef(route);
   useEffect(()=>{
@@ -57,9 +59,9 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
     const s=new URLSearchParams();
     if(q.reg!=='all')s.set('reg',q.reg);if(q.grade!=='ABCD')s.set('grade',q.grade);if(q.lean!=='all')s.set('lean',q.lean);
     if(q.level&&q.area){s.set('level',q.level);s.set('area',q.area);}s.set('balanced',q.balanced?'1':'0');
-    replaceQuery({reg:s.get('reg'),grade:s.get('grade'),lean:s.get('lean'),level:s.get('level'),area:s.get('area'),balanced:s.get('balanced'),after:q.after||null,dir:q.after?q.dir:null});
+    replaceQuery({reg:s.get('reg'),grade:s.get('grade'),lean:s.get('lean'),level:s.get('level'),area:s.get('area'),balanced:s.get('balanced'),after:q.after||null,dir:q.after?q.dir:null,sort:q.sort||null});
     try{sessionStorage.setItem(STORE,location.search);}catch{/* storage may be unavailable */}
-  },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir]);
+  },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir,q.sort]);
 
   // load the requested page; prefetch the next one
   useEffect(()=>{
@@ -86,7 +88,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
       setError((e as Error).message||'The list could not be loaded.');setBusy(false);
     });
     return ()=>ac.abort();
-  },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir,attempt]);   // eslint-disable-line react-hooks/exhaustive-deps
+  },[q.reg,q.grade,q.lean,q.level,q.area,q.balanced,q.after,q.dir,q.sort,attempt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const change=(patch:Partial<PeopleQuery>)=>{
     cache.current.clear();setReady(null);setClearOnLoad(true);setPage(null);
@@ -109,8 +111,9 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   const areaValue=q.level&&q.area?q.level+':'+q.area:'all';
   const areaShown=q.level&&q.area?(areaOpts?.find(o=>o.id===areaValue)?.label??areaLabel(q.level,q.area)):`All of ${meta?.district_label??'Congressional District 5'}`;
 
-  const w=meta?.weights;
-  const sub=`${meta?int(meta.people):''} people ${MIDDOT} ${w?.cua??40}% Alignment + ${w?.part??35}% Participation + ${w?.soi??25}% Sphere of Influence`;
+  const sup=meta?.weights.sup!==undefined;      // a candidate district whose overall counts candidate support
+  const sorted=q.sort==='sup'?'candidate support':'overall standing';
+  const sub=`${meta?int(meta.people):''} people ${MIDDOT} ${weightsText(meta?.weights)}`;
   const pagerText=page?`${int(page.first)}${page.first===page.last?'':ENDASH+int(page.last)} of ${int(page.total)}`:'';
 
   return <div className="screen people-screen">
@@ -121,6 +124,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
       {meta?.overall_note&&<p className="page-sub">{meta.overall_note}</p>}
       <div className="filters">
         <Select label="Registration" shown={REG.find(r=>r.id===q.reg)!.label} value={q.reg} options={REG} onChange={v=>change({reg:v as PeopleQuery['reg']})}/>
+        {sup&&<Select label="Sort" shown={q.sort==='sup'?'Candidate support':'Overall standing'} value={q.sort||'ovr'} options={SORT} onChange={v=>change({sort:v==='sup'?'sup':''})}/>}
         <Select label="Grade" shown={GRADE.find(r=>r.id===q.grade)!.label} value={q.grade} options={GRADE} onChange={v=>change({grade:v as PeopleQuery['grade']})}/>
         <Select label="Outlook" shown={LEAN.find(r=>r.id===q.lean)!.label} value={q.lean} options={LEAN} onChange={v=>change({lean:v as PeopleQuery['lean']})}/>
         <div className="select-area" onPointerDown={loadAreas} onFocus={loadAreas}>
@@ -149,18 +153,18 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
         <button type="button" className="pager-btn" aria-label="Previous page" disabled={!page?.prev} onClick={()=>go('prev')}><ChevronLeft strokeWidth={1.75}/></button>
         <button type="button" className="pager-btn" aria-label="Next page" disabled={!page?.next} onClick={()=>go('next')}><ChevronRight strokeWidth={1.75}/></button>
       </div>
-      <p className="people-context">{q.balanced?'Showing matches from the registration-balanced selection; ties are retained.':'Showing matches from the full local dataset.'} Sorted by overall standing. Political responses are unscored.</p>
+      <p className="people-context">{q.balanced?'Showing matches from the registration-balanced selection; ties are retained.':'Showing matches from the full local dataset.'} Sorted by {sorted}. Political responses are unscored.</p>
       <p className="scroll-hint">Scroll the table sideways to see all columns.</p>
-      <section className="table" aria-label="People ranked by overall standing" aria-busy={busy}>
+      <section className={cx('table',sup&&'has-sup')} aria-label={`People ranked by ${sorted}`} aria-busy={busy}>
         <div className="thead">
-          <span>Rank</span><span>Name</span><span>Overall standing</span><span className="r">Alignment</span><span className="r">Participation</span>
+          <span>Rank</span><span>Name</span><span>Overall standing</span><span className="r">Alignment</span>{sup&&<span className="r">Candidate support</span>}<span className="r">Participation</span>
           <span className="r">Sphere</span><span>Political outlook</span><span title="Data coverage grade">Data grade</span><span>Percentile within registration</span>
         </div>
         <div className="tbody">
           {error&&<div className="table-empty" role="alert">{error}<button className="retry-people" type="button" onClick={()=>setAttempt(n=>n+1)}>Retry people</button></div>}
           {!error&&page&&page.rows.length===0&&<div className="table-empty">No people match these filters.</div>}
-          {!error&&(page?.rows??[]).map(r=><Row key={r.person_id} r={r}/>)}
-          {!error&&!page&&clearOnLoad&&Array.from({length:8}).map((_,i)=><SkeletonRow key={i}/>)}
+          {!error&&(page?.rows??[]).map(r=><Row key={r.person_id} r={r} sup={sup}/>)}
+          {!error&&!page&&clearOnLoad&&Array.from({length:8}).map((_,i)=><SkeletonRow key={i} sup={sup}/>)}
         </div>
         <div className="tfoot">
           <span>{page?`Page ${int(page.page)} of ${int(page.pages)}`:<Sk w={150} h={14}/>}</span>
@@ -171,21 +175,21 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   </div>;
 }
 
-function Row({r}:{r:PeopleRow}){
+function Row({r,sup}:{r:PeopleRow;sup:boolean}){
   const band=r.lean_code==='U'?null:leanBandByCode(r.lean_code);
   return <Link to={`/people/${encodeURIComponent(r.person_id)}`} className="trow">
     <span className="c-rank">{r.rank}</span>
     <span className="c-name" title={r.name}>{r.name}</span>
     <span className="c-overall"><b>{round(r.ovr_pct)}</b><RangeBar variant="table" value={r.ovr_pct} lo={r.lo} hi={r.hi}/><em>{RANGE(r.lo,r.hi)}</em></span>
-    <span className="c-num r">{round(r.cua_pct)}</span><span className="c-num r">{round(r.part_pct)}</span><span className="c-num r">{round(r.soi_pct)}</span>
+    <span className="c-num r">{round(r.cua_pct)}</span>{sup&&<span className="c-num r">{r.sup_pct==null?'':round(r.sup_pct)}</span>}<span className="c-num r">{round(r.part_pct)}</span><span className="c-num r">{round(r.soi_pct)}</span>
     <span className="c-lean" title={r.lean_label}>{r.lean_label}</span>
     <span className="c-grade"><GradeBox grade={r.ovr_grade} size="md"/></span>
     <span className="c-within">{ordinal(r.within_pct)} {MIDDOT} {r.within_group}</span>
   </Link>;
 }
-function SkeletonRow(){
+function SkeletonRow({sup}:{sup:boolean}){
   return <div className="trow sk-row" aria-hidden="true">
     <span><Sk w={30} h={14}/></span><span><Sk w={200} h={14}/></span><span><Sk w={80} h={14}/></span>
-    <span className="r"/><span className="r"/><span className="r"/><span/><span/><span/>
+    <span className="r"/>{sup&&<span className="r"/>}<span className="r"/><span className="r"/><span/><span/><span/>
   </div>;
 }

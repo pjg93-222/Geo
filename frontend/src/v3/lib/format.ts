@@ -137,3 +137,36 @@ export const districtOptions=(list:Pick<DistrictEntry,'id'|'label'|'ready'>[],cu
   const disabled=!d.ready&&d.id!==current;
   return {id:d.id,label:disabled?`${d.label} (not built yet)`:d.label,disabled};
 });
+
+// ---- the overall's terms and candidate support (Phase 4 Lane SD) ----------------------------------------------------------------------
+export type OverallWeights=Partial<Record<'cua'|'sup'|'part'|'soi',number>>;
+const TERM_ORDER=['cua','sup','part','soi'] as const;
+const TERM_SHORT={cua:'Alignment',sup:'Candidate support',part:'Participation',soi:'Sphere of Influence'};
+const TERM_LONG={...TERM_SHORT,cua:'Credit Union Alignment'};
+/** "40% Alignment", "25% Candidate support", ... in the overall's order. Colorado's 40/35/25 stand in until the meta has loaded. */
+export const weightTerms=(w:OverallWeights|undefined,long=false):string[]=>{
+  const v:OverallWeights={cua:40,part:35,soi:25,...w};
+  return TERM_ORDER.filter(k=>v[k]!==undefined).map(k=>`${v[k]}% ${(long?TERM_LONG:TERM_SHORT)[k]}`);
+};
+/** "40% Alignment + 35% Participation + 25% Sphere of Influence", with "25% Candidate support" after Alignment once the overall counts it. */
+export const weightsText=(w:OverallWeights|undefined):string=>weightTerms(w).join(' + ');
+/** "three indices: 40% Credit Union Alignment, 35% Participation and 25% Sphere of Influence" (four with Candidate support). */
+export function indicesText(w:OverallWeights|undefined):string{
+  const t=weightTerms(w,true);
+  return `${['three','four'][t.length-3]} indices: ${t.slice(0,-1).join(', ')} and ${t[t.length-1]}`;
+}
+export const raceModeText=(mode:'general'|'primary'):string=>mode==='general'?'General-election mode':'Primary mode';
+
+const SIGNAL_TEXT={partisan:'the modeled partisan score',presidential:'the modeled support for the two major candidates in the last presidential race',
+  registration:'party registration (the candidate’s party counts as full support, the other major party as none and every other registration as halfway)',
+  primary_ballot:'the party of the most recent primary ballot, where one is recorded'};
+/** The Method page paragraph on candidate support: its inputs, how they are combined and what is left out. Only signals with a weight are named. */
+export function supportMethodText(name:string,partyLabel:string,mode:'general'|'primary',signals:Record<keyof typeof SIGNAL_TEXT,number>):string{
+  const used=(Object.keys(SIGNAL_TEXT) as (keyof typeof SIGNAL_TEXT)[]).filter(k=>signals[k]>0);
+  const equal=used.every(k=>signals[k]===signals[used[0]]);
+  const list=used.map(k=>SIGNAL_TEXT[k]+(equal?'':` (weight ${signals[k]})`));
+  return `${raceModeText(mode)}. Candidate support runs from 0 to 100 and shows how far a person leans toward ${name}’s party (${partyLabel}). It averages `
+    +`${list.length>1?list.slice(0,-1).join(', ')+' and '+list[list.length-1]:list[0]}, ${equal?'counted equally':'weighted as shown'}; a person without one of them is scored on the rest. `
+    +`Every input is turned toward the candidate’s party, and a build check stops if a score points the wrong way. No turnout count is an input; turnout sits in Participation. `
+    +`The overall uses each person’s standing on this score. An area value is the plain mean of its people’s scores, without shrinkage.`;
+}

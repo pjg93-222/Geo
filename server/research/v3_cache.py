@@ -22,6 +22,7 @@ from django.conf import settings
 
 from tools import area_layers as AL
 from tools import districts as D
+from tools import field_labels as FL
 from tools.geography_levels import area_label
 
 log = logging.getLogger('cu.v3')
@@ -165,7 +166,9 @@ def build_areas(key, basis, level):
         if level in AL.ADJACENCY_LEVELS:
             adjacency = load(key, 'adjacency.json').get(level, {})
     ids = sorted(ids)
-    columns = {g: {name: k for k, name in enumerate(AL.COLUMNS[g])} for g in AL.GROUPS}
+    # a candidate district's rows carry 'sup' once its snapshot is the 4-term one; an older 3-term snapshot has no such group
+    names = [g for g in AL.groups(settings.DISTRICT) if g == 'lean' or g != 'sup' or any(r['groups'] and 'sup' in r['groups'] for r in rows)]
+    columns = {g: {name: k for k, name in enumerate(AL.columns(settings.DISTRICT)[g])} for g in names}
     out = {
         'schema': 'v3-areas-1', 'snapshot': key, 'basis': basis, 'level': level, 'ids': ids,
         'labels': [area_label(level, i, settings.DISTRICT) for i in ids],
@@ -175,7 +178,7 @@ def build_areas(key, basis, level):
     if adjacency or level in AL.ADJACENCY_LEVELS:
         out['neighbours'] = [adjacency.get(i, []) for i in ids]
     cells = {g: {name: [] for name in ('mean', 'se', 'measured', 'pct', 'top10', 'top10_se', 'top10_pct')}
-             for g in ('ovr', 'cua', 'part', 'soi')}
+             for g in names if g != 'lean'}
     lean = {name: [] for name in ('mean', 'se', 'measured', 'share_d', 'share_r', 'share_u')}
     for ident in ids:
         row = by_id.get(ident)
@@ -275,15 +278,16 @@ def build_meta(key):
     from shapely.geometry import shape
     bounds = shape(district['features'][0]['geometry']).bounds
     rf = manifest['row_framework']
+    d = settings.DISTRICT
     return {
-        'schema': 'v3-meta-1', 'snapshot': key, 'district_label': settings.DISTRICT['short_label'],
+        'schema': 'v3-meta-1', 'snapshot': key, 'district_label': d['short_label'],
         'share_breaks': list(AL.SHARE_BREAKS), 'lean_cuts': list(AL.LEAN_CUTS),
         'measured_breaks': list(AL.MEASURED_BREAKS), 'household_breaks': list(AL.BREAKS),
-        'weights': settings.DISTRICT['interim_overall'] or settings.DISTRICT['score_weights'],
+        'weights': rf.get('overall_weights') or settings.DISTRICT['interim_overall'] or settings.DISTRICT['score_weights'],
         'levels': list(LEVELS), 'bbox': [round(v, 5) for v in bounds],
         'floors': {'min_n': AL.MIN_N, 'min_households': AL.MIN_HOUSEHOLDS},
         'bases': {basis: list(levels) for basis, levels in AL.BASIS_LEVELS.items()},
-        'index_catalog': AL.INDEX_CATALOG, 'layers': AL.LAYERS,
+        'index_catalog': manifest['area_index_catalog']['groups'], 'layers': AL.LAYERS,
         'row_framework': {'version': rf['version'], 'area_table_sha256': rf['area_table_sha256'],
                           'suppressed_ids_sha256': rf['suppressed_ids_sha256'],
                           'framework_config_sha256': rf['framework_config_sha256']},
@@ -291,7 +295,10 @@ def build_meta(key):
         'support_likelihood': manifest['support_likelihood'], 'persistent_voices': manifest['persistent_voices'],
         'people': manifest['bases']['registration']['imported'],
         'registered_people': manifest['bases']['registration']['mapped'],
-        **({'overall_note': OVERALL_NOTE} if settings.DISTRICT['interim_overall'] else {}),   # absent for Colorado
+        **({'candidate': {'name': d['candidate'], 'party': d['party'], 'party_label': FL.PARTY_CODES[d['party']],
+                          'race_mode': d['race_mode']}} if d['candidate'] else {}),            # absent for Colorado
+        # the interim label follows the data: a snapshot that records its overall weights is the final 4-term one
+        **({'overall_note': OVERALL_NOTE} if d['interim_overall'] and 'overall_weights' not in rf else {}),   # absent for Colorado
     }
 
 
