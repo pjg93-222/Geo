@@ -118,6 +118,28 @@ def drop_pseudo_areas(area_rows, suppressed_rows, d):
     return kept_area, kept_suppressed, {k: {s: len(ids) for s, ids in v.items()} for k, v in sorted(dropped.items())}
 
 
+def rerank_after_drop(area_rows, dropped):
+    """A dropped published pseudo-area no longer competes in its level's ranking, and the app's validator wants area_pct =
+    midrank(eb_mean) and top10_area_pct = midrank(top10_share_eb) among the published areas of the level (bands follow).
+    Re-rank those levels in place over the kept rows; the lo90/hi90 bounds stay as rowfw wrote them (the validator checks
+    their order only). Returns {'basis/level': areas whose band changed (any group, either standing)}."""
+    changed = {}
+    for key, cut in dropped.items():
+        if not cut['published']:
+            continue
+        basis, level = key.split('/')
+        moved = set()
+        for group in ('ovr', 'cua', 'part', 'soi'):
+            part = [r for r in area_rows if (r['basis'], r['level'], r['group']) == (basis, level, group)]
+            for source, target, band in (('eb_mean', 'area_pct', 'band'), ('top10_share_eb', 'top10_area_pct', 'top10_band')):
+                for row, value in zip(part, AL.midrank([float(r[source]) for r in part])):
+                    if int(float(row[band])) != AL.band(value):
+                        moved.add(row['area_id'])
+                    row[target], row[band] = value, AL.band(value)
+        changed[key] = len(moved)
+    return changed
+
+
 def check_area_table(columns, rows, suppressed, receipt, dropped=None):
     dropped = dropped or {}
     published = {}
@@ -339,8 +361,10 @@ def build(args, log):
         suppressed_rows = list(csv.DictReader(stream))
     area_rows, suppressed_rows, pseudo_dropped = drop_pseudo_areas(area_rows, suppressed_rows, d)
     published, withheld = check_area_table(columns, area_rows, suppressed_rows, receipt, pseudo_dropped)
+    reranked = rerank_after_drop(area_rows, pseudo_dropped)
     log('inputs verified', {'published': sum(len(v) for v in published.values()),
-                            'withheld': sum(len(v) for v in withheld.values()), 'pseudo_areas_dropped': pseudo_dropped})
+                            'withheld': sum(len(v) for v in withheld.values()), 'pseudo_areas_dropped': pseudo_dropped,
+                            'bands_changed_by_rerank': reranked})
 
     # 2. base bundle ----------------------------------------------------------------------------------------------
     box.stage('running', 'read-base', 'base bundle files')
@@ -521,6 +545,7 @@ def build(args, log):
         'snapshot': key, 'zip': out.name, 'zip_sha256': zip_sha, 'zip_bytes': out.stat().st_size,
         'base_snapshot': base_key, 'base_zip_sha256': base_sha, 'area_table_sha256': area_sha,
         'suppressed_ids_sha256': suppressed_sha, 'rows': len(rows), 'pseudo_areas_dropped': pseudo_dropped,
+        'bands_changed_by_rerank': reranked,
         'levels': {'%s/%s' % (bs, lv): {'published': len(published[(bs, lv)]),
                                          'withheld': len(withheld[(bs, lv)])} for (bs, lv) in sorted(published)},
         'geometry': {'tracts': len(tract_geoms), 'precincts': len(precinct_geoms),

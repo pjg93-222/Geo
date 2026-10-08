@@ -432,6 +432,22 @@ class PseudoAreaTests(unittest.TestCase):
         self.assertEqual(dropped, {'registration/precinct': {'published': 1, 'withheld': 1},
                                    'residence/zip': {'published': 1, 'withheld': 0}})
 
+    def test_standings_of_a_level_are_re_ranked_without_its_dropped_published_area(self):
+        ids, values = ['97001', '97002', '97003', 'nan'], [10.0, 20.0, 30.0, 40.0]
+        ranks = AL.midrank(values)
+        area = [dict(self.row('zip', i, group='ovr'), eb_mean=v, area_pct=p, band=AL.band(p), top10_share_eb=v / 100,
+                     top10_area_pct=p, top10_band=AL.band(p)) for i, v, p in zip(ids, values, ranks)]
+        other = dict(self.row('block', '410050001001001'), eb_mean=5.0, area_pct=50.0, band=3, top10_share_eb=0.05,
+                     top10_area_pct=50.0, top10_band=3)
+        kept, _, dropped = build_bundle_v4.drop_pseudo_areas(area + [other], [], D.get('or-05'))
+        changed = build_bundle_v4.rerank_after_drop(kept, dropped)
+        zips = [r for r in kept if r['level'] == 'zip']
+        self.assertEqual([r['area_pct'] for r in zips], AL.midrank(values[:3]))      # what the app's validator recomputes
+        self.assertTrue(all(r['band'] == AL.band(r['area_pct']) and r['top10_band'] == AL.band(r['top10_area_pct']) for r in zips))
+        self.assertEqual(changed, {'registration/zip': 2})                                # bands 2 -> 3 and 4 -> 5
+        self.assertEqual((other['area_pct'], other['band']), (50.0, 3))                   # a level with no dropped area is untouched
+        self.assertEqual(build_bundle_v4.rerank_after_drop(kept, {}), {})
+
     def test_colorado_ids_all_stay(self):
         area = [self.row('block', '080410001001001'), self.row('precinct', '0804100621'), self.row('tract', '08041000102'),
                 self.row('zip', '80916')]
