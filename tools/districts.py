@@ -6,6 +6,7 @@ A server process serves ONE district: CU_DISTRICT (default co-05) picks it in se
 itself, its street salt is the sibling cu-geography repo's, its snapshot keys start co-cd005-, and its election
 window, vote rule and city words are the ones walk_names.py and build_walk.py have always used.
 """
+import copy
 import json
 import os
 import re
@@ -46,8 +47,16 @@ def _ct_lead(tokens):
 
 _OR_COUNTIES = ('41005', '41017', '41031', '41043', '41047', '41051')   # Benton 41003 sliver: virtual streets, no file
 _CT_REGIONS = ('09110', '09130', '09140', '09160')
-_WITH_CANDIDATE = {'cua': 30, 'support': 25, 'part': 25, 'soi': 20}       # Paul 2026-10-07
+_WITH_CANDIDATE = {'cua': 30, 'sup': 25, 'part': 25, 'soi': 20}          # Paul 2026-10-07 (O-11); ids as in area_layers
 _INTERIM = {'cua': 40, 'part': 35, 'soi': 25}     # Colorado's weights, shown for OR/CT until candidate support exists (Phase 4B)
+# Candidate support, general mode (Phase 4B, tools/support.py): direction signals only, each turned toward the candidate's
+# party, equal weights until Paul says otherwise. party_values overrides the registration signal per code (default: the
+# candidate's party 1.0, the other major party 0.0, every other code 0.5).
+_SUPPORT = {'signals': {'partisan': 1, 'presidential': 1, 'registration': 1, 'primary_ballot': 1},
+            'party_values': {}, 'ballot_years': (2014, 2025)}
+# Street plan (Phase 4E; Paul 2026-10-07): presets (field_labels.ROI_PRESETS), weights of the percentile-rank blend, floors
+_ROI = {'presets': ('mixed', 'turnout', 'identify'), 'preset': 'mixed', 'p': 'participation',
+        'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0}, 'min_doors': 5, 'min_length_m': 50}
 # NAMELSAD of every county the district polygon meets (area > 1e-10 deg2, the extend_geography rule), read from the
 # TIGER2025 county file on 2026-10-07; CT's TIGER2025 "counties" are the planning regions
 _OR_NAMES = {'41003': 'Benton County', '41005': 'Clackamas County', '41017': 'Deschutes County',
@@ -77,6 +86,7 @@ DISTRICTS = {
         'county_names': {'08041': 'El Paso County'}, 'rowfw_root': SIBLING_LOCAL / 'row-framework-20260930',
         'interim_overall': None,
         'candidate': None, 'party': None, 'race_mode': None, 'primary_universe': 'party_only',
+        'support': None, 'roi': None,       # no candidate: no support score and, with it, no street plan (L-3)
     },
     'or-05': {
         'id': 'or-05', 'state': 'OR', 'state_name': 'Oregon', 'state_fips': '41', 'cd': '005', 'cd119fp': '05',
@@ -105,8 +115,10 @@ DISTRICTS = {
         'person_fields': 'csv', 'party_rollup_check': False, 'port': 8775,
         'score_weights': dict(_WITH_CANDIDATE), 'industries': ('cua',),
         'county_names': _OR_NAMES, 'rowfw_root': LOCAL / 'or-05' / 'rowfw', 'interim_overall': dict(_INTERIM),
-        # race_mode is set by Paul per district (O-2), never in code; None until Phase 4B.
-        'candidate': 'Janelle Bynum', 'party': 'D', 'race_mode': None, 'primary_universe': 'party_only',
+        # race_mode (Paul, O-2): 'general' counts direction signals only. 'primary' stops tools/support.py with
+        # PRIMARY_NOT_APPROVED until PRIMARY_MODE_SPEC.md is approved. primary_universe: 'party_only' or 'party_plus_unaffiliated'.
+        'candidate': 'Janelle Bynum', 'party': 'D', 'race_mode': 'general', 'primary_universe': 'party_only',
+        'support': copy.deepcopy(_SUPPORT), 'roi': copy.deepcopy(_ROI),
     },
     'ct-01': {
         'id': 'ct-01', 'state': 'CT', 'state_name': 'Connecticut', 'state_fips': '09', 'cd': '001', 'cd119fp': '01',
@@ -136,7 +148,8 @@ DISTRICTS = {
         'person_fields': 'csv', 'party_rollup_check': True, 'port': 8777,
         'score_weights': dict(_WITH_CANDIDATE), 'industries': ('cua',),
         'county_names': _CT_NAMES, 'rowfw_root': LOCAL / 'ct-01' / 'rowfw', 'interim_overall': dict(_INTERIM),
-        'candidate': 'Luke Bronin', 'party': 'D', 'race_mode': None, 'primary_universe': 'party_only',
+        'candidate': 'Luke Bronin', 'party': 'D', 'race_mode': 'general', 'primary_universe': 'party_only',
+        'support': copy.deepcopy(_SUPPORT), 'roi': copy.deepcopy(_ROI),
     },
 }
 

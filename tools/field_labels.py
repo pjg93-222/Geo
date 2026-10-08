@@ -83,6 +83,14 @@ for _fid, (_name, _group, _label, _kind, _w, _w50) in enumerate(_TABLE):
         'weight_code50': None if _w50 is None else [_w50.numerator, _w50.denominator],
     })
 BY_NAME = {row['name']: row for row in FIELDS}
+# Industries (Phase 4A): each entry scores one industry's alignment; the overall uses the selected one. Only CUA exists
+# (O-12); its fields and weights are the frozen rowfw-1.0.0 CUA weights above, checked on every score build.
+INDUSTRIES = {'cua': {'label': GROUP_LABELS['cua'], 'group': 'cua',
+                      'fields': [(r['name'], r['label'], r['weight']) for r in FIELDS if r['group'] == 'cua']}}
+# Street plan presets (Phase 4E): id -> (label, formula in words); s = candidate support 0..1, p = participation standing 0..1
+ROI_PRESETS = {'mixed': ('Mixed-support streets', 'sum over people of (1 - |2s - 1|) x p'),
+               'turnout': ('Supporter turnout', 'sum over people of s x (1 - p)'),
+               'identify': ('Voter identification', 'people with s in the middle third or missing')}
 
 # Display of the source status. Order is the stored status code.
 STATUSES = ('observed', 'estimated_gpu_model', 'estimated_household_model', 'estimated_majority_default',
@@ -98,7 +106,7 @@ CHILDREN_RULE_SOURCE = 'Estimated · children rule'
 CODE50_VALUE = 'Unscored'
 
 PARTY_CODES = {'D': 'Democrat', 'R': 'Republican', 'U': 'Unaffiliated', 'G': 'Green', 'L': 'Libertarian',
-               'O': 'Other'}
+               'O': 'Other', 'W': 'Working Families'}
 # The owner / renter field is the one categorical field whose code meanings are documented (FIDELITY_SPEC 5.4).
 OWNER_RENTER = {'H': 'Known homeowner', 'O': 'Probable homeowner', 'U': 'Unknown', 'P': 'Probable renter',
                 'R': 'Known renter'}
@@ -165,6 +173,7 @@ def self_check():
     """Every user-facing string passes the advisory gate."""
     strings = [row['label'] for row in FIELDS] + list(GROUP_LABELS.values()) + list(STATUS_LABELS.values())
     strings += list(OWNER_RENTER.values()) + list(PARTY_CODES.values()) + list(LEAN_BAND_LABELS.values()) + [CHILDREN_RULE_SOURCE, CODE50_VALUE]
+    strings += [text for preset in ROI_PRESETS.values() for text in preset]
     bad = [text for text in strings if ADVISORY_PATTERN.search(text)]
     if bad:
         raise ValueError('Advisory wording in labels: ' + ', '.join(bad))

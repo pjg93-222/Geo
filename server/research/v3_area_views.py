@@ -2,6 +2,8 @@
 
   GET /api/v3/meta                                         static facts, the score-store status, the demo flag
   GET /api/v3/districts                                    the districts of the header selector, each with its instance port
+  GET /api/v3/features                                     this district's settings: industries, candidate, overlay layers, street plan
+  GET /api/v3/density                                      DATA_DIR/density.json (population and voter density per area), 404 until built
   GET /api/v3/areas/<snapshot>/<basis>/<level>.json        columnar values of one level (registration or residence)
   GET /api/v3/geometry/<snapshot>/<level>/<coarse|fine>.json  polygons with label points
 
@@ -18,6 +20,7 @@ from django.conf import settings
 
 from tools import area_layers as AL
 from tools import districts as D
+from tools import field_labels as FL
 
 from . import v3_cache
 from .models import Snapshot
@@ -105,6 +108,61 @@ def districts(request):
         listed.append({'id': d['id'], 'label': d['label'], 'short_label': d['short_label'], 'state': d['state'],
                        'port': d['port'], 'ready': ready, 'center': list(d['center']), 'zoom': d['zoom']})
     return json_etag_response(request, {'schema': 'v3-districts-1', 'current': current, 'districts': listed}, REVALIDATE)
+
+
+def _store_has_support():
+    """True when the score store was built with candidate support (scores_writer records `support` in its metadata)."""
+    from . import scoresdb
+    try:
+        return 'support' in scoresdb.info().meta
+    except scoresdb.StoreError:
+        return False
+
+
+@get_only
+@signed_in
+def features(request):
+    """The settings of the district this process serves (tools/districts.py): configuration only, never a person. A candidate
+    district also names its candidate, race mode and street-plan presets; `sup` is an overlay layer only once the score store
+    holds the support table, and the density layers only once density.json is built."""
+    params(request, set())
+    d = settings.DISTRICT
+    built = (Path(settings.DATA_DIR) / 'density.json').is_file()
+    layers = ['ovr', 'cua', 'part', 'soi', 'lean']
+    if d['candidate'] and _store_has_support():
+        layers.append('sup')
+    if built:
+        layers += ['pop_density', 'voter_density']
+    candidate = d['candidate'] and {
+        'name': d['candidate'], 'party': d['party'], 'party_label': FL.PARTY_CODES[d['party']], 'race_mode': d['race_mode'],
+        'primary_universe': d['primary_universe'], 'signals': d['support']['signals']}
+    roi = d['roi'] and {**d['roi'], 'presets': [{'id': i, 'label': FL.ROI_PRESETS[i][0], 'formula': FL.ROI_PRESETS[i][1]}
+                                               for i in d['roi']['presets']]}
+    industries = [{'id': i, 'label': FL.INDUSTRIES[i]['label'],
+                   'fields': [{'name': n, 'label': t, 'weight': w} for n, t, w in FL.INDUSTRIES[i]['fields']]}
+                  for i in d['industries']]
+    return json_etag_response(request, {
+        'schema': 'v3-features-1', 'district': d['id'], 'industries': industries, 'industry': d['industries'][0],
+        'candidate': candidate, 'party_codes': FL.PARTY_CODES,
+        'overlay': {'layers': layers, 'density': built}, 'roi': roi}, REVALIDATE)
+
+
+@lru_cache(maxsize=2)
+def _density_blob(path, mtime_ns, size):
+    return v3_cache.Blob(Path(path).read_bytes())
+
+
+@get_only
+@signed_in
+def density(request):
+    """density.json of this district's data directory (tools/build_density.py), served as it is."""
+    params(request, set())
+    path = Path(settings.DATA_DIR) / 'density.json'
+    try:
+        stat = path.stat()
+    except OSError:
+        return error('Density is not built yet.', 404)
+    return blob_response(request, _density_blob(str(path), stat.st_mtime_ns, stat.st_size), REVALIDATE)
 
 
 def _snapshot_or_404(key):

@@ -128,6 +128,34 @@ NORMALISE = {
 }
 
 
+def overview_party_split(golden, now):
+    """O-10: the walk overview's d/r/u/o counts became {code: count}; D, R, U unchanged, the other codes (blank too) sum
+    to o; geometry, span, street and doors unchanged; nothing else differs. Problems name JSON paths, never values."""
+    a, b = json.loads(golden), json.loads(now)
+    fs, gs = a.get('features'), b.get('features')
+    if (set(a) != set(b) or a.get('type') != b.get('type') or not isinstance(fs, list) or not isinstance(gs, list)
+            or len(fs) != len(gs)):
+        return ['$.features']
+    out = []
+    for i, (fa, fb) in enumerate(zip(fs, gs)):
+        pa, pb = fa.get('properties', {}), fb.get('properties', {})
+        same = {k: v for k, v in pa.items() if k not in ('d', 'r', 'u', 'o')}
+        parties = pb.get('parties')
+        if (fa.get('geometry') != fb.get('geometry') or set(fa) != set(fb)
+                or {k: v for k, v in pb.items() if k != 'parties'} != same or not isinstance(parties, dict)
+                or any(not re.fullmatch(r'[A-Z]?', c) or not isinstance(n, int) or n < 1 for c, n in parties.items())
+                or [parties.get(c, 0) for c in 'DRU'] != [pa['d'], pa['r'], pa['u']]
+                or sum(n for c, n in parties.items() if c not in ('D', 'R', 'U')) != pa['o']):
+            out.append('$.features[%d]' % i)
+    return out[:12]
+
+
+# Ruled differences from the Phase 0 fixture: {endpoint id: (ruling, verifier(golden bytes, new bytes) -> [problems])}.
+# A listed endpoint passes only when its status and content type are unchanged and its verifier finds no problem
+# (the golden body must be on disk); any other difference fails as before.
+INTENDED = {'walk_overview_precinct': ('O-10 party codes as themselves', overview_party_split)}
+
+
 def log(message):
     print('[%s] %s' % (datetime.datetime.now().strftime('%H:%M:%S'), message), file=sys.stderr, flush=True)
 
@@ -559,8 +587,19 @@ def compare_endpoints(expected, actual, bodies_now, golden_dir, out):
                 problems.append('%s %s -> %s' % (key, short(before.get(key)), short(now.get(key))))
         if not problems:
             continue
-        line = 'DIFFERENT endpoints.%s: %s' % (endpoint_id, '; '.join(problems))
         golden = golden_dir / (endpoint_id + '.body')
+        ruled = []
+        if endpoint_id in INTENDED and all(before.get(k) == now.get(k) for k in ('status', 'content_type', 'skipped')):
+            ruling, verify = INTENDED[endpoint_id]
+            if endpoint_id not in bodies_now or not golden.exists():
+                ruled = ['cannot verify a ruled difference without the golden body']
+            else:
+                found = verify(golden.read_bytes(), bodies_now[endpoint_id])
+                if not found:
+                    print('INTENDED endpoints.%s (%s): verified' % (endpoint_id, ruling))
+                    continue
+                ruled = ['ruled difference "%s" not met at %s' % (ruling, ', '.join(found))]
+        line = 'DIFFERENT endpoints.%s: %s' % (endpoint_id, '; '.join(problems + ruled))
         if endpoint_id in bodies_now and golden.exists():
             where = json_paths_differing(golden.read_bytes(), bodies_now[endpoint_id])
             line += '\n            differing JSON paths: ' + (', '.join(where) if where else '(none; only the bytes differ)')

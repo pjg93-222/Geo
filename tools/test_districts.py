@@ -20,6 +20,7 @@ from server.research import walk_names as N
 from tools import build_scores_v3 as BS
 from tools import build_walk as B
 from tools import districts as D
+from tools import field_labels as FL
 from tools import ingest
 from tools import walk_geo as G
 
@@ -65,8 +66,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual([d['port'] for d in (CO, OR, CT)], [8767, 8775, 8777])
         self.assertEqual(OR['abs_rule'], 'Abs = mail ballots (Oregon votes by mail; every recorded vote counts)')
         self.assertEqual(CT['abs_rule'], 'Abs = absentee or mail ballots (A or M)')
-        self.assertIsNone(OR['race_mode'])
-        self.assertIsNone(CT['race_mode'])
+        self.assertEqual((OR['race_mode'], CT['race_mode']), ('general', 'general'))    # Paul 2026-10-07 (supersedes Phase 2's None)
+
+    def test_candidate_settings(self):
+        for d in (CO, OR, CT):
+            self.assertEqual(sum(d['score_weights'].values()), 100, d['id'])
+            self.assertEqual(d['candidate'] is not None, d['party'] in ('D', 'R'), d['id'])
+            self.assertEqual(d['support'] is not None, d['candidate'] is not None, d['id'])
+            self.assertEqual(d['roi'] is not None, d['candidate'] is not None, d['id'])
+        self.assertEqual((CO['candidate'], CO['party'], CO['race_mode'], CO['support'], CO['roi']), (None,) * 5)
+        self.assertEqual(CO['score_weights'], {'cua': 40, 'part': 35, 'soi': 25})
+        for d, name in ((OR, 'Janelle Bynum'), (CT, 'Luke Bronin')):
+            self.assertEqual((d['candidate'], d['party']), (name, 'D'))
+            self.assertEqual(list(d['score_weights']), ['cua', 'sup', 'part', 'soi'])
+            self.assertEqual(d['score_weights'], {'cua': 30, 'sup': 25, 'part': 25, 'soi': 20})
+            self.assertEqual(set(d['support']['signals']), {'partisan', 'presidential', 'registration', 'primary_ballot'})
+            self.assertEqual(set(d['roi']['presets']), set(FL.ROI_PRESETS))
+            self.assertIn(d['roi']['preset'], d['roi']['presets'])
+        self.assertIsNot(OR['support']['signals'], CT['support']['signals'])           # one district's edit never moves the other's
 
 
 class RowfwConfigTests(unittest.TestCase):

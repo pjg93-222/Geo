@@ -3,7 +3,7 @@
 import {localJson,postJson} from './client';
 import type {
   WalkArea,WalkDispositionEntry,WalkDispositionsResult,WalkLevel,WalkListPayload,WalkListsPayload,WalkMatchInput,WalkMatchPayload,
-  WalkOptionsPayload,WalkOverviewProps,WalkReknockPayload,WalkSavedPayload,WalkStreetsPayload,
+  WalkOptionsPayload,WalkOverviewProps,WalkPlan,WalkPlanOptions,WalkReknockPayload,WalkSavedPayload,WalkScores,WalkStreetsPayload,
 } from './walkTypes';
 
 const BASE='/api/v3/walk';
@@ -28,10 +28,17 @@ export function searchWalkStreets(text:string,area:WalkArea,signal?:AbortSignal)
 export function matchWalkStreets(rows:WalkMatchInput[],area:WalkArea,signal?:AbortSignal):Promise<WalkMatchPayload>{
   return postJson(`${BASE}/match`,{rows,...cleanArea(area)},signal);
 }
-/** `streets` is "12:even,15:both"; the area narrows the list the same way as in the picker. */
-export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal):Promise<WalkListPayload>{
-  return localJson(`${BASE}/list${query({streets,...areaOf(area)})}`,signal);
+/** `streets` is "12:even,15:both"; the area narrows the list the same way as in the picker. `spans` are road-span ids from the street plan
+ *  (at most 200); they add those spans' voters, with or without an area. */
+export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[]):Promise<WalkListPayload>{
+  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),...areaOf(area)})}`,signal);
 }
+/** Street plan: the road spans of an area ranked by the preset's value per 100 m walked (candidate districts only). */
+export function getWalkPlan(area:WalkArea,options:WalkPlanOptions,signal?:AbortSignal):Promise<WalkPlan>{
+  return localJson(`${BASE}/plan${query({...areaOf(area),...options})}`,signal);
+}
+/** Overall, participation and (candidate districts) support whole-number scores of up to 1,500 listed people, for the printed list. */
+export function getWalkScores(ids:string[],signal?:AbortSignal):Promise<WalkScores>{return postJson(`${BASE}/scores`,{ids},signal);}
 export function getWalkLists(signal?:AbortSignal):Promise<WalkListsPayload>{return localJson(`${BASE}/lists`,signal);}
 export function getWalkSavedList(key:string,signal?:AbortSignal):Promise<WalkListPayload>{return localJson(`${BASE}/lists/${encodeURIComponent(key)}`,signal);}
 /** Freezes a list under a title; `queryOf` is the query the list was built from, `fingerprint` that of the list shown (the server refuses a save

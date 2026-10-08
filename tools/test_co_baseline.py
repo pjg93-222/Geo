@@ -2,6 +2,9 @@
 
     <venv python> -m unittest tools.test_co_baseline          (from the V3 folder; no real data, no server, no port)
 """
+import contextlib
+import copy
+import io
 import json
 import sqlite3
 import tempfile
@@ -134,6 +137,89 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn('endpoints.meta', out[0])
         self.assertIn('sha256', out[0])
+
+
+def overview(*properties):
+    return {'type': 'FeatureCollection', 'features': [
+        {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [[0, 0], [1, 1 + i]]}, 'properties': p}
+        for i, p in enumerate(properties)]}
+
+
+OLD = overview({'span': 1, 'street': 'A', 'doors': 5, 'd': 3, 'r': 2, 'u': 1, 'o': 4},
+               {'span': 2, 'street': 'B', 'doors': 2, 'd': 0, 'r': 0, 'u': 0, 'o': 0})
+NEW = overview({'span': 1, 'street': 'A', 'doors': 5, 'parties': {'D': 3, 'R': 2, 'U': 1, 'W': 1, 'G': 1, '': 2}},
+               {'span': 2, 'street': 'B', 'doors': 2, 'parties': {}})
+
+
+def dumps(body):
+    return json.dumps(body).encode()
+
+
+class IntendedTests(unittest.TestCase):
+    """The ruled difference of walk_overview_precinct (O-10): the exact split passes, every other change fails."""
+
+    def changed(self, edit):
+        body = copy.deepcopy(NEW)
+        edit(body)
+        return B.overview_party_split(dumps(OLD), dumps(body))
+
+    def test_the_exact_split_passes(self):
+        self.assertEqual(B.overview_party_split(dumps(OLD), dumps(NEW)), [])
+
+    def test_every_other_change_fails_and_names_a_path(self):
+        feature = lambda body: body['features'][0]
+        cases = {
+            'a D count changed': lambda b: feature(b)['properties']['parties'].update(D=4),
+            'a D count dropped': lambda b: feature(b)['properties']['parties'].pop('D'),
+            'doors changed': lambda b: feature(b)['properties'].update(doors=6),
+            'a geometry coordinate changed': lambda b: feature(b)['geometry']['coordinates'][0].__setitem__(0, 0.5),
+            'an extra property': lambda b: feature(b)['properties'].update(extra=1),
+            'an old count kept': lambda b: feature(b)['properties'].update(d=3),
+            'the minor sum is off by one': lambda b: feature(b)['properties']['parties'].update(W=2),
+            'a zero count': lambda b: feature(b)['properties']['parties'].update(W=0),
+            'a code that is not a letter': lambda b: feature(b)['properties']['parties'].update({'1': 1}),
+            'parties is missing': lambda b: feature(b)['properties'].pop('parties'),
+            'an extra feature key': lambda b: feature(b).update(id=7),
+        }
+        for name, edit in cases.items():
+            self.assertEqual(self.changed(edit), ['$.features[0]'], name)
+        self.assertEqual(self.changed(lambda b: b['features'].pop()), ['$.features'], 'a feature dropped')
+        self.assertEqual(self.changed(lambda b: b.update(extra=1)), ['$.features'], 'an extra top-level key')
+
+    def compare(self, endpoint_id, now_body, golden=OLD, status=200):
+        entry = lambda sha: {'status': 200, 'content_type': 'application/json', 'bytes': 10, 'sha256': sha * 64}
+        now = {endpoint_id: {**entry('b'), 'status': status}}
+        with tempfile.TemporaryDirectory() as folder:
+            if golden is not None:
+                (Path(folder) / (endpoint_id + '.body')).write_bytes(dumps(golden))
+            out, printed = [], io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                B.compare_endpoints({endpoint_id: entry('a')}, now, {endpoint_id: dumps(now_body)}, Path(folder), out)
+        return out, printed.getvalue()
+
+    def test_the_ruled_endpoint_passes_with_one_verified_line(self):
+        out, printed = self.compare('walk_overview_precinct', NEW)
+        self.assertEqual(out, [])
+        self.assertEqual(printed.strip(), 'INTENDED endpoints.walk_overview_precinct (O-10 party codes as themselves): verified')
+
+    def test_a_ruled_endpoint_still_fails_when_the_verifier_or_the_golden_body_or_the_status_does(self):
+        broken = copy.deepcopy(NEW)
+        broken['features'][0]['properties']['doors'] = 6
+        out, printed = self.compare('walk_overview_precinct', broken)
+        self.assertEqual((len(out), printed), (1, ''))
+        self.assertIn('not met at $.features[0]', out[0])
+        out, _ = self.compare('walk_overview_precinct', NEW, golden=None)
+        self.assertIn('cannot verify a ruled difference without the golden body', out[0])
+        out, printed = self.compare('walk_overview_precinct', NEW, status=500)
+        self.assertEqual((len(out), printed), (1, ''))
+        self.assertIn('status 200 -> 500', out[0])
+
+    def test_an_unlisted_endpoint_that_differs_fails(self):
+        out, printed = self.compare('walk_overview_other', NEW)
+        self.assertEqual((len(out), printed), (1, ''))
+        self.assertIn('DIFFERENT endpoints.walk_overview_other', out[0])
+        self.assertNotIn('ruled', out[0])
+        self.assertEqual(list(B.INTENDED), ['walk_overview_precinct'])
 
 
 class SafetyTests(unittest.TestCase):

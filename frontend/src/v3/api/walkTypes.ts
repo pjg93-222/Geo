@@ -73,4 +73,19 @@ export interface WalkDispositionEntry { person_id: string; code: WalkCode | null
 export interface WalkDispositionsResult { saved: number }
 
 // GET /api/v3/walk/overview?ss=&sh=&precinct= -> GeoJSON FeatureCollection<LineString, WalkOverviewProps>
-export interface WalkOverviewProps { span: number; street: string; doors: number; d: number; r: number; u: number; o: number }
+// `parties` counts each person by party code as it is on file ('' = blank); `d/r/u/o` are the older D/R/U/other counts, sent until the server drops them.
+export interface WalkOverviewProps { span: number; street: string; doors: number; parties?: Record<string, number>; d?: number; r?: number; u?: number; o?: number }
+
+// GET /api/v3/walk/plan?ss=&sh=&precinct=&preset=&w_value=&w_pop=&w_voter= (candidate districts; 404 without a candidate, 503 until support is built)
+export interface WalkPlanSpan {
+  span: number; street: string; doors: number; people: number; len_m: number; s_mean: number | null; p_mean: number | null;
+  pop_density: number | null; voter_density: number | null; value: number; value_per_100m: number; score: number; rank: number;
+}
+export interface WalkPlan {
+  schema: 'walk-plan-1'; preset: string; weights: Record<'value' | 'pop_density' | 'voter_density', number>; p: string;
+  race_mode: 'general' | 'primary'; spans: WalkPlanSpan[]; not_ranked: { spans: number; people: number };
+}
+export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number }
+
+// POST /api/v3/walk/scores {ids} -> {scores}; `sup` only in candidate districts. Whole numbers, for the printed list.
+export interface WalkScores { scores: Record<string, { ovr: number; part: number; sup?: number }> }
