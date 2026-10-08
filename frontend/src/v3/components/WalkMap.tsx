@@ -7,11 +7,11 @@ import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type {WalkListPayload,WalkOverviewProps,WalkRun} from '../api/walkTypes';
-import {getRoads} from '../api/client';
+import {getFeatures,getRoads} from '../api/client';
 import {getWalkOverview,type WalkOverview} from '../api/walk';
 import {ZoomControl} from './MapParts';
 import {cx} from './ui';
-import {countText,doorBreaks,majorParty} from '../lib/walk';
+import {countText,doorBreaks,majorParty,partyName} from '../lib/walk';
 import {uPx} from '../lib/units';
 import {areaParts,cleanLine,doorPoints,isListed,labelPoint,lineLength,listedPrecincts,spotAlong,usableBounds} from '../lib/walkGeo';
 
@@ -27,7 +27,8 @@ const WALK_LINE='#57447B';
 // The colours come from the shared tokens (tokens.css); these are the same values for when a token cannot be read.
 const token=(name:string,fallback:string):string=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 const RAMP=[['--s1','#E6F1EC'],['--s2','#C2E0DB'],['--s3','#8BC2BC'],['--s4','#54979B'],['--s5','#286D73']] as const;
-const PARTY=[['d','--reg-d','#95ADCE','Dem.'],['r','--reg-r','#E7A490','Rep.'],['u','--reg-u','#C6C2D3','Unaff.'],['o','--reg-o','#F5F1E9','Other'],['mixed','--centre','#E5DFDA','Mixed']] as const;
+// D, R and U have their own shade; every other code shares the 'other' one and is named in the key when it leads a block.
+const PARTY=[['D','--reg-d','#95ADCE','Dem.'],['R','--reg-r','#E7A490','Rep.'],['U','--reg-u','#C6C2D3','Unaff.'],['other','--reg-o','#F5F1E9','Other'],['mixed','--centre','#E5DFDA','Mixed']] as const;
 
 /** Shade for each door-count band, spread over the five-step ramp (one band uses the middle shade). */
 function doorColor(breaks:number[],ramp:string[]):Expr{
@@ -38,22 +39,23 @@ function doorColor(breaks:number[],ramp:string[]):Expr{
   breaks.forEach((b,i)=>e.push(b,shade(i+1)));
   return e as Expr;
 }
-function partyColor(colors:Record<string,string>):Expr{
-  return ['match',['get','maj'],...Object.entries(colors).flat(),'rgba(0,0,0,0)'] as unknown as Expr;
+function partyColor(c:Record<string,string>):Expr{
+  return ['match',['get','maj'],'D',c.D,'R',c.R,'U',c.U,'mixed',c.mixed,c.other] as unknown as Expr;   // 'none' is filtered out
 }
 
-interface Prepared{fc:GeoJSON.FeatureCollection;breaks:number[]}
+interface Prepared{fc:GeoJSON.FeatureCollection;breaks:number[];leads:string[]}
 function prepare(data:WalkOverview):Prepared{
-  const features:GeoJSON.Feature[]=[];const doors:number[]=[];
+  const features:GeoJSON.Feature[]=[];const doors:number[]=[];const leads=new Set<string>();
   for(const f of data?.features??[]){
     if(f?.geometry?.type!=='LineString')continue;
     const p=(f.properties??{}) as Partial<WalkOverviewProps>;
-    const count={d:Number(p.d)||0,r:Number(p.r)||0,u:Number(p.u)||0,o:Number(p.o)||0};
-    const n=Number(p.doors)||0;
-    features.push({type:'Feature',geometry:f.geometry,properties:{doors:n,maj:majorParty(count)}});
+    const count=Object.fromEntries(Object.entries(p.parties??{}).map(([k,v])=>[k,Number(v)||0]));
+    const n=Number(p.doors)||0,maj=majorParty(count);
+    if(!['D','R','U','mixed','none'].includes(maj))leads.add(maj);
+    features.push({type:'Feature',geometry:f.geometry,properties:{doors:n,maj}});
     doors.push(n);
   }
-  return {fc:{type:'FeatureCollection',features},breaks:doorBreaks(doors)};
+  return {fc:{type:'FeatureCollection',features},breaks:doorBreaks(doors),leads:[...leads].sort()};
 }
 
 const runLine=(r:WalkRun):[number,number][]=>{
@@ -73,6 +75,7 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
   const mapRef=useRef<maplibregl.Map|null>(null);
   const [ready,setReady]=useState(false);const [failed,setFailed]=useState(false);
   const [overview,setOverview]=useState<WalkOverview|null>(null);
+  const [codes,setCodes]=useState<Record<string,string>>({});
   const stop=useRef(onStop);stop.current=onStop;
   const area={ss:payload.query?.ss??'',sh:payload.query?.sh??'',precinct:payload.query?.precinct??''};
   const areaKey=`${area.ss}|${area.sh}|${area.precinct}`;
@@ -154,6 +157,11 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
   },[ready]);
 
   // ---- blocks of the area --------------------------------------------------------------------------------------------------
+  useEffect(()=>{
+    const ac=new AbortController();
+    getFeatures(ac.signal).then(f=>setCodes(f.party_codes??{})).catch(()=>{/* the key then shows the bare codes */});
+    return ()=>ac.abort();
+  },[]);
   useEffect(()=>{
     if(!area.ss&&!area.sh&&!area.precinct){setOverview(null);return;}
     const ac=new AbortController();
@@ -269,7 +277,7 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
         ?<div className="walk-legend-group"><p className="walk-legend-title">Doors per block</p>
           <div className="walk-ramp"><span>fewer</span><ul className="walk-swatches" aria-hidden="true">{colors.ramp.map((c,i)=><li key={i}><i style={{background:c}}/></li>)}</ul><span>more</span></div></div>
         :<div className="walk-legend-group"><p className="walk-legend-title">Largest party per block</p>
-          <ul className="walk-swatches party">{PARTY.map(([k,,,name])=><li key={k}><i style={{background:colors.party[k]}}/><span>{name}</span></li>)}</ul></div>)}
+          <ul className="walk-swatches party">{[...PARTY.slice(0,3).map(([k,,,name])=>[k,k,name]),...prepared.leads.map(c=>[c,'other',partyName(c,codes)]),['mixed','mixed','Mixed']].map(([id,k,name])=><li key={id}><i style={{background:colors.party[k]}}/><span>{name}</span></li>)}</ul></div>)}
       <ul className="walk-lines">
         <li><i className="walk-sample solid"/>Walk</li>
         <li><i className="walk-sample dashed"/>Between stops</li>

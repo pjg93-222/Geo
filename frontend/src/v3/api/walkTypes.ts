@@ -73,8 +73,8 @@ export interface WalkDispositionEntry { person_id: string; code: WalkCode | null
 export interface WalkDispositionsResult { saved: number }
 
 // GET /api/v3/walk/overview?ss=&sh=&precinct= -> GeoJSON FeatureCollection<LineString, WalkOverviewProps>
-// `parties` counts each person by party code as it is on file ('' = blank); `d/r/u/o` are the older D/R/U/other counts, sent until the server drops them.
-export interface WalkOverviewProps { span: number; street: string; doors: number; parties?: Record<string, number>; d?: number; r?: number; u?: number; o?: number }
+// `parties` counts each person by party code as it is on file ('' = no code), codes sorted.
+export interface WalkOverviewProps { span: number; street: string; doors: number; parties: Record<string, number> }
 
 // GET /api/v3/walk/plan?ss=&sh=&precinct=&preset=&w_value=&w_pop=&w_voter= (candidate districts; 404 without a candidate, 503 until support is built)
 export interface WalkPlanSpan {

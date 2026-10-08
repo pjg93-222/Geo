@@ -393,13 +393,22 @@ class Store:
         return out
 
     def span_stats(self, area):
-        """Rows (span_id, street_id, doors, d, r, u, o) of the placed blocks that have people in `area`."""
+        """Rows (span_id, street_id, doors) of the placed blocks that have people in `area`."""
         clause, args = _area(area, 'p')
         return self.conn.execute(
-            "SELECT s.span_id, p.street_id, COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) AS doors, "
-            "SUM(p.party='D') AS d, SUM(p.party='R') AS r, SUM(p.party='U') AS u, "
-            "SUM(COALESCE(p.party,'') NOT IN ('D','R','U')) AS o FROM person p JOIN stop s ON s.id = p.stop_id "
-            "WHERE s.span_id IS NOT NULL%s GROUP BY s.span_id, p.street_id" % clause, args).fetchall()
+            "SELECT s.span_id, p.street_id, COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) AS doors "
+            "FROM person p JOIN stop s ON s.id = p.stop_id WHERE s.span_id IS NOT NULL%s GROUP BY s.span_id, p.street_id" % clause,
+            args).fetchall()
+
+    def span_parties(self, area):
+        """{span id: {party code: people}} for the same blocks, the codes as they are on file ('' = none)."""
+        clause, args = _area(area, 'p')
+        out = {}
+        for span_id, party, n in self.conn.execute(
+                "SELECT s.span_id, COALESCE(p.party, ''), COUNT(*) FROM person p JOIN stop s ON s.id = p.stop_id "
+                "WHERE s.span_id IS NOT NULL%s GROUP BY 1, 2 ORDER BY 1, 2" % clause, args):
+            out.setdefault(span_id, {})[party] = n
+        return out
 
     def span_lines(self, ids):
         """{span id: coords JSON text}."""

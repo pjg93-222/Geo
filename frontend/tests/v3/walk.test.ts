@@ -198,7 +198,7 @@ test('door script copy follows the neutral-wording gate', () => {
 // --- walk screen helpers: streets in the list, titles, history key, map shading, results in the CSV -------------------
 import {
   MAX_WALK_STREETS, defaultListTitle, doorBreaks, doorsOnSide, historyKey, initialResults, listLabel, majorParty, mergePick, nextSide,
-  parseStreetsParam, sideWords, streetsParam, yearRange
+  parseStreetsParam, partyName, sideWords, streetsParam, yearRange
 } from '../../src/v3/lib/walk.ts';
 
 const pick = (id: number, side: 'even' | 'odd' | 'both' = 'both') => ({id, side, label: `Street ${id}`, city: ''});
@@ -259,8 +259,10 @@ test('map shading: door-count edges give each shade about the same number of blo
 });
 
 test('map shading: largest party on a block, ties are mixed', () => {
-  assert.equal(majorParty({d: 5, r: 2, u: 1, o: 0}), 'd'); assert.equal(majorParty({d: 0, r: 0, u: 3, o: 1}), 'u'); assert.equal(majorParty({d: 0, r: 0, u: 0, o: 2}), 'o');
-  assert.equal(majorParty({d: 3, r: 3, u: 1, o: 0}), 'mixed'); assert.equal(majorParty({d: 1, r: 1, u: 1, o: 1}), 'mixed'); assert.equal(majorParty({d: 0, r: 0, u: 0, o: 0}), 'none');
+  assert.equal(majorParty({D: 5, R: 2, U: 1}), 'D'); assert.equal(majorParty({R: 1, U: 3, L: 1}), 'U'); assert.equal(majorParty({D: 1, W: 2}), 'W');
+  assert.equal(majorParty({D: 1, R: 0, '': 2}), ''); assert.equal(majorParty({D: 3, R: 3, U: 1}), 'mixed'); assert.equal(majorParty({G: 1, L: 1}), 'mixed');
+  assert.equal(majorParty({}), 'none'); assert.equal(majorParty({D: 0, R: 0}), 'none');
+  assert.equal(partyName('W', {W: 'Working Families'}), 'W Working Families'); assert.equal(partyName('T', {W: 'Working Families'}), 'Code T'); assert.equal(partyName('', {}), 'No code');
 });
 
 test('CSV results: the code on file, the one set on screen, and a cleared one', () => {

@@ -495,15 +495,15 @@ def overview(request):
         names = store.directory().by_id
         spans = {}
         for row in store.span_stats(area):
-            span = spans.setdefault(row['span_id'], {'doors': 0, 'd': 0, 'r': 0, 'u': 0, 'o': 0, 'label': None})
-            for field in ('doors', 'd', 'r', 'u', 'o'):
-                span[field] += row[field] or 0
+            span = spans.setdefault(row['span_id'], {'doors': 0, 'label': None})
+            span['doors'] += row['doors'] or 0
             label = (-row['doors'], street_label(names, row['street_id']))
             if span['label'] is None or label < span['label']:
                 span['label'] = label
         if len(spans) > MAX_SPANS:
             raise Refused('That area has %s blocks; choose a house district or a precinct to draw them.' % '{:,}'.format(len(spans)))
         lines = store.span_lines(spans)
+        parties = store.span_parties(area)
     features = []
     for span_id in sorted(spans):
         coordinates = json.loads(lines.get(span_id) or '[]')
@@ -512,7 +512,7 @@ def overview(request):
         span = spans[span_id]
         features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coordinates},
                          'properties': {'span': span_id, 'street': span['label'][1], 'doors': span['doors'],
-                                        'd': span['d'], 'r': span['r'], 'u': span['u'], 'o': span['o']}})
+                                        'parties': parties.get(span_id, {})}})
     return response({'type': 'FeatureCollection', 'features': features})
 
 

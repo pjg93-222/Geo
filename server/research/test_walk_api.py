@@ -878,26 +878,29 @@ class WalkListTests(WalkCase):
         people = [p for p in self.expected['people'].values() if p['precinct'] == PRECINCT_W]
         doors = [d for d in self.expected['doors'].values() if d['precinct'] == PRECINCT_W]
         spans = set()
-        counts = {'d': 0, 'r': 0, 'u': 0, 'o': 0}
+        counts = {}
         total_doors = 0
         for feature in payload['features']:
             self.assertEqual(feature['type'], 'Feature')
             self.assertEqual(feature['geometry']['type'], 'LineString')
             self.assertGreaterEqual(len(feature['geometry']['coordinates']), 2)
             props = feature['properties']
-            self.assertEqual(set(props), {'span', 'street', 'doors', 'd', 'r', 'u', 'o'})
+            self.assertEqual(set(props), {'span', 'street', 'doors', 'parties'})
             self.assertNotIn(props['span'], spans)
             spans.add(props['span'])
             total_doors += props['doors']
-            for party in counts:
-                counts[party] += props[party]
+            self.assertEqual(list(props['parties']), sorted(props['parties']))
+            for code, n in props['parties'].items():
+                self.assertGreater(n, 0)
+                counts[code] = counts.get(code, 0) + n
         self.assertEqual(total_doors, len(doors))
-        want = {'d': 0, 'r': 0, 'u': 0, 'o': 0}
+        want = {}
         for person in people:
-            want[person['party'].lower() if person['party'] in 'DRU' else 'o'] += 1
-        self.assertEqual(counts, want)
+            want[person['party']] = want.get(person['party'], 0) + 1
+        self.assertEqual(counts, want)                         # every code as itself, the old D/R/U counts among them
+        self.assertIn('L', counts)
         self.assertEqual({f['properties']['street'] for f in payload['features']}, {'Cedar Heights Dr', 'Juniper Ln', 'Ridgeview Ct'})
-        self.assertEqual(sum(sum(f['properties'][k] for k in 'dru') + f['properties']['o'] for f in payload['features']), len(people))
+        self.assertEqual(sum(sum(f['properties']['parties'].values()) for f in payload['features']), len(people))
 
     def test_overview_needs_an_area_and_has_a_cap(self):
         self.error(self.get('/api/v3/walk/overview'), 400)

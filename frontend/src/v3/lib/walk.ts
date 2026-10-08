@@ -629,13 +629,14 @@ export function doorBreaks(values:readonly number[],bins=5):number[]{
   }
   return out;
 }
-export type PartyKey='d'|'r'|'u'|'o';
-/** The registration group with the most voters on a block; a tie is "mixed" and no voters is "none". */
-export function majorParty(c:Record<PartyKey,number>):PartyKey|'mixed'|'none'{
-  const top=Math.max(c.d,c.r,c.u,c.o);if(!(top>0))return 'none';
-  const lead=(['d','r','u','o'] as const).filter(k=>c[k]===top);
+/** The party code (as on file; '' = none) with the most voters on a block; a tie is "mixed" and no voters is "none". */
+export function majorParty(c:Record<string,number>):string{
+  const top=Math.max(0,...Object.values(c));if(!(top>0))return 'none';
+  const lead=Object.keys(c).filter(k=>c[k]===top);
   return lead.length===1?lead[0]:'mixed';
 }
+/** A party code for the map key: "W Working Families" when the district knows the code, "Code T" when it does not. */
+export const partyName=(code:string,names:Record<string,string>):string=>!code?'No code':names[code]?`${code} ${names[code]}`:`Code ${code}`;
 
 // --- CSV in ----------------------------------------------------------------------------------------------------------
 export const MAX_UPLOAD_ROWS=500;
