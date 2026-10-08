@@ -36,7 +36,7 @@ class CopyTests(unittest.TestCase):
             manifest = rowfw.build_copy(tmp, {'id': 'or-05', 'terrier_district': 'or-05', 'is_co': False, 'rows': 1}, 'Oregon OR-05')
             patched = {k: v['patched_lines'] for k, v in manifest['files'].items() if v['patched_lines']}
             self.assertEqual(set(patched), set(rowfw.PATCHES))                       # every patched file, nothing else
-            self.assertEqual(sum(len(v) for v in patched.values()), 43)               # 27 of Phase 3b, 16 of Phase 4B (kind e)
+            self.assertEqual(sum(len(v) for v in patched.values()), 45)               # 27 of Phase 3b, 18 of Phase 4B (kind e)
             for rel, info in manifest['files'].items():                              # an unpatched file is the original, byte for byte
                 if not info['patched_lines'] and 'appended_sha256' not in info:
                     self.assertEqual(info['original_sha256'], info['copy_sha256'], rel)
@@ -325,6 +325,39 @@ class FourTermTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             rowfw.build_copy(tmp, colorado, 'Colorado replay')
             self.assertNotIn('O-11', docs(tmp, 'DEVIATIONS.md'))
+
+    def test_t03_exact_diagnosis_takes_colorado_s_branch_unchanged_and_gives_a_candidate_the_support_term(self):
+        """finalize failed with KeyError 'W40_35_25' in diagnostics.evaluator for the 30/25/25/20 key."""
+        rel = rowfw._B + 'rowfw/diagnostics.py'
+        old, new = _original_and_patched(rel)
+        fw = _function(new, '_fw', {'F': Fraction})
+        standing = _function(new, 'exact_standing', {'np': np, 'F': Fraction})
+        env = {'np': np, 'F': Fraction, '_fw': fw, 'exact_standing': standing, 'Exact': object}
+        evaluator = lambda text, cols, cfg: _function(text, 'evaluator', env)(types.SimpleNamespace(pt=types.SimpleNamespace(cols=cols), cfg=cfg), 'ovr')
+        rng = np.random.default_rng(20261008)
+        n = 60
+        cols = {f'{g}_score': np.round(rng.uniform(0, 100, n), 1) for g in ('cua', 'part', 'soi')}      # rounded: tie groups, so the standings are fractions
+        cols['sup_pct'] = rng.uniform(0.01, 100.0, n)
+        wt = lambda num: {'num': num, 'den': 100}
+        alt = {'ovr_alt_cu50_pct': {'weights': [wt(50), wt(25), wt(25)]}}
+        co = {'overall': {'default': 'W40_35_25', 'W40_35_25': {'weights': {'cua': wt(40), 'part': wt(35), 'soi': wt(25)}}, 'alternatives': alt}}
+        orr = {'overall': {'default': 'W30_25_25_20', 'alternatives': alt,
+                           'W30_25_25_20': {'weights': {'cua': wt(30), 'sup': wt(25), 'part': wt(25), 'soi': wt(20)}}}}
+        was, now = evaluator(old, cols, co), evaluator(new, cols, co)
+        self.assertEqual([was(i) for i in range(n)], [now(i) for i in range(n)])                    # Colorado: the same exact fractions
+        with self.assertRaises(KeyError):
+            evaluator(old, cols, orr)
+        got, (a, b, c) = evaluator(new, cols, orr), (standing(cols[f'{g}_score']) for g in ('cua', 'part', 'soi'))
+        for i in range(n):
+            self.assertEqual(got(i), Fraction(30, 100) * a(i) + Fraction(25, 100) * b(i) + Fraction(20, 100) * c(i) + Fraction(25, 100) * Fraction(float(cols['sup_pct'][i])))
+
+    def test_a_redone_copy_keeps_the_cache_and_support_shas_of_the_earlier_one(self):
+        oregon, colorado = self.district_jsons()
+        old = {'cache_sha256': 'c' * 64, 'support': {'sha256': 's' * 64, 'candidate': 'x'}}
+        kept = rowfw.keep_pins(oregon, old)
+        self.assertEqual((kept['cache_sha256'], kept['support']['sha256'], kept['support']['candidate']), ('c' * 64, 's' * 64, oregon['support']['candidate']))
+        self.assertEqual(rowfw.keep_pins(colorado, old)['cache_sha256'], 'c' * 64)
+        self.assertNotIn('support', colorado)                                                       # Colorado has none, and gets none
 
 
 class SupportStepTests(unittest.TestCase):

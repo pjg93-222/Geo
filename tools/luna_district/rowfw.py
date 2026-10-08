@@ -122,6 +122,12 @@ PATCHES = {
          "w['cua'] * pc + w['part'] * pt.cols['part_pct'] + w['soi'] * ps + (w['sup'] * pt.cols['sup_pct'] if 'sup' in w else 0))", 1, 'e')],
     _B + 'rowfw/outputs.py': [
         ("st.ovr_w[g] * cols[f'{g}_pct'][canon] for g in ('cua', 'part', 'soi')}", "st.ovr_w[g] * cols[f'{g}_pct'][canon] for g in st.ovr_w}", 1, 'e')],
+    # T03(c)'s exact-arithmetic diagnosis of near pairs (run by finalize whenever a pair is closer than eps): the exact overall of the default key,
+    # with the exact value of the support standing as the last term for a candidate district
+    _B + 'rowfw/diagnostics.py': [
+        ("w = cfg['overall']['W40_35_25']['weights']", "w = cfg['overall'][cfg['overall']['default']]['weights']", 1, 'e'),
+        ("return _fw(w['cua']) * a + _fw(w['part']) * b + _fw(w['soi']) * c",
+         "return _fw(w['cua']) * a + _fw(w['part']) * b + _fw(w['soi']) * c + (_fw(w['sup']) * F(float(pt.cols['sup_pct'][i])) if 'sup' in w else 0)", 1, 'e')],
     'design/clarity_spec_facts.py': [
         ("ROOT = r'%s'" % LUNA, "ROOT = str(__import__('pathlib').Path(__file__).resolve().parents[1])", 1, 'a'),
         (r"CACHE = ROOT + r'\.local\row-framework-20260930\cache\inputs.parquet'", r"CACHE = ROOT + r'\cache\inputs.parquet'", 1, 'a'),
@@ -177,6 +183,15 @@ def district_json(district, cache_sha=None):
     return out
 
 
+def keep_pins(cfg, old):
+    """A redone copy keeps the shas the cache and support steps wrote. The support file is not recomputed after the freeze: np.savez stamps
+    the time in the zip, so a second write has another sha and the frozen config no longer pins it."""
+    cfg['cache_sha256'] = old.get('cache_sha256')
+    if 'support' in cfg:
+        cfg['support']['sha256'] = old.get('support', {}).get('sha256')
+    return cfg
+
+
 def _rulings_entry(label, overall=None):
     return (f'\n## 2026-10-07: Terrier Phase 3b, {label} (a district copy of this build)\n\n'
             'This folder is a copy of the Colorado rowfw-1.0.0 code run on the district\'s own completed export. The R1 "Go, '
@@ -192,9 +207,10 @@ def _deviations_entry(label, overall=None):
             '`copy-diff.patch` (paths, counts and hashes read from `district.json`).\n\n'
             '- Party code W: lean 0.0 and registration group "other", like G, L, O and T (Phase 3b ruling Q-4). The freeze stops on any other unmapped code.\n'
             + ('- Overall (Phase 4B, O-11): ' + overall['key'] + ' with candidate support as the fourth term. `sup_pct` is read from `cache/support.npz` '
-               '(tools/support.py, general mode; its sha256 is pinned in the frozen config) by 16 one-line patches (kind e); Colorado\'s branch of each is '
-               'the original expression. Left as text, run by no stage here: the copied data dictionary text, the synthetic overall example, '
-               'and the diagnostics, docs, sensitivity and T01 readers of `W40_35_25` (see `residual-literals.txt`).\n' if overall else
+               '(tools/support.py, general mode; its sha256 is pinned in the frozen config) by 18 one-line patches (kind e); Colorado\'s branch of each is '
+               'the original expression. The T03 exact-arithmetic diagnosis (`diagnostics.py`) is among them: finalize runs it whenever two scores are closer than eps. '
+               'Left as text, run by no stage here: the copied data dictionary text, the synthetic overall example, '
+               'and the docs, sensitivity and T01 readers of `W40_35_25` (see `residual-literals.txt`).\n' if overall else
                '- Overall: Colorado\'s 40/35/25. Candidate support does not exist before Phase 4B, so the app shows this overall as interim.\n') +
             '- Tests: only T00 (the input contract) runs for this district. T01 to T18 are not run; the method code is Colorado\'s, where they ran. '
             'The Colorado ridit pin and the Colorado spec-evidence pin of the freeze are recorded, not enforced.\n'
@@ -345,8 +361,8 @@ def copy(district, redo=False, **_):
         raise SystemExit(f'{district}: the plan is frozen (PLAN.receipt.json); a code fix after the freeze needs --redo')
     with RowfwStep(district, 'rowfw-copy', outputs=[R / 'copy-manifest.json'], redo=redo) as st:
         cfg = district_json(district)
-        if (R / 'district.json').exists():                         # a redone copy keeps the cache sha the cache step wrote
-            cfg['cache_sha256'] = read_json(R / 'district.json').get('cache_sha256')
+        if (R / 'district.json').exists():
+            cfg = keep_pins(cfg, read_json(R / 'district.json'))
         manifest = build_copy(R, cfg, DISTRICTS[district]['label'])
         if frozen.exists():           # a redo after the freeze may change only code the freeze did not read: no outputs are copied, so those stay
             receipt = read_json(frozen)
