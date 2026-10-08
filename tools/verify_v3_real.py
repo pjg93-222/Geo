@@ -223,9 +223,8 @@ def main():
     record('profiles_equal_sqlite', mismatches == 0, persons=len(sample), mismatches=mismatches,
            fields_checked=fields_checked, worst_contribution_sum_error=contribution_worst, statuses=status_counts)
 
-    # ---- E. area payloads equal the area table ------------------------------------------------------------------
-    area_csv = list(csv.DictReader(open(RFB / 'area_scores_rowfw-1.0.0.csv', encoding='utf-8')))
-    suppressed = list(csv.DictReader(open(RFB / 'summaries' / 'area_suppressed_ids.csv', encoding='utf-8')))
+    # ---- E. area payloads equal the shown-areas table (every area; a polygon with no registered people is 'empty') -----
+    area_csv = list(csv.DictReader(open(V3 / '.local' / 'area_scores_shown.csv', encoding='utf-8')))
     worst, rounding_mismatches, compared, status_bad = 0.0, 0, 0, 0
     columns = {'mean': 'eb_mean', 'se': 'eb_se', 'measured': 'measured_pct_mean', 'pct': 'area_pct',
                'top10': 'top10_share_eb', 'top10_se': 'top10_eb_se', 'top10_pct': 'top10_area_pct'}
@@ -233,14 +232,10 @@ def main():
         for level in levels:
             payload = client.get('/api/v3/areas/%s/%s/%s.json' % (meta['snapshot'], basis, level)).json()
             index = {ident: i for i, ident in enumerate(payload['ids'])}
-            published = {r['area_id'] for r in area_csv if r['basis'] == basis and r['level'] == level and r['group'] == 'ovr'}
-            withheld = {r['area_id'] for r in suppressed if r['basis'] == basis and r['level'] == level and r['group'] == 'ovr'}
+            shown = {r['area_id'] for r in area_csv if r['basis'] == basis and r['level'] == level and r['group'] == 'ovr'}
             for ident, i in index.items():
-                is_ok = payload['status'][i] == 'ok'
-                status_bad += is_ok != (ident in published)
-                if ident in withheld and is_ok:
-                    status_bad += 1
-            status_bad += len(published - set(index)) + len(withheld - set(index))
+                status_bad += payload['status'][i] != ('ok' if ident in shown else 'empty')
+            status_bad += len(shown - set(index))
             for r in area_csv:
                 if r['basis'] != basis or r['level'] != level:
                     continue

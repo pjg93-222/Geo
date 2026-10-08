@@ -27,7 +27,7 @@ from tools.geography_levels import area_label
 
 log = logging.getLogger('cu.v3')
 
-DERIVED_VERSION = 'v2'
+DERIVED_VERSION = 'v3'                     # v3: every area is shown (status 'ok'; 'empty' = a polygon with no registered people)
 COARSE, FINE = 0.00055, 0.00006          # simplification tolerances in degrees (about 55 m and 6 m)
 COORD_DECIMALS = 5
 LEVELS = AL.LEVEL_ORDER
@@ -172,7 +172,7 @@ def build_areas(key, basis, level):
     out = {
         'schema': 'v3-areas-1', 'snapshot': key, 'basis': basis, 'level': level, 'ids': ids,
         'labels': [area_label(level, i, settings.DISTRICT) for i in ids],
-        'status': [by_id[i]['status'] if i in by_id else 'withheld' for i in ids],
+        'status': ['ok' if by_id.get(i, {}).get('status') == 'ok' else 'empty' for i in ids],
         'n': [], 'households': [], 'parent': [], 'precinct': [], 'tract': [], 'blocks': [],
     }
     if adjacency or level in AL.ADJACENCY_LEVELS:
@@ -183,8 +183,8 @@ def build_areas(key, basis, level):
     for ident in ids:
         row = by_id.get(ident)
         ok = row is not None and row['status'] == 'ok'
-        out['n'].append(row['n_rows'] if ok else None)
-        out['households'].append(row['n_households'] if ok else None)
+        out['n'].append(row['n_rows'] if ok else 0)
+        out['households'].append(row['n_households'] if ok else 0)
         out['parent'].append(ident[:11] if level == 'block' and basis == 'registration' else None)
         out['precinct'].append(row.get('precinct') if ok else None)
         out['tract'].append(row.get('tract') if ok else None)
@@ -285,11 +285,10 @@ def build_meta(key):
         'measured_breaks': list(AL.MEASURED_BREAKS), 'household_breaks': list(AL.BREAKS),
         'weights': rf.get('overall_weights') or settings.DISTRICT['interim_overall'] or settings.DISTRICT['score_weights'],
         'levels': list(LEVELS), 'bbox': [round(v, 5) for v in bounds],
-        'floors': {'min_n': AL.MIN_N, 'min_households': AL.MIN_HOUSEHOLDS},
+        'small_area': {'min_n': AL.SMALL_N, 'min_households': AL.SMALL_HOUSEHOLDS},      # a note only: every area is shown
         'bases': {basis: list(levels) for basis, levels in AL.BASIS_LEVELS.items()},
         'index_catalog': manifest['area_index_catalog']['groups'], 'layers': AL.LAYERS,
         'row_framework': {'version': rf['version'], 'area_table_sha256': rf['area_table_sha256'],
-                          'suppressed_ids_sha256': rf['suppressed_ids_sha256'],
                           'framework_config_sha256': rf['framework_config_sha256']},
         'geometry_method': manifest['geometry_method'],
         'support_likelihood': manifest['support_likelihood'], 'persistent_voices': manifest['persistent_voices'],

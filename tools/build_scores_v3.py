@@ -11,8 +11,8 @@ or the one-command form:  python tools/build_scores_v3.py --real
 
 What it checks before it writes (any failure stops the build and leaves the previous store untouched):
   * sha256 of the three P1 parquet files against their manifests, and the three manifests against each other;
-  * the frozen config, cache and area table (the area table has no manifest: its sha256 is recorded, and its structure
-    is checked against the D2 receipt: no residence blocks, no hatch column, published and withheld counts);
+  * the frozen config, cache and the shown-areas table (tools/shown_areas.py; every area, none withheld: its sha256 is checked
+    against its manifest and recorded, and its structure against the D2 receipt: no residence blocks, no hatch column, area counts);
   * the field weights of tools/field_labels.py against framework_config.json;
   * keys 1..N in all three files, profile summary columns bit-identical with the row file, lean band rule;
   * the crosswalk W1: contacts.rowid == model_source_row and contacts.id == HMAC(salt, persist id of that row) on every
@@ -210,11 +210,13 @@ def verify_support(pq, district, config, cache_path, data, log):
         **model, 'coverage': fresh['coverage'], 'orientation': orientation, 'sha256': sha, 'overall_max_abs_diff': worst}}
 
 
-def check_area_table(rowfw, log):
-    """Structure of the D2 area table (it has no manifest): returns the facts to record."""
-    csv_path = rowfw / 'area_scores_rowfw-1.0.0.csv'
-    suppressed_path = rowfw / 'summaries' / 'area_suppressed_ids.csv'
-    require(csv_path.exists() and suppressed_path.exists(), 'Area table or withheld list is missing')
+def check_area_table(table_path, rowfw, log):
+    """Structure of the shown-areas table (tools/shown_areas.py; every area, none withheld): returns the facts to record."""
+    csv_path = Path(table_path)
+    manifest_path = csv_path.with_suffix('.manifest.json')
+    require(csv_path.exists() and manifest_path.exists(), 'Shown-areas table or its manifest is missing: run tools/shown_areas.py')
+    sha = W.sha256_file(csv_path)
+    require(load_json(manifest_path)['sha256'] == sha, 'The shown-areas table differs from its manifest')
     schema = load_json(V3 / 'tools' / 'p1_schema.json')['area_scores_columns']
     seen, per_level, keys = set(), {}, set()
     with open(csv_path, newline='', encoding='utf-8') as stream:
@@ -230,32 +232,16 @@ def check_area_table(rowfw, log):
             seen.add(level)
             if row['group'] == 'ovr':
                 per_level[level] = per_level.get(level, 0) + 1
-            require(row['suppressed'] in ('0', '0.0'), 'A suppressed row is published')
-    withheld = {}
-    withheld_keys = set()
-    with open(suppressed_path, newline='', encoding='utf-8') as stream:
-        reader = csv.DictReader(stream)
-        for row in reader:
-            level = (row['basis'], row['level'])
-            require(level in AREA_LEVELS_D2, 'Withheld list holds a level outside the D2 set')
-            key = (row['basis'], row['level'], row['area_id'], row['group'])
-            require(key not in keys and key not in withheld_keys, 'An area is both published and withheld, or listed twice')
-            withheld_keys.add(key)
-            if row['group'] == 'ovr':
-                withheld[level] = withheld.get(level, 0) + 1
+            require(row['suppressed'] in ('0', '0.0'), 'The shown-areas table marks an area suppressed')
     require(seen == AREA_LEVELS_D2, 'Area table does not cover the D2 level set')
-    facts = {('%s/%s' % level): {'published': per_level[level], 'withheld': withheld.get(level, 0)}
-             for level in sorted(AREA_LEVELS_D2)}
+    facts = {('%s/%s' % level): {'areas': per_level[level]} for level in sorted(AREA_LEVELS_D2)}
     receipt_path = rowfw / 'release' / 'P1_D2_suppression_counts.json'
     if receipt_path.exists():
         counts = load_json(receipt_path)['D2_counts']
         for name, value in facts.items():
-            require(counts[name]['published'] == value['published'], 'Published count differs from the D2 receipt: ' + name)
-            require(counts[name]['areas'] == value['published'] + value['withheld'],
-                    'Area count differs from the D2 receipt: ' + name)
-        log('area table matches the D2 receipt', json.dumps({k: v['published'] for k, v in facts.items()}))
-    return {'area_table_sha256': W.sha256_file(csv_path), 'suppressed_ids_sha256': W.sha256_file(suppressed_path),
-            'levels': facts, 'manifest': 'none: sha256 recorded; structure checked against the D2 receipt'}
+            require(counts[name]['areas'] == value['areas'], 'Area count differs from the D2 receipt: ' + name)
+        log('area table matches the D2 receipt', json.dumps({k: v['areas'] for k, v in facts.items()}))
+    return {'area_table_sha256': sha, 'levels': facts, 'manifest_sha256': W.sha256_file(manifest_path)}
 
 
 # ---- parquet helpers ------------------------------------------------------------------------------------------------
@@ -365,7 +351,7 @@ def build(args, gb, log):
     cache_path = Path(args.cache)
     cache_sha = W.sha256_file(cache_path)
     require(cache_sha == manifests['row_scores']['inputs']['cache_sha256'], 'Cache sha256 differs from the manifests')
-    area = check_area_table(rowfw, log)
+    area = check_area_table(args.area_table, rowfw, log)
     gb.stage('completed', 'verify-inputs', 'inputs verified: 3 manifests, config, cache, area table (%d levels)' %
              len(area['levels']))
 
@@ -572,8 +558,7 @@ def build(args, gb, log):
                            'kind': f['kind'], 'points': f['points'], 'points_code50': f['points_code50']}
                           for f in FL.FIELDS],
         'contacts_source_sha256': source_sha,
-        'area_table_sha256': area['area_table_sha256'], 'suppressed_ids_sha256': area['suppressed_ids_sha256'],
-        'area_table': area, 'summary_checks': checks, 'build_code_sha256': code_hash.hexdigest(),
+        'area_table_sha256': area['area_table_sha256'], 'area_table': area, 'summary_checks': checks, 'build_code_sha256': code_hash.hexdigest(),
     }
     receipt = W.write_scores_db(out, data, meta, demo_key, log=log, replace=False)
     try:
@@ -671,6 +656,7 @@ def main(argv=None, district=None):
     parser.add_argument('--real', action='store_true', help='use the real P1 files, cache, contacts, street and source CSV')
     parser.add_argument('--rowfw')
     parser.add_argument('--cache')
+    parser.add_argument('--area-table', help='the shown-areas table (default: D.area_table, written by tools/shown_areas.py)')
     parser.add_argument('--district', choices=list(D.DISTRICTS), default=D.DEFAULT,
                         help='fills the defaults below from tools/districts.py (co-05 gives the old literals)')
     parser.add_argument('--contacts')
@@ -687,6 +673,7 @@ def main(argv=None, district=None):
     home = D.data_dir(district)
     args.rowfw = args.rowfw or str(D.rowfw_build(district))
     args.cache = args.cache or str(D.rowfw_cache(district))
+    args.area_table = args.area_table or str(D.area_table(district))
     args.receipt = args.receipt or str(V3 / '_build' / ('scores_build_receipt%s.json' % ('' if district['id'] == D.DEFAULT else '_' + district['id'])))
     args.contacts = args.contacts or str(home / 'contacts.sqlite3')
     args.street = args.street or str(home / 'street.sqlite3')

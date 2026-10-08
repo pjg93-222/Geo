@@ -23,6 +23,7 @@ SHARE=next(measure for measure in MEASURES if measure['aggregation']!='mean')
 def measure_bundle():
     with zipfile.ZipFile(settings.BASE_DIR/'data'/'co-cd005-4c48800b8c21.zip') as archive:
         manifest=json.loads(archive.read('manifest.json'))
+    manifest.pop('threshold',None)      # the stored v2 manifest withheld cells under 20; the test bundle withholds nothing
     manifest.update(schema='cu-summary-v2',snapshot='co-cd005-123456789abc',measures=copy.deepcopy(MEASURES),measure_methodology='Protected source-field summaries; percentiles compare published areas within the selected partition.')
     manifest['input']['accepted_unique_profiles']=120
     for basis in manifest['bases']:
@@ -84,13 +85,19 @@ class MeasureValidationTests(UnitTest):
                 payload=copy.deepcopy(self.payload);payload['rows.json'][0]['measures'][MEAN['id']]=cell
                 with self.assertRaises(ValueError):validate(payload)
 
-    def test_share_numerator_complement_and_missingness_are_protected(self):
+    def test_share_numerator_must_be_a_whole_count_but_may_be_small(self):
         for row in self.payload['rows.json']:row['measures'][SHARE['id']]=[.5,40,40/60,50,'ok']
         validate(self.payload)
-        for value in [.01,.1,.9,.99,.501,-.1,1.1]:
+        for value in [.01,.99,.501,-.1,1.1]:
             with self.subTest(value=value):
                 payload=copy.deepcopy(self.payload);payload['rows.json'][0]['measures'][SHARE['id']][0]=value
                 with self.assertRaises(ValueError):validate(payload)
+        for value,low,high in [(.1,25,75),(.9,75,25)]:       # 4 or 36 of 40: shown (nothing is withheld)
+            with self.subTest(value=value):
+                payload=copy.deepcopy(self.payload)
+                payload['rows.json'][0]['measures'][SHARE['id']][0::3]=[value,low]
+                payload['rows.json'][1]['measures'][SHARE['id']][3]=high
+                validate(payload)
         for value in [0,1]:
             self.payload['rows.json'][0]['measures'][SHARE['id']][0]=value
             self.payload['rows.json'][0]['measures'][SHARE['id']][3]=25 if value==0 else 75
@@ -107,12 +114,13 @@ class MeasureValidationTests(UnitTest):
             row['measures'][MEAN['id']][3]=50
         validate(self.payload)
 
-    def test_metric_complementary_suppression_and_no_publication_edge(self):
-        self.payload['rows.json'][0]['measures'][MEAN['id']]=[None,None,None,None,'suppressed']
-        with self.assertRaises(ValueError):validate(self.payload)
-        self.payload['rows.json'][1]['measures'][MEAN['id']]=[None,None,None,None,'suppressed']
+    def test_nothing_is_too_small_to_show(self):
+        for row in self.payload['rows.json']:
+            row.update(count=3,source_count=3,share=3/120,coverage=1)           # a 3-person area ...
+            row['measures'][MEAN['id']][1:3]=[1,1/3]                            # ... whose measure rests on 1 profile
         validate(self.payload)
-        self.payload['rows.json'][1]['measures'][MEAN['id']]=[None,None,None,None,'unavailable']
+        self.payload['rows.json'][0]['measures'][MEAN['id']]=[None,None,None,None,'unavailable']      # a cell without a value needs no partner
+        self.payload['rows.json'][1]['measures'][MEAN['id']][3]=50                                    # (the other one is alone in its partition)
         validate(self.payload)
 
     def test_categorical_siblings_cannot_reconstruct_a_hidden_code_share(self):
@@ -127,14 +135,15 @@ class MeasureValidationTests(UnitTest):
                 for row in payload['rows.json']:row['measures'][group[0]['id']]=replacement
                 with self.assertRaises(ValueError):validate(payload)
 
-    def test_base_suppression_counts_as_hidden_for_metric_partitions(self):
+    def test_a_stored_v2_snapshot_with_a_threshold_and_suppressed_areas_still_validates(self):
+        self.payload['manifest.json']['threshold']=20
         extra=copy.deepcopy(self.payload['rows.json'])
         for offset,row in enumerate(extra):
             row.update(id=str(80903+offset),label='Postal ZIP '+str(80903+offset),status='suppressed',count=None,source_count=None,share=None,coverage=None,measures={})
         self.payload['rows.json'].extend(extra)
-        self.payload['rows.json'][0]['measures'][MEAN['id']]=[None,None,None,None,'suppressed']
-        self.payload['rows.json'][1]['measures'][MEAN['id']][3]=50
         validate(self.payload)
+        self.payload['manifest.json']['threshold']=10
+        with self.assertRaises(ValueError):validate(self.payload)
 
 
 class MeasureApiTests(TestCase):

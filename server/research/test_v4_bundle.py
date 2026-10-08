@@ -62,39 +62,40 @@ class V4ValidatorTests(TestCase):
         manifest = self.world.payload['manifest.json']
         rf = manifest['row_framework']
         self.assertEqual(manifest['snapshot'], AL.snapshot_key(
-            rf['base_snapshot'], rf['area_table_sha256'], rf['suppressed_ids_sha256'], rf['framework_config_sha256']))
+            rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256']))
         self.reject(lambda p: p['manifest.json'].update(snapshot='co-cd005-000000000000'), message='Snapshot key')
 
-    # -- the four planted violations of W3 ----------------------------------------------------------------------
-    def test_w3_cell_of_nineteen_is_rejected(self):
-        def mutate(p):
-            rows_of(p)[0]['n_rows'] = 19
-        self.reject(mutate)
+    # -- nothing is withheld (Paul 2026-10-08) --------------------------------------------------------------------
+    def test_every_area_is_shown_however_small_and_the_fixture_has_small_ones(self):
+        small = [r for r in self.world.payload['area_indices.json']['rows'] if r['n_rows'] < AL.SMALL_N]
+        self.assertTrue(small)                                              # areas under 20 people are in the file ...
+        self.assertTrue(all(r['status'] == 'ok' and r['groups'] for r in small))     # ... with their values
+
+        def one_person(p):
+            rows_of(p)[0].update(n_rows=1, n_households=1)
+        payload = self.fresh()
+        one_person(payload)
+        self.assertEqual(bundles.validate(retarget(payload))['schema'], 'cu-summary-v4')
+        self.reject(lambda p: rows_of(p)[0].update(n_rows=0, n_households=0))      # an area has people
+
+    def test_a_withheld_or_empty_area_is_rejected(self):
+        def withheld(p):
+            row = rows_of(p)[0]
+            row.update(status='withheld', n_rows=None, n_households=None, groups=None)
+        self.reject(withheld, message='status')
+        self.reject(lambda p: rows_of(p)[0].update(status='empty'), message='status')
+
+    def test_a_base_summary_that_still_withholds_is_rejected(self):
+        self.reject(lambda p: p['manifest.json'].update(threshold=20), message='withholds')
+
+        def cell(p):
+            for row in p['rows.json'][:2]:
+                row['measures'][next(iter(row['measures']))] = [None, None, None, None, 'suppressed']
+        self.reject(cell, message='withholds')
 
     def test_w3_person_level_key_is_rejected(self):
         self.reject(lambda p: rows_of(p)[0].update(person_id='p_' + 'a' * 64))
         self.reject(lambda p: p['area_indices.json']['rows'][0].update(model_source_row=7))
-
-    def test_w3_leaked_withheld_value_is_rejected(self):
-        def mutate(p):
-            withheld = rows_of(p, status='withheld')[0]
-            full = rows_of(p)[0]
-            withheld['n_rows'] = full['n_rows']
-        self.reject(mutate, message='withheld')
-
-        def mutate_groups(p):
-            withheld = rows_of(p, status='withheld')[0]
-            withheld['groups'] = copy.deepcopy(rows_of(p)[0]['groups'])
-        self.reject(mutate_groups)
-
-    def test_w3_missing_complementary_suppression_is_rejected(self):
-        def mutate(p):
-            # withhold exactly one precinct of a partition that has none: the file total minus the published rest
-            # would give that precinct back, so the second area must be withheld too
-            row = rows_of(p, level='precinct')[0]
-            row.update(status='withheld', n_rows=None, n_households=None, groups=None,
-                       tract=None, n_tracts=None, n_blocks=None)
-        self.reject(mutate, message='subtraction')
 
     # -- the rest of the contract --------------------------------------------------------------------------------
     def test_residence_blocks_and_the_hatch_column_are_rejected(self):
@@ -135,21 +136,16 @@ class V4ValidatorTests(TestCase):
             row['groups']['lean'][columns['share_reg_R']] = 0.9
         self.reject(registration)
 
-    def test_tract_remainder_of_one_to_nineteen_is_rejected(self):
-        def mutate(p):
-            tract = rows_of(p, level='tract')[0]
-            blocks = [r for r in rows_of(p) if r['parent_id'] == tract['id']]
-            blocks[0]['n_rows'] = max(20, blocks[0]['n_rows'])
-            # leave a remainder of 5 people between the tract and its published blocks
-            total = sum(b['n_rows'] for b in blocks)
-            tract['n_rows'] = total + 5
-        self.reject(mutate, message='remainder')
-
-    def test_published_area_without_polygon_is_rejected(self):
+    def test_the_polygon_count_must_match_the_manifest(self):
         def mutate(p):
             ident = rows_of(p)[0]['id']
             del p['geometry.json']['block'][ident]
-        self.reject(mutate, message='polygon')
+        self.reject(mutate, message='Polygon coverage')                  # the manifest says every area has one
+
+        payload = self.fresh()
+        del payload['geometry.json']['block'][rows_of(payload)[0]['id']]
+        payload['manifest.json']['geometry_method']['concordance']['without_polygon'] = 1
+        bundles.validate(payload)                                        # an area with no polygon is kept and counted
 
     def test_hash_and_frozen_input_mismatches_are_rejected(self):
         self.reject(lambda p: p['area_indices.json']['rows'][0].update(label='Block 0000'), rehash=True)
@@ -158,8 +154,7 @@ class V4ValidatorTests(TestCase):
             rows_of(p)[0]['groups']['ovr'][0] += 0.001
         self.reject(edit, rehash=False, message='checksum')
         self.reject(lambda p: p['manifest.json']['row_framework'].update(framework_config_sha256='0' * 64))
-        self.reject(lambda p: p['manifest.json']['row_framework'].update(
-            d1_audit={'exactly_disclosed': 1, 'symdiff_violations': 0, 'remainder_violations': 0}))
+        self.reject(lambda p: p['manifest.json']['row_framework'].update(suppressed_ids_sha256='0' * 64))    # a retired field
         self.reject(lambda p: p['adjacency.json']['tract'].update({'x': []}), rehash=False)
 
     def test_asymmetric_adjacency_is_rejected(self):
@@ -220,6 +215,24 @@ class V4ImportTests(TestCase):
         # re-importing the same bytes is idempotent; a different ZIP under the same key is refused
         again = bundles.import_bundle(self.world.zip_path, expected_sha256=self.world.zip_sha256)
         self.assertEqual(again.key, snap.key)
+
+    def test_a_polygon_with_no_registered_people_is_empty_not_withheld(self):
+        """A block polygon the area table has no row for (only residence-basis people live there) is served as status
+        'empty' with 0 people and no values; every area with a row is 'ok'."""
+        payload = copy.deepcopy(self.world.payload)
+        blocks = payload['geometry.json']['block']
+        ident = '080419999999999'
+        blocks[ident] = {**blocks[next(iter(blocks))], 'id': ident}
+        path = Path(self.temporary.name) / 'empty.zip'
+        sha = write_zip(payload, path)
+        with tempfile.TemporaryDirectory() as folder, override_settings(DATA_DIR=Path(folder)):
+            snap = bundles.import_bundle(path, expected_sha256=sha)
+            body = json.loads(v3_cache.areas_blob(snap.key, 'registration', 'block').body)
+        i = body['ids'].index(ident)
+        self.assertEqual((body['status'][i], body['n'][i], body['households'][i]), ('empty', 0, 0))
+        self.assertTrue(all(v[i] is None for group in body['groups'].values() for v in group.values()))
+        self.assertEqual(body['status'].count('ok'), len(body['ids']) - 1)
+        self.assertNotIn('withheld', body['status'])
 
     def test_tampered_zip_bytes_fail_before_anything_is_read(self):
         copy_path = Path(self.temporary.name) / 'tampered.zip'

@@ -54,8 +54,7 @@ def v4_payload(fixture):
     reg_precinct = np.asarray(data['reg_precinct']).astype(str)
     reg_tract = np.asarray(data['reg_tract']).astype(str)
     reg_zip = np.asarray(data['reg_zip']).astype(str)
-    block_ids = sorted(set(reg_block.tolist()) | {r['area_id'] for r in fixture.withheld
-                                                  if r['basis'] == 'registration' and r['level'] == 'block'})
+    block_ids = sorted(set(reg_block.tolist()))
     block_geoms = {}
     for tract_index, tract in enumerate(MF.TRACTS):
         for k, ident in enumerate(i for i in block_ids if i[:11] == tract):
@@ -91,21 +90,18 @@ def v4_payload(fixture):
             return {'n_blocks': tract_nblocks.get(ident)}
         return {'n_blocks': zip_nblocks.get(ident)}
 
-    area_file, _, _ = make_area_file(fixture.area_rows, fixture.withheld, relations_for)
+    area_file = make_area_file(fixture.area_rows, relations_for)
     manifest = payload['manifest.json']
     base_key = manifest['snapshot']
-    suppressed_sha = fixture.meta['suppressed_ids_sha256']
     district = unary_union(list(tract_geoms.values()) + list(zcta_geoms.values())).envelope
     payload['district.geojson'] = {'type': 'FeatureCollection', 'features': [{
         'type': 'Feature', 'properties': {'id': '0805', 'label': 'Colorado · District 05'},
         'geometry': json.loads(json.dumps(mapping(district)))}]}
     apply_v4_manifest(
         manifest, area_file['rows'], adjacency, base_key=base_key, area_sha=fixture.area_sha,
-        suppressed_sha=suppressed_sha, frozen=dict(AL.FROZEN_SHA256), run_id='fixture-run',
-        d1_audit={'exactly_disclosed': 0, 'symdiff_violations': 0, 'remainder_violations': 0},
-        created_at='Synthetic fixture for the v3 tests',
+        frozen=dict(AL.FROZEN_SHA256), run_id='fixture-run', created_at='Synthetic fixture for the v3 tests',
         concordance={'precinct_person_share': 0.9, 'zip_person_share': 0.9, 'precincts_without_block_majority': 0,
-                     'zips_without_zcta': 0, 'blocks_added_from_source': 0, 'withheld_without_polygon': 0})
+                     'zips_without_zcta': 0, 'blocks_added_from_source': 0, 'without_polygon': 0})
     payload['area_indices.json'] = area_file
     payload['adjacency.json'] = adjacency
     return payload
@@ -116,7 +112,6 @@ def retarget(payload):
     rf = payload['manifest.json']['row_framework']
     rows = payload['area_indices.json']['rows']
     rf['area_indices_sha256'] = AL.sha256_json(rows)
-    rf['withheld_set_sha256'] = AL.withheld_set_sha256(rows)
     rf['adjacency_sha256'] = AL.sha256_json(payload['adjacency.json'])
     return payload
 

@@ -365,7 +365,7 @@ def make_street(path, data, persist, raw_household, salt, seed=SEED, source_sha=
 
 
 
-# ---- area table (published areas with the CSV columns; simplified estimates, valid relations) ---------------------
+# ---- area table (every area with the CSV columns; simplified estimates, valid relations) ----------------------------
 
 def _area_ids(data, basis):
     if basis == 'registration':
@@ -379,10 +379,10 @@ def _band(value):
 
 
 def make_area_rows(data, seed=SEED):
-    """Rows in the layout of area_scores_rowfw-1.0.0.csv (published only) and the withheld id list.
+    """Rows in the layout of the shown-areas table (tools/shown_areas.py): EVERY area, one row per group.
 
-    Estimates are simple (a shrink toward the parent mean), but every relation the v4 validator checks holds: floors,
-    complementary suppression, tract remainders, midrank standings, bands and shares.
+    Estimates are simple (a shrink toward the parent mean), but every relation the v4 validator checks holds: midrank
+    standings over all the areas of the level, bands and shares.
     """
     values = {'ovr': data['ovr_score'], 'cua': data['cua_score'], 'part': data['part_score'], 'soi': data['soi_score'],
               'lean': data['lean']}
@@ -394,30 +394,12 @@ def make_area_rows(data, seed=SEED):
             for area in sorted(set(ids.tolist())):
                 members = np.flatnonzero(ids == area)
                 stats[area] = (members, len(members), len(set(np.asarray(data['hh'])[members].tolist())))
-            hidden = {a for a, (_, rows, households) in stats.items() if rows < 20 or households < 10}
-            parts[(basis, level)] = (stats, hidden)
-    changed = True
-    while changed:
-        changed = False
-        for key, (stats, hidden) in parts.items():
-            if len(hidden) == 1 and len(stats) > 1:        # exactly one hidden area can be recovered by subtraction
-                hidden.add(sorted((a for a in stats if a not in hidden), key=lambda a: (stats[a][1], a))[0])
-                changed = True
-        stats_t, hidden_t = parts[('registration', 'tract')]
-        stats_b, hidden_b = parts[('registration', 'block')]
-        for tract, (_, rows, _) in stats_t.items():
-            if tract in hidden_t:
-                continue
-            children = [b for b in stats_b if b[:11] == tract and b not in hidden_b]
-            remainder = rows - sum(stats_b[b][1] for b in children)
-            if 0 < remainder < 20 and children:
-                hidden_b.add(sorted(children, key=lambda b: (stats_b[b][1], b))[0])
-                changed = True
+            parts[(basis, level)] = stats
     tract_ids = np.asarray(data['reg_tract']).astype(str)
     file_share = {g: float(np.asarray(data[g + '_p_top10'], dtype=np.float64).mean()) for g in S.INDEX_IDS}
-    rows_out, withheld = [], []
-    for (basis, level), (stats, hidden) in parts.items():
-        ok = [a for a in sorted(stats) if a not in hidden]
+    rows_out = []
+    for (basis, level), stats in parts.items():
+        ok = sorted(stats)
         for group in ALL_GROUPS:
             column = np.asarray(values[group], dtype=np.float64)
             measured = np.asarray(data[group + '_measured_pct'], dtype=np.float64)
@@ -472,10 +454,7 @@ def make_area_rows(data, seed=SEED):
                         'share_band_undetermined': float(np.asarray(data['lean_band_undetermined'])[members].mean()),
                     })
                 rows_out.append(row)
-            for a in sorted(hidden):
-                withheld.append({'basis': basis, 'level': level, 'group': group, 'area_id': a,
-                                 'parent_id': a[:11] if level == 'block' else 'file', 'suppressed': 1})
-    return rows_out, withheld
+    return rows_out
 
 
 class Fixture:
@@ -509,19 +488,15 @@ def make_store(directory, n=1500, seed=SEED, salt=None, demo_key=None, parquet=F
     located = {r for _, r in pairs}
     data['has_location'] = np.array([i in located for i in range(n)])
     data['street_household'] = street_household_rows(pairs, data)
-    area_rows, withheld = make_area_rows(data, seed)
-    area_csv = directory / 'area_scores_fixture.csv'
+    area_rows = make_area_rows(data, seed)
+    area_csv = directory / 'area_scores_shown.csv'
     columns = json.load(open(Path(__file__).with_name('p1_schema.json'), encoding='utf-8'))['area_scores_columns']
     with open(area_csv, 'w', newline='', encoding='utf-8') as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         writer.writerows(area_rows)
     area_sha = W.sha256_file(area_csv)
-    suppressed_csv = directory / 'area_suppressed_fixture.csv'
-    with open(suppressed_csv, 'w', newline='', encoding='utf-8') as stream:
-        writer = csv.DictWriter(stream, fieldnames=['basis', 'level', 'group', 'area_id', 'parent_id', 'suppressed'])
-        writer.writeheader()
-        writer.writerows(withheld)
+    area_csv.with_suffix('.manifest.json').write_text(json.dumps({'sha256': area_sha}), encoding='utf-8')
     meta = {
         'rowfw_version': ROWFW_VERSION,
         'inputs': {'fixture': True, 'note': 'synthetic fixture; no P1 file was read'},
@@ -529,14 +504,13 @@ def make_store(directory, n=1500, seed=SEED, salt=None, demo_key=None, parquet=F
         'field_catalog': field_catalog(),
         'contacts_source_sha256': source_sha,
         'area_table_sha256': area_sha,
-        'suppressed_ids_sha256': W.sha256_file(suppressed_csv),
     }
     scores_path = directory / 'scores.sqlite3'
     receipt = W.write_scores_db(scores_path, data, meta, demo_key)
     fixture = Fixture(directory=directory, scores_path=scores_path, contacts_path=contacts_path,
                       street_path=street_path, data=data, persist=persist, raw_household=raw_household, salt=salt,
-                      demo_key=demo_key, area_rows=area_rows, withheld=withheld, area_csv=area_csv,
-                      suppressed_csv=suppressed_csv, area_sha=area_sha, receipt=receipt, pairs=pairs, n=n, meta=meta,
+                      demo_key=demo_key, area_rows=area_rows, area_csv=area_csv,
+                      area_sha=area_sha, receipt=receipt, pairs=pairs, n=n, meta=meta,
                       source_csv=directory / 'source.csv', source_sha=source_sha)
     if parquet:
         write_p1_files(fixture)
@@ -569,10 +543,10 @@ def _arrow_column(pa, name, text, values, n):
 
 
 def write_p1_files(fixture):
-    """Write the three P1 parquet files + manifests, the config, the cache slice and the area CSVs (needs pyarrow).
+    """Write the three P1 parquet files + manifests, the config and the cache slice (needs pyarrow).
 
-    The layout matches <RFB>: row_scores_rowfw-1.0.0.parquet ..., framework_config.json, area_scores_rowfw-1.0.0.csv,
-    summaries/area_suppressed_ids.csv; the cache is <directory>/cache/inputs.parquet.
+    The layout matches <RFB>: row_scores_rowfw-1.0.0.parquet ..., framework_config.json; the cache is
+    <directory>/cache/inputs.parquet; the shown-areas table is <directory>/area_scores_shown.csv (+ .manifest.json).
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -670,9 +644,6 @@ def write_p1_files(fixture):
     household['household_code'] = household['hh']
     write('household_scores', household, 'household_code', {})
 
-    area_path = root / 'area_scores_rowfw-1.0.0.csv'
-    area_path.write_bytes(fixture.area_csv.read_bytes())
-    (root / 'summaries' / 'area_suppressed_ids.csv').write_bytes(fixture.suppressed_csv.read_bytes())
     fixture.rowfw_dir = root
     fixture.cache_path = cache_path
     return root

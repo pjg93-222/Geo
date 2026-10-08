@@ -48,7 +48,7 @@ def workspace(request):
             {'key': 'people', 'origin': manifest.get('source_name') or 'Supplied source file',
              'detail': 'Recorded contacts and existing stored profile values, joined by the verified person crosswalk.'},
             {'key': 'areas', 'origin': 'Active stored area table',
-             'detail': 'Area summaries from the matching source snapshot. Withheld areas retain their stored availability status.'},
+             'detail': 'Area summaries from the matching source snapshot; every area is shown, small areas with a note.'},
         ]
         for key, vintage in (('block', 'block_vintage'), ('tract', 'block_vintage'),
                              ('precinct', 'block_vintage'), ('zip', 'zcta_vintage')):

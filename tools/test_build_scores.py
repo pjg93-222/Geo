@@ -52,9 +52,9 @@ class LoaderTests(unittest.TestCase):
         cls.temporary.cleanup()
 
     @classmethod
-    def arguments(cls, out, receipt, rowfw=None, contacts=None, w1='verify'):
+    def arguments(cls, out, receipt, rowfw=None, contacts=None, w1='verify', area_table=None):
         fx = cls.fx
-        return ['--rowfw', str(rowfw or fx.rowfw_dir), '--cache', str(fx.cache_path),
+        return ['--rowfw', str(rowfw or fx.rowfw_dir), '--cache', str(fx.cache_path), '--area-table', str(area_table or fx.area_csv),
                 '--contacts', str(contacts or fx.contacts_path), '--street', str(fx.street_path),
                 '--source-csv', str(fx.source_csv), '--salt-file', str(fx.directory / '.street-salt'),
                 '--w1', w1, '--out', str(out), '--receipt', str(receipt), '--low-memory']
@@ -240,15 +240,16 @@ class LoaderTests(unittest.TestCase):
         self.assertLess(self.out.stat().st_size / self.fx.n, 5000)         # the real store is about 1.2 KB per person
 
     # ---- fail closed ---------------------------------------------------------------------------------------------------
-    def tampered(self, name, edit):
-        """Run the loader on a copy of the P1 folder that `edit(folder)` has damaged; the previous store must survive."""
+    def tampered(self, name, edit=None, area_table=None):
+        """Run the loader on a copy of the P1 folder that `edit(folder)` has damaged, or on `area_table`; the previous store must survive."""
         folder = self.root / ('rowfw_' + name)
         shutil.copytree(self.fx.rowfw_dir, folder)
-        edit(folder)
+        if edit:
+            edit(folder)
         out, receipt = self.root / (name + '.sqlite3'), self.root / (name + '.json')
         out.write_bytes(self.out.read_bytes())
         before = out.read_bytes()
-        code = self.run_loader(out, receipt, rowfw=folder)
+        code = self.run_loader(out, receipt, rowfw=folder, area_table=area_table)
         self.assertEqual(code, 2, name)
         self.assertEqual(out.read_bytes(), before, name + ': the previous store was touched')
         self.assertFalse(receipt.exists(), name)
@@ -269,22 +270,42 @@ class LoaderTests(unittest.TestCase):
             path.write_text(json.dumps(manifest), encoding='utf-8')
         self.tampered('manifest_rows', edit)
 
-    def test_area_table_with_a_residence_block_or_the_hatch_column_stops_the_build(self):
-        def residence_block(folder):
-            path = folder / 'area_scores_rowfw-1.0.0.csv'
-            lines = path.read_text(encoding='utf-8').splitlines()
-            header = lines[0].split(',')
-            row = next(l for l in lines[1:] if l.startswith('registration,block'))
-            path.write_text('\n'.join(lines + [row.replace('registration,block', 'residence,block', 1)]) + '\n',
-                            encoding='utf-8')
-        self.tampered('residence_block', residence_block)
+    def table_copy(self, name, edit):
+        """A copy of the shown-areas table whose lines `edit(lines)` has changed, with a manifest that follows the new bytes."""
+        path = self.root / (name + '_area.csv')
+        path.write_text('\n'.join(edit(self.fx.area_csv.read_text(encoding='utf-8').splitlines())) + '\n', encoding='utf-8')
+        path.with_suffix('.manifest.json').write_text(json.dumps({'sha256': W.sha256_file(path)}), encoding='utf-8')
+        return path
 
-        def hatch(folder):
-            path = folder / 'area_scores_rowfw-1.0.0.csv'
-            lines = path.read_text(encoding='utf-8').splitlines()
-            lines[0] += ',cua_hatch_cpi_blank'
-            path.write_text('\n'.join([lines[0]] + [l + ',' for l in lines[1:]]) + '\n', encoding='utf-8')
-        self.tampered('hatch_column', hatch)
+    def test_area_table_with_a_residence_block_a_suppressed_row_or_the_hatch_column_stops_the_build(self):
+        def residence_block(lines):
+            row = next(l for l in lines[1:] if l.startswith('registration,block'))
+            return lines + [row.replace('registration,block', 'residence,block', 1)]
+        self.tampered('residence_block', area_table=self.table_copy('residence_block', residence_block))
+
+        def suppressed(lines):                      # the table shows every area: a row marked suppressed is not its
+            cells = lines[1].split(',')
+            cells[lines[0].split(',').index('suppressed')] = '1'
+            return [lines[0], ','.join(cells)] + lines[2:]
+        self.tampered('suppressed_row', area_table=self.table_copy('suppressed_row', suppressed))
+
+        def hatch(lines):
+            return [lines[0] + ',cua_hatch_cpi_blank'] + [l + ',' for l in lines[1:]]
+        self.tampered('hatch_column', area_table=self.table_copy('hatch_column', hatch))
+
+    def test_a_missing_or_altered_shown_areas_table_stops_the_build(self):
+        self.tampered('no_table', area_table=self.root / 'there_is_no_such_table.csv')
+        altered = self.root / 'altered_area.csv'                                    # its manifest still holds the old sha256
+        altered.write_text(self.fx.area_csv.read_text(encoding='utf-8') + '\n', encoding='utf-8')
+        altered.with_suffix('.manifest.json').write_text(self.fx.area_csv.with_suffix('.manifest.json').read_text(encoding='utf-8'))
+        self.tampered('altered_table', area_table=altered)
+
+    def test_the_store_records_the_shown_areas_table_and_no_suppressed_list(self):
+        meta = {k: json.loads(v) for k, v in self.db.execute('SELECT key, value FROM metadata')}
+        self.assertEqual(meta['area_table_sha256'], self.fx.area_sha)
+        self.assertNotIn('suppressed_ids_sha256', meta)
+        self.assertEqual(set(meta['area_table']), {'area_table_sha256', 'levels', 'manifest_sha256'})
+        self.assertTrue(all(set(v) == {'areas'} for v in meta['area_table']['levels'].values()))
 
     def test_crosswalk_that_is_off_by_one_or_wrong_stops_the_build(self):
         for name, edit in (('rotated', lambda ids: ids[1:] + ids[:1]), ('swapped', lambda ids: [ids[1], ids[0]] + ids[2:])):
@@ -385,7 +406,8 @@ class SupportLoaderTests(unittest.TestCase):
 
     def run_loader(self, folder, name, district):
         fx, out = self.fx, self.root / (name + '.sqlite3')
-        argv = ['--rowfw', str(folder / 'rowfw'), '--cache', str(folder / 'inputs.parquet'), '--contacts', str(fx.contacts_path),
+        argv = ['--rowfw', str(folder / 'rowfw'), '--cache', str(folder / 'inputs.parquet'), '--area-table', str(fx.area_csv),
+                '--contacts', str(fx.contacts_path),
                 '--street', str(fx.street_path), '--source-csv', str(fx.source_csv), '--salt-file', str(fx.directory / '.street-salt'),
                 '--w1', 'verify', '--out', str(out), '--receipt', str(self.root / (name + '.json')), '--low-memory']
         error = io.StringIO()

@@ -191,6 +191,11 @@ def rowfw_cache(d):
     return Path(d['rowfw_root']) / 'cache' / 'inputs.parquet'
 
 
+def area_table(d):
+    """The table of EVERY area (tools/shown_areas.py writes it; nothing is withheld, Paul 2026-10-08). Local only."""
+    return data_dir(d) / 'area_scores_shown.csv'
+
+
 def block_aliases(d):
     """{old block id: planning-region block id} that prepare_geography writes for CT; {} when the file is missing."""
     path = Path(d['geography']) / 'block_aliases.json'

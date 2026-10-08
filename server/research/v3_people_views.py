@@ -252,7 +252,7 @@ def people(request, demo):
 # ---- the profile -------------------------------------------------------------------------------------------------
 
 def area_lookup(info):
-    """{(level, id): (top10 area percentile, top10 share, published)} for registration blocks and precincts of the
+    """{(level, id): (top10 area percentile, top10 share, people, households)} for registration blocks and precincts of the
     active v4 snapshot. Fails closed when the bundle and the score store use different area tables."""
     from .v3_area_views import v4_snapshot
     found = v4_snapshot()
@@ -276,9 +276,10 @@ def _area_table(key):
         columns = {name: k for k, name in enumerate(AL.COLUMNS['ovr'])}
         table = {}
         for row in v3_cache.area_rows(key):
-            if row['basis'] == 'registration' and row['level'] in ('block', 'precinct') and row['status'] == 'ok':
+            if row['basis'] == 'registration' and row['level'] in ('block', 'precinct'):
                 cells = row['groups']['ovr']
-                table[(row['level'], row['id'])] = (cells[columns['top10_area_pct']], cells[columns['top10_share_eb']])
+                table[(row['level'], row['id'])] = (cells[columns['top10_area_pct']], cells[columns['top10_share_eb']],
+                                                    row['n_rows'], row['n_households'])
         _area_tables.clear()
         _area_tables[key] = table
     return table
@@ -286,11 +287,11 @@ def _area_table(key):
 
 def area_ref(table, level, ident):
     if not ident:
-        return {'level': level, 'id': '', 'label': '', 'pct': None, 'top10': None, 'withheld': True}
+        return {'level': level, 'id': '', 'label': '', 'pct': None, 'top10': None, 'n': None, 'households': None}
     cell = table.get((level, ident))
     return {'level': level, 'id': ident, 'label': area_label(level, ident, settings.DISTRICT),
             'pct': DB.number(cell[0]) if cell else None, 'top10': DB.number(cell[1]) if cell else None,
-            'withheld': cell is None}
+            'n': cell[2] if cell else None, 'households': cell[3] if cell else None}
 
 
 def field_rows(info, record, ev):

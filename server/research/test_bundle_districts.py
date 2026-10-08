@@ -3,6 +3,7 @@
 labels, hierarchy and road sources, snapshot key). Synthetic data only."""
 import copy
 import json
+import math
 import re
 import sqlite3
 import tempfile
@@ -72,8 +73,8 @@ def oregon(payload):
     manifest['geography']['hashes'] = {name: 'a' * 64 for name in ['blocks.zip', 'districts.zip', *ROADS]}
     rf = manifest['row_framework']
     rf['base_snapshot'] = 'or-cd005-' + rf['base_snapshot'].split('-')[-1]
-    manifest['snapshot'] = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['suppressed_ids_sha256'],
-                                           rf['framework_config_sha256'], OR['snapshot_prefix'])
+    manifest['snapshot'] = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256'],
+                                           OR['snapshot_prefix'])
     return retarget(with_support(payload, OR))
 
 
@@ -262,6 +263,27 @@ class SupportLayerTests(SimpleTestCase):
         self.assertEqual((one['top10_area_pct_lo90'], one['top10_area_pct_hi90']), (0.0, 100.0))
         self.assertTrue(all(isinstance(v, int) for v in (one['band'], one['top10_band'])))
 
+    def test_a_one_person_area_gets_its_levels_pooled_sd_not_nan(self):
+        """ddof=1 on one score is NaN (the standard error crashed the validator once small areas were shown): the area takes the
+        level's pooled within-area SD, sqrt(sum((n - 1) var) / sum(n - 1)); the areas of more than one person are unchanged."""
+        a, b, c = (('registration', 'precinct', p) for p in ('P1', 'P2', 'P3'))
+        codes = {'a_reg_precinct': np.array([0, 0, 0, 1, 1, 1, 2], dtype=np.int32)}
+        dicts = {'a_reg_precinct': ['P1', 'P2', 'P3']}
+        score = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 90.0, 70.0])
+        pct = np.array([50.0, 95.0, 92.0, 10.0, 20.0, 99.0, 91.0])
+        cells = B4.sup_cells(B4.sup_stats({a: 3, b: 3, c: 1}, score, pct, codes, dicts))
+        names = AL.STANDING_COLUMNS
+        one, two, lone = (dict(zip(names, cells[k])) for k in (a, b, c))
+        pooled = ((2 * 100.0 + 2 * 700.0) / 4) ** .5                                          # sqrt(400) = 20
+        self.assertAlmostEqual(lone['eb_se'], pooled)
+        self.assertAlmostEqual(one['eb_se'], 10 / 3 ** .5)                                    # as without the lone area
+        self.assertAlmostEqual(two['eb_se'], 700 ** .5 / 3 ** .5)
+        self.assertEqual((lone['raw_mean'], lone['top10_share_raw'], lone['top10_eb_se']), (70.0, 1.0, 0.0))
+        self.assertTrue(all(math.isfinite(v) for v in cells[c]))
+        only = B4.sup_cells(B4.sup_stats({c: 1}, score[6:], pct[6:], {'a_reg_precinct': np.array([0], dtype=np.int32)},
+                                         {'a_reg_precinct': ['P3']}))
+        self.assertEqual(dict(zip(names, only[c]))['eb_se'], 0.0)                              # a level of lone areas has no spread
+
     def test_an_area_must_hold_exactly_the_people_the_area_table_counts(self):
         codes, dicts = {'a_reg_precinct': np.array([0, 0, 0, 1, 1, 1], dtype=np.int32)}, {'a_reg_precinct': ['P1', 'P2']}
         score = pct = np.arange(6.0)
@@ -293,13 +315,13 @@ class SupportLayerTests(SimpleTestCase):
         members = np.flatnonzero(np.asarray(self.fx.data['reg_precinct']).astype(str) == precinct[2])
         self.assertAlmostEqual(cells[precinct][0], float(self.score[members].mean()))
         self.assertAlmostEqual(cells[precinct][AL.STANDING_COLUMNS.index('top10_share_raw')], float((self.pct[members] >= 90).mean()))
-        file, _, _ = B4.make_area_file(self.fx.area_rows, self.fx.withheld, None, OR, cells)
+        file = B4.make_area_file(self.fx.area_rows, None, OR, cells)
         self.assertEqual(file['columns']['sup'], list(AL.STANDING_COLUMNS))
         self.assertEqual(list(file['columns']), list(AL.groups(OR)))
+        self.assertEqual(len(file['rows']), len(published))                    # every area of the table, none withheld
         for row in file['rows']:
-            self.assertEqual(list(row['groups'] or AL.groups(OR)), list(AL.groups(OR)))
-            self.assertEqual(row['groups'] is None, row['status'] == 'withheld')
-        self.assertTrue(any(r['status'] == 'withheld' for r in file['rows']))
+            self.assertEqual((row['status'], list(row['groups'])), ('ok', list(AL.groups(OR))))
+        self.assertTrue(any(r['n_rows'] < AL.SMALL_N for r in file['rows']))      # small areas carry their values too
 
     def test_the_builder_refuses_a_store_or_config_for_other_support_settings(self):
         key = 'W' + '_'.join(str(v) for v in OR['score_weights'].values())

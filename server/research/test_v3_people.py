@@ -457,13 +457,11 @@ class V3PeopleTests(TestCase):
                 ref = body['area_context'][level]
                 source = columns.get(('registration', level, ident, 'ovr'))
                 self.assertEqual((ref['level'], ref['id']), (level, ident))
-                if source is None:
-                    self.assertTrue(ref['withheld'])
-                    self.assertIsNone(ref['pct'])
-                else:
-                    self.assertFalse(ref['withheld'])
-                    self.assertAlmostEqual(ref['pct'], source['top10_area_pct'], places=4)
-                    self.assertAlmostEqual(ref['top10'], source['top10_share_eb'], places=6)
+                self.assertIsNotNone(source)                         # every area is in the table, however few people it holds
+                self.assertNotIn('withheld', ref)
+                self.assertAlmostEqual(ref['pct'], source['top10_area_pct'], places=4)
+                self.assertAlmostEqual(ref['top10'], source['top10_share_eb'], places=6)
+                self.assertEqual((ref['n'], ref['households']), (int(source['n_rows']), int(source['n_households'])))
 
     def test_unknown_person_and_household_are_404(self):
         self.assertEqual(self.get('/api/v3/person?id=p_' + '0' * 64).status_code, 404)

@@ -12,7 +12,7 @@ import pandas as pd
 from .bundles import validate, import_bundle, load, FILES
 from .models import Snapshot, Invitation, LoginAttempt
 from .views import create_invitation
-from tools.ingest import protect, read_profiles, classify, FIELDS
+from tools.ingest import settle, read_profiles, classify, FIELDS
 
 BUNDLE=settings.BASE_DIR/'data'/'co-cd005-4c48800b8c21.zip'
 
@@ -54,17 +54,14 @@ class IngestionTests(UnitTest):
                 w=csv.writer(f);w.writerow(FIELDS+['unused_field']);w.writerow(r+['one']);w.writerow(r+['two'])
             df,receipt=read_profiles(p)
             self.assertEqual(len(df),0);self.assertEqual(receipt['conflicting_ids_quarantined'],1)
-    def test_primary_and_complementary_suppression(self):
-        rows=[{'id':'1','count':4,'source_count':4},{'id':'2','count':40,'source_count':40},{'id':'3','count':80,'source_count':80}]
-        protect(rows,124)
-        self.assertEqual([r['status'] for r in rows],['suppressed','suppressed','ok'])
-        self.assertIsNone(rows[0]['share']);self.assertIsNone(rows[1]['count'])
-    def test_derived_small_remainder_is_hidden(self):
-        rows=[{'id':'1','count':40,'source_count':42},{'id':'2','count':50,'source_count':50}]
-        protect(rows,90);self.assertTrue(all(r['count'] is None for r in rows))
+    def test_every_area_is_shown_however_small(self):
+        rows=[{'id':'1','count':4,'source_count':4},{'id':'2','count':40,'source_count':42},{'id':'3','count':80,'source_count':80}]
+        settle(rows,124)
+        self.assertEqual([r['status'] for r in rows],['ok','ok','ok']);self.assertEqual([r['count'] for r in rows],[4,40,80])
+        self.assertEqual(rows[0]['share'],4/124);self.assertEqual(rows[1]['coverage'],40/42)
     def test_unavailable_and_zero_are_distinct(self):
         rows=[{'id':'1','count':0,'source_count':0},{'id':'2','count':0,'source_count':40}]
-        protect(rows,0);self.assertEqual(rows[0]['status'],'unavailable');self.assertIsNone(rows[0]['count']);self.assertEqual(rows[1]['count'],0)
+        settle(rows,0);self.assertEqual(rows[0]['status'],'unavailable');self.assertIsNone(rows[0]['count']);self.assertEqual(rows[1]['count'],0)
     def test_duplicates_and_leading_zero_identifiers(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'test.csv';r=['00001','00002','005']+['CO','00123','080410001001001','0.5','0.5','ROOFTOP']*2
@@ -140,10 +137,8 @@ class ApplicationTests(TestCase):
         byid={r['id']:r for r in data['rows']}
         for row in exported:self.assertEqual(row['count'],'' if byid[row['geographic_id']]['count'] is None else str(byid[row['geographic_id']]['count']))
         self.assertTrue(all(r['coverage'] is None for r in data['rows']))
-    def test_all_published_cells_are_protected(self):
+    def test_an_area_without_a_value_carries_no_number(self):
         for row in self.payload['rows.json']:
-            for key in ['count','source_count']:
-                if row[key] is not None:self.assertTrue(row[key]==0 or row[key]>=20)
             if row['status']!='ok':self.assertTrue(all(row[k] is None for k in ['count','source_count','share','coverage']))
     def test_geometry_contains_no_individual_points(self):
         data=self.client.get('/api/geometry?level=block&bbox=-104.9,38.7,-104.7,38.9').json()

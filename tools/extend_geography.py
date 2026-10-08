@@ -1,7 +1,7 @@
 """Create a new immutable aggregate snapshot from validated source locations.
 
 Existing block/ZCTA summaries are preserved. New levels are independently
-aggregated from the source, never from already suppressed child cells.
+aggregated from the source, never from child cells.
 Only public Census boundary downloads leave this machine.
 """
 import argparse, hashlib, json, zipfile
@@ -15,7 +15,7 @@ import shapely
 from shapely.geometry import shape
 from tools import districts as D
 from tools.geography_levels import sources, EXTRA_LEVELS, label
-from tools.ingest import BASES, read_profiles, classify, protect, feature, canonical_blocks
+from tools.ingest import BASES, read_profiles, classify, settle, feature, canonical_blocks
 from tools.measures import SOURCE_FIELDS, aggregate_measures
 from tools.prepare_geography import download
 
@@ -83,7 +83,7 @@ def build(csv, base, geo, output, d=None):
             rows=[{'id':ident,'basis':basis,'level':level,'label':label(level,ident,d),'count':int(counts.get(ident,0)),
                    'source_count':int(counts.get(ident,0)),'status':'ok','partial':not district.covers(geom),
                    'share':None,'coverage':None} for ident,geom in boundaries[level].items()]
-            protect(rows,total);aggregate_measures(frame,keys,eligible,rows)
+            settle(rows,total);aggregate_measures(frame,keys,eligible,rows)
             for row in rows:row['source_count']=None;row['coverage']=None
             payload['rows.json'].extend(rows)
             print(f'{basis} / {level}: {len(rows)} areas, {assigned:,} assigned, {total-assigned:,} unassigned',flush=True)

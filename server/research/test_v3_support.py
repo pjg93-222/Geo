@@ -2,6 +2,7 @@
 note until a 4-term snapshot is imported), the area payload carries `groups.sup`, and the people list and the profile show support
 only from a score store that holds it. Colorado, with no candidate, stays as it was. Synthetic data only."""
 import json
+import math
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -106,17 +107,18 @@ class MetaAndAreasTests(TestCase):
             shown += 1
         self.assertGreater(shown, 0)
 
-    def test_every_level_of_both_bases_builds_and_a_withheld_area_has_no_sup_value(self):
-        withheld = 0
+    def test_every_area_of_every_level_has_a_sup_value_even_one_of_a_single_person(self):
+        small = 0
         for basis, levels in AL.BASIS_LEVELS.items():
             for level in levels:
                 body = self.areas(OR, self.four, level, basis)
                 self.assertIn('sup', body['groups'], (basis, level))
                 for i, state in enumerate(body['status']):
-                    if state == 'withheld':
-                        withheld += 1
-                        self.assertTrue(all(v[i] is None for v in body['groups']['sup'].values()), (basis, level, i))
-        self.assertGreater(withheld, 0)                      # the fixture holds withheld areas, whose rows carry no groups
+                    if state == 'ok':
+                        small += body['n'][i] < AL.SMALL_N
+                        self.assertTrue(all(v[i] is not None for v in body['groups']['sup'].values()), (basis, level, i))
+                        self.assertTrue(math.isfinite(body['groups']['sup']['se'][i]), (basis, level, i))
+        self.assertGreater(small, 0)                         # the fixture holds areas under 20 people: they carry values too
 
     def test_a_three_term_snapshot_of_a_candidate_district_has_no_sup_group(self):
         self.assertEqual(list(self.areas(OR, self.co)['groups']), ['ovr', 'cua', 'part', 'soi', 'lean'])

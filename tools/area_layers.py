@@ -35,7 +35,7 @@ INDEX_GROUPS = ('ovr', 'cua', 'part', 'soi')
 BASIS_LEVELS = {'registration': ('block', 'precinct', 'tract', 'zip'), 'residence': ('tract', 'zip')}
 LEVEL_ORDER = ('block', 'precinct', 'tract', 'zip')
 ADJACENCY_LEVELS = ('precinct', 'tract', 'zip')
-MIN_N, MIN_HOUSEHOLDS = 20, 10
+SMALL_N, SMALL_HOUSEHOLDS = 20, 10      # a small-area NOTE only; nothing is withheld (Paul 2026-10-08)
 BREAKS = (20.0, 40.0, 60.0, 80.0)                   # area standing bands (framework_config bands)
 SHARE_BREAKS = (0.05, 0.08, 0.12, 0.18)             # legend of the default colour layer (FIDELITY_SPEC 5.3)
 MEASURED_BREAKS = (20.0, 40.0, 60.0, 80.0)          # the "% measured" companion layer
@@ -85,7 +85,7 @@ def band(value):
 
 
 def midrank(values):
-    """100 * (L + E/2) / N on the ranking key round(x, 9): the area standing among published areas."""
+    """100 * (L + E/2) / N on the ranking key round(x, 9): the area standing among the level's areas."""
     keyed = [round(float(v), 9) for v in values]
     n = len(keyed)
     ordered = sorted(keyed)
@@ -102,15 +102,8 @@ def sha256_json(value):
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
-def withheld_set_sha256(rows):
-    """sha256 of the sorted 'basis|level|id' lines of the withheld areas (group-independent)."""
-    lines = sorted('%s|%s|%s' % (r['basis'], r['level'], r['id']) for r in rows if r['status'] == 'withheld')
-    return hashlib.sha256(('\n'.join(lines) + '\n').encode('utf-8')).hexdigest()
-
-
-def snapshot_key(base_key, area_table_sha256, suppressed_ids_sha256, config_sha256, prefix='co-cd005-'):
-    digest = hashlib.sha256(('|'.join([base_key, area_table_sha256, suppressed_ids_sha256, config_sha256,
-                                       ROWFW_VERSION])).encode('utf-8')).hexdigest()
+def snapshot_key(base_key, area_table_sha256, config_sha256, prefix='co-cd005-'):
+    digest = hashlib.sha256(('|'.join([base_key, area_table_sha256, config_sha256, ROWFW_VERSION])).encode('utf-8')).hexdigest()
     return prefix + digest[:12]
 
 

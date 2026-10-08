@@ -256,7 +256,9 @@ class AggregatePayloadTests(TestCase):
         self.assertEqual(body['people'], self.world.fixture.n)
         self.assertEqual(body['levels'], list(AL.LEVEL_ORDER))
         self.assertEqual(body['weights'], {'cua': 40, 'part': 35, 'soi': 25})
-        self.assertEqual(body['floors'], {'min_n': 20, 'min_households': 10})
+        self.assertEqual(body['small_area'], {'min_n': 20, 'min_households': 10})       # a note only: every area is shown
+        self.assertNotIn('floors', body)
+        self.assertNotIn('suppressed_ids_sha256', body['row_framework'])
         self.assertEqual(body['share_breaks'], [0.05, 0.08, 0.12, 0.18])
         self.assertTrue(self.client.get('/api/v3/meta?demo=1').json()['demo'])
         with override_settings(DEMO_MODE=True):

@@ -1,9 +1,9 @@
 """Validator for the row-framework part of a `cu-summary-v4` bundle (area_indices.json and adjacency.json).
 
 The v3 checks in bundles.validate() run first (a v4 bundle contains a v3 bundle). Everything here is aggregate: an area
-row has a count of people and households and means of person scores, never a person. The validator recomputes every
-derived value it can (bands, midrank percentiles, withheld-set hash, nesting remainders) instead of trusting the file,
-and it fails closed: any mismatch rejects the whole bundle.
+row has a count of people and households and means of person scores, never a person. Every area is in the file (nothing is
+withheld, Paul 2026-10-08). The validator recomputes every derived value it can (bands, midrank percentiles) instead of
+trusting the file, and it fails closed: any mismatch rejects the whole bundle.
 """
 import math
 import re
@@ -17,14 +17,12 @@ from tools.geography_levels import area_label
 AREA_FILE_KEYS = {'schema', 'rowfw_version', 'columns', 'rows'}
 AREA_SCHEMA = 'area-indices-1'
 ROW_BASE_KEYS = {'basis', 'level', 'id', 'label', 'parent_id', 'status', 'n_rows', 'n_households', 'groups'}
-RF_KEYS = {'version', 'base_snapshot', 'area_table_sha256', 'suppressed_ids_sha256', 'framework_config_sha256',
-           'plan_sha256', 'criteria_sha256', 'run_id', 'rulings', 'd1_audit', 'area_indices_sha256',
-           'withheld_set_sha256', 'adjacency_sha256'}
+RF_KEYS = {'version', 'base_snapshot', 'area_table_sha256', 'framework_config_sha256', 'plan_sha256', 'criteria_sha256',
+           'run_id', 'rulings', 'area_indices_sha256', 'adjacency_sha256'}
 CANDIDATE_RF_KEYS = {'overall_weights', 'support_model'}       # a candidate district's manifest also records these two (Phase 4B)
-D1_AUDIT = {'exactly_disclosed': 0, 'symdiff_violations': 0, 'remainder_violations': 0}
 GEOMETRY_METHOD_KEYS = {'block', 'tract', 'precinct', 'zip', 'concordance'}
 CONCORDANCE_KEYS = {'precinct_person_share', 'zip_person_share', 'precincts_without_block_majority', 'zips_without_zcta',
-                    'blocks_added_from_source', 'withheld_without_polygon'}
+                    'blocks_added_from_source', 'without_polygon'}
 SNAPSHOT_RE = re.compile(D.snapshot_pattern(settings.DISTRICT))
 # Keys that must never appear anywhere in an area file: a person or a source row is not an area.
 FORBIDDEN_KEYS = {'person_id', 'model_source_row', 'name', 'address', 'email', 'phone', 'persist_id', 'household_code',
@@ -58,7 +56,7 @@ def _integer(value, low=0, high=10 ** 9, nullable=False):
 
 def id_pattern(basis, level):
     if basis == 'registration':
-        # people registered outside the district appear as withheld areas of other counties, so no county prefix
+        # people registered outside the district appear as areas of other counties, so no county prefix
         return {'block': r'\d{15}', 'precinct': settings.DISTRICT['precinct_pattern'], 'tract': r'\d{11}', 'zip': r'\d{5}'}[level]
     return {'tract': r'\d{11}', 'zip': r'\d{5}'}[level]
 
@@ -167,78 +165,44 @@ def validate_area_indices(file, manifest):
         expected_parent = ident[:11] if (basis, level) == ('registration', 'block') else 'file'
         if row['parent_id'] != expected_parent:
             _fail('Invalid area parent')
-        if row['status'] not in ('ok', 'withheld'):
+        if row['status'] != 'ok':
             _fail('Invalid area status')
-        relations = {key: row[key] for key in AL.RELATIONS[level]}
-        if row['status'] == 'withheld':
-            if row['n_rows'] is not None or row['n_households'] is not None or row['groups'] is not None \
-                    or any(value is not None for value in relations.values()):
-                _fail('Values leaked from a withheld area')
-        else:
-            _integer(row['n_rows'], AL.MIN_N)
-            _integer(row['n_households'], AL.MIN_HOUSEHOLDS)
-            if row['n_households'] > row['n_rows']:
-                _fail('More households than people')
-            if not isinstance(row['groups'], dict) or set(row['groups']) != set(groups):
-                _fail('Invalid area groups')
-            row['_records'] = {group: _check_group_values(group, row['groups'][group], columns[group]) for group in groups}
-            for key, value in relations.items():
-                if basis != 'registration':
-                    if value is not None:
-                        _fail('Residence areas carry no block relations')
-                elif key == 'precinct':
-                    if value is not None and not re.fullmatch(settings.DISTRICT['precinct_pattern'], str(value)):
-                        _fail('Invalid precinct relation')
-                elif key == 'tract':
-                    if value is not None and not re.fullmatch(r'\d{11}', str(value)):
-                        _fail('Invalid tract relation')
-                else:
-                    _integer(value, 1, 10 ** 6, nullable=True)
+        _integer(row['n_rows'], 1)                       # a 1-person area is shown
+        _integer(row['n_households'], 1)
+        if row['n_households'] > row['n_rows']:
+            _fail('More households than people')
+        if not isinstance(row['groups'], dict) or set(row['groups']) != set(groups):
+            _fail('Invalid area groups')
+        row['_records'] = {group: _check_group_values(group, row['groups'][group], columns[group]) for group in groups}
+        for key in AL.RELATIONS[level]:
+            value = row[key]
+            if basis != 'registration':
+                if value is not None:
+                    _fail('Residence areas carry no block relations')
+            elif key == 'precinct':
+                if value is not None and not re.fullmatch(settings.DISTRICT['precinct_pattern'], str(value)):
+                    _fail('Invalid precinct relation')
+            elif key == 'tract':
+                if value is not None and not re.fullmatch(r'\d{11}', str(value)):
+                    _fail('Invalid tract relation')
+            else:
+                _integer(value, 1, 10 ** 6, nullable=True)
         seen.add(order)
         by_partition.setdefault((basis, level), []).append(row)
     if set(by_partition) != {(b, l) for b, levels in AL.BASIS_LEVELS.items() for l in levels}:
         _fail('Area index levels are incomplete')
 
-    for (basis, level), partition in by_partition.items():
-        withheld = [r for r in partition if r['status'] == 'withheld']
-        # one withheld area alone is the difference between the file total and the published rest
-        if len(withheld) == 1:
-            _fail('A single withheld area can be recovered by subtraction')
-        published = [r for r in partition if r['status'] == 'ok']
-        if not published:
-            _fail('A partition has no published area')
+    for partition in by_partition.values():
         for group in (g for g in groups if g != 'lean'):
             for source, target in (('eb_mean', 'area_pct'), ('top10_share_eb', 'top10_area_pct')):
-                values = [r['_records'][group][source] for r in published]
-                stored = [r['_records'][group][target] for r in published]
+                values = [r['_records'][group][source] for r in partition]
+                stored = [r['_records'][group][target] for r in partition]
                 if not _midrank_matches(values, stored):
                     _fail('Inconsistent area percentile')
-
-    # nesting remainder (D1): a published tract minus its published blocks leaves nothing or at least the floors
-    blocks = {}
-    for row in by_partition[('registration', 'block')]:
-        if row['status'] == 'ok':
-            blocks.setdefault(row['parent_id'], [0, 0])
-            blocks[row['parent_id']][0] += row['n_rows']
-            blocks[row['parent_id']][1] += row['n_households']
-    for row in by_partition[('registration', 'tract')]:
-        if row['status'] != 'ok':
-            continue
-        taken_rows, taken_households = blocks.get(row['id'], [0, 0])
-        remainder = row['n_rows'] - taken_rows
-        remainder_households = row['n_households'] - taken_households
-        if remainder < 0 or 0 < remainder < AL.MIN_N or 0 < remainder_households < AL.MIN_HOUSEHOLDS:
-            _fail('A tract remainder under the floor can be recovered by subtraction')
-    for rows_ in by_partition.values():
-        for row in rows_:
-            row.pop('_records', None)
-
     for row in rows:
         row.pop('_records', None)
     if file_hash(rows) != manifest['row_framework']['area_indices_sha256']:
         _fail('Area index checksum does not match the manifest')
-    if AL.withheld_set_sha256(rows) != manifest['row_framework']['withheld_set_sha256']:
-        _fail('Withheld set does not match the manifest')
     _scan_forbidden(file, 'area index file')
     return by_partition
 
@@ -270,6 +234,10 @@ def validate_v4(payload, manifest):
     """Raise ValueError unless the v4 additions are consistent. Called by bundles.validate() for cu-summary-v4."""
     rf = manifest['row_framework']
     district = settings.DISTRICT
+    # the base summary shows every area too: a stale one (a threshold, a suppressed area or cell) is rebuilt with tools/ingest.py
+    if 'threshold' in manifest or any(r['status'] == 'suppressed' or any(c[4] == 'suppressed' for c in r['measures'].values())
+                                      for r in payload['rows.json']):
+        _fail('The base summary still withholds small cells')
     _keys(rf, RF_KEYS | (CANDIDATE_RF_KEYS if district['candidate'] else set()), 'row framework')
     if rf['version'] != AL.ROWFW_VERSION:
         _fail('Unsupported row framework version')
@@ -282,26 +250,23 @@ def validate_v4(payload, manifest):
     for key, expected in frozen.items():
         if rf[key] != expected:
             _fail('The bundle was not built from the frozen row framework inputs')
-    for key in ('area_table_sha256', 'suppressed_ids_sha256', 'area_indices_sha256', 'withheld_set_sha256',
-                'adjacency_sha256'):
+    for key in ('area_table_sha256', 'area_indices_sha256', 'adjacency_sha256'):
         if not isinstance(rf[key], str) or not AL.HEX64.fullmatch(rf[key]):
             _fail('Invalid row framework checksum')
     if not isinstance(rf['base_snapshot'], str) or not SNAPSHOT_RE.fullmatch(rf['base_snapshot']):
         _fail('Invalid base snapshot key')
     if not isinstance(rf['run_id'], str) or not 0 < len(rf['run_id']) <= 120:
         _fail('Invalid run id')
-    if rf['rulings'] != AL.RULINGS or rf['d1_audit'] != D1_AUDIT:
-        _fail('The suppression audit is not clean')
-    expected_key = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['suppressed_ids_sha256'],
-                                   rf['framework_config_sha256'], settings.DISTRICT['snapshot_prefix'])
+    if rf['rulings'] != AL.RULINGS:
+        _fail('Unexpected rulings')
+    expected_key = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256'],
+                                   settings.DISTRICT['snapshot_prefix'])
     if manifest['snapshot'] != expected_key:
         _fail('Snapshot key does not follow from its inputs')
     if manifest['area_index_levels'] != {b: list(l) for b, l in AL.BASIS_LEVELS.items()}:
         _fail('Unexpected area index levels')
     if manifest['area_index_catalog'] != {'groups': AL.index_catalog(district), 'layers': AL.LAYERS}:
         _fail('Unexpected area index catalog')
-    if manifest['area_floors'] != {'min_n': AL.MIN_N, 'min_households': AL.MIN_HOUSEHOLDS}:
-        _fail('Unexpected suppression floors')
     method = manifest['geometry_method']
     _keys(method, GEOMETRY_METHOD_KEYS, 'geometry method')
     for key in ('block', 'tract', 'precinct', 'zip'):
@@ -313,20 +278,16 @@ def validate_v4(payload, manifest):
     _integer(method['concordance']['precincts_without_block_majority'])
     _integer(method['concordance']['zips_without_zcta'])
     _integer(method['concordance']['blocks_added_from_source'])
-    _integer(method['concordance']['withheld_without_polygon'])
+    _integer(method['concordance']['without_polygon'])
 
     by_partition = validate_area_indices(payload['area_indices.json'], manifest)
     validate_adjacency(payload['adjacency.json'], by_partition, manifest)
 
-    geometry = payload['geometry.json']
-    missing_withheld = 0
-    for level in ('block', 'precinct', 'tract'):
-        rows_ = by_partition[('registration', level)]
-        if not {r['id'] for r in rows_ if r['status'] == 'ok'} <= set(geometry[level]):
-            _fail('A published %s area has no polygon' % level)
-        missing_withheld += sum(1 for r in rows_ if r['status'] == 'withheld' and r['id'] not in geometry[level])
-    if missing_withheld != method['concordance']['withheld_without_polygon']:
-        _fail('Withheld-area polygon coverage does not match the manifest')
+    geometry = payload['geometry.json']        # an area with no polygon (people registered outside the state) is counted, not dropped
+    without_polygon = sum(1 for level in ('block', 'precinct', 'tract') for r in by_partition[('registration', level)]
+                          if r['id'] not in geometry[level])
+    if without_polygon != method['concordance']['without_polygon']:
+        _fail('Polygon coverage does not match the manifest')
     zip_rows = by_partition[('registration', 'zip')]
     if len({r['id'] for r in zip_rows} - set(geometry['zcta'])) != method['concordance']['zips_without_zcta']:
         _fail('ZIP polygon coverage does not match the manifest')

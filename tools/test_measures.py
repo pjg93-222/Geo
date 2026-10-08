@@ -1,4 +1,4 @@
-"""Synthetic-only checks for geographic source aggregation and disclosure rules."""
+"""Synthetic-only checks for geographic source aggregation: every area and cell is shown, however small."""
 import csv
 import json
 import tempfile
@@ -72,17 +72,19 @@ class GeographicMeasureTests(unittest.TestCase):
                            eligible=[True] * 20 + [False] * 20)
         self.assertEqual(result['A'][MEAN], [10, 20, 1, 50, 'ok'])
 
-    def test_small_missing_remainder_and_complementary_area_are_hidden(self):
+    def test_small_missing_remainder_and_small_areas_are_shown(self):
         result = aggregate('sai_activist_score', {
             'A': ['10'] * 20 + [''], 'B': ['20'] * 40, 'C': ['30'] * 80,
         }, [MEAN])
-        for ident in ('A', 'B'):
-            self.assertEqual(result[ident][MEAN], [None, None, None, None, 'suppressed'])
-        self.assertEqual(result['C'][MEAN], [30, 80, 1, 50, 'ok'])
+        percentiles = midrank_percentiles([10, 20, 30])
+        self.assertEqual([result[i][MEAN] for i in 'ABC'],
+                         [[10, 20, 20 / 21, percentiles[0], 'ok'], [20, 40, 1, percentiles[1], 'ok'], [30, 80, 1, percentiles[2], 'ok']])
 
-    def test_small_valid_sample_never_publishes_mean_or_sample_size(self):
-        result = aggregate('sai_activist_score', {'A': ['10'] * 19 + [''] * 20}, [MEAN])
-        self.assertEqual(result['A'][MEAN], [None, None, None, None, 'suppressed'])
+    def test_a_small_valid_sample_is_shown_with_its_size(self):
+        result = aggregate('sai_activist_score', {'A': ['10'] * 19 + [''] * 20, 'B': ['20'], 'C': ['30'] * 2}, [MEAN])
+        self.assertEqual(result['A'][MEAN][:3], [10, 19, 19 / 39])
+        self.assertEqual((result['B'][MEAN][:3], result['B'][MEAN][4]), ([20, 1, 1], 'ok'))        # a one-profile area
+        self.assertEqual({r[MEAN][4] for r in result.values()}, {'ok'})
 
     def test_no_values_is_unavailable_but_observed_zero_is_available(self):
         result = aggregate('sai_activist_score', {'A': [''] * 40, 'B': ['0'] * 40, 'C': []}, [MEAN])
@@ -94,31 +96,33 @@ class GeographicMeasureTests(unittest.TestCase):
         result = aggregate('sci_cpi_auto_index', {'A': ['0'] * 20 + ['9'] * 20 + ['10'] * 20}, [CPI])
         self.assertEqual(result['A'][CPI], [0.5, 40, 2 / 3, 50, 'ok'])
 
-    def test_share_numerator_and_complement_each_require_protection(self):
+    def test_small_share_numerators_and_complements_are_shown(self):
         result = aggregate('sci_credit_card_user', {
             'small_yes': ['1'] * 19 + ['0'] * 40,
             'small_no': ['1'] * 40 + ['0'] * 19,
             'safe': ['1'] * 20 + ['0'] * 20,
             'all_yes': ['1'] * 40,
             'all_no': ['0'] * 40,
+            'one_yes': ['1'],
         }, [BINARY])
-        for ident in ('small_yes', 'small_no'):
-            self.assertEqual(result[ident][BINARY], [None, None, None, None, 'suppressed'])
+        self.assertEqual(result['small_yes'][BINARY][:2], [19 / 59, 59])
+        self.assertEqual(result['small_no'][BINARY][:2], [40 / 59, 59])
         self.assertEqual(result['safe'][BINARY][0], 0.5)
         self.assertEqual(result['all_yes'][BINARY][0], 1)
         self.assertEqual(result['all_no'][BINARY][0], 0)
+        self.assertEqual(result['one_yes'][BINARY][:2], [1, 1])
+        self.assertEqual({r[BINARY][4] for r in result.values()}, {'ok'})
 
-    def test_categorical_suppression_cannot_be_reconstructed_from_other_codes(self):
+    def test_every_code_of_a_small_categorical_area_is_shown_and_they_sum_to_one(self):
         ids = ['sii_homeowner__code_' + code for code in ('H', 'R', 'U')]
         result = aggregate('sii_homeowner', {
             'small_code': ['H'] * 39 + ['R'] + ['U'] * 40,
-            'complement': ['H'] * 40 + ['R'] * 20 + ['U'] * 20,
             'safe': ['H'] * 50 + ['R'] * 30 + ['U'] * 20,
         }, ids)
-        for ident in ('small_code', 'complement'):
-            for mid in ids:
-                self.assertEqual(result[ident][mid], [None, None, None, None, 'suppressed'])
+        self.assertEqual([result['small_code'][mid][0] for mid in ids], [39 / 80, 1 / 80, 40 / 80])
+        self.assertAlmostEqual(sum(result['small_code'][mid][0] for mid in ids), 1)
         self.assertEqual([result['safe'][mid][0] for mid in ids], [0.5, 0.3, 0.2])
+        self.assertEqual({cell[4] for r in result.values() for cell in r.values()}, {'ok'})
 
     def test_digital_code_50_has_literal_domain_without_mean(self):
         mid = DIGITAL_FIELD + '__code_50'
@@ -130,9 +134,9 @@ class GeographicMeasureTests(unittest.TestCase):
         result = aggregate(ADULTS_FIELD, {'A': ['1'] * 20 + ['9'] * 20 + ['0'] * 20}, [mid])
         self.assertEqual(result['A'][mid], [5, 40, 2 / 3, 50, 'ok'])
 
-    def test_base_suppression_withholds_every_field_statistic(self):
+    def test_a_row_without_a_value_gets_no_measure_cells(self):
         result = aggregate('sai_activist_score', {'A': ['10'] * 40, 'B': ['30'] * 40}, [MEAN],
-                           statuses={'A': 'suppressed', 'B': 'unavailable'})
+                           statuses={'A': 'unavailable', 'B': 'unavailable'})
         self.assertEqual(result, {'A': {}, 'B': {}})
 
     def test_percentile_midrank_ties_and_partition_isolation(self):

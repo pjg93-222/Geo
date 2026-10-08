@@ -10,8 +10,7 @@ import numpy as np
 import pandas as pd
 
 SCHEMA = 'cu-summary-v2'
-THRESHOLD = 20
-METHOD_VERSION = 'descriptive-geography-1'
+METHOD_VERSION = 'descriptive-geography-2'      # 2: nothing is suppressed (Paul 2026-10-08); 1 withheld cells under 20
 
 SAI_FIELDS = (
     'sai_recession_sensitivity_score', 'sai_activist_score', 'sai_evav_score',
@@ -138,11 +137,9 @@ MEASURE_METHODOLOGY = (
     'Numeric means retain the original source scale; shares use literal valid codes. '
     'Missing, nonfinite and out-of-domain values are excluded, never filled with zero. '
     'Each valid-count denominator is field-specific; field coverage equals valid '
-    'values divided by mapped profiles in that area. Counts below 20, small missing '
-    'remainders and small share numerators/complements are suppressed, with '
-    'complementary suppression within each address-basis/geography partition. '
-    'Suppression is shared across all codes of a field to prevent subtraction. '
-    'Percentile is 100 × (areas below + half the tied areas) / publishable areas, '
+    'values divided by mapped profiles in that area. Every area and cell is shown, '
+    'however few profiles it rests on; nothing is withheld. '
+    'Percentile is 100 × (areas below + half the tied areas) / areas with a value, '
     'calculated separately for each measure, address basis and geography; all ties '
     'are 50. Percentiles describe areas, not people. No support, influence or '
     'composite alignment score is produced; household identifiers are excluded.'
@@ -155,7 +152,7 @@ def definition(measure_id):
 
 def snapshot_key(source_sha256, prefix='co-cd005-'):
     config = {
-        'schema': SCHEMA, 'method': METHOD_VERSION, 'threshold': THRESHOLD,
+        'schema': SCHEMA, 'method': METHOD_VERSION,
         'measures': MEASURES, 'ranges': FIELD_RANGES, 'codes': CODE_DOMAINS,
     }
     digest = hashlib.sha256((source_sha256 + json.dumps(
@@ -177,7 +174,7 @@ def midrank_percentiles(values):
 
 
 def aggregate_measures(df, keys, eligible, rows, definitions=None):
-    """Attach protected cells to one already-protected basis/level partition.
+    """Attach the measure cells to one basis/level partition (tools/ingest.settle gave its rows their status).
 
     Temporary arrays contain selected source attributes only in local memory.
     Neither raw values, numerators, nor sums are written into the output rows.
@@ -227,31 +224,9 @@ def aggregate_measures(df, keys, eligible, rows, definitions=None):
         for row in published_rows:
             group = groups.get(row['id'])
             n = int(valid_counts[group]) if group is not None else 0
-            if not n:
-                state = 'unavailable'
-            else:
-                missing = row['count'] - n
-                if missing < 0:
-                    raise ValueError('Field denominator exceeds mapped area count')
-                small = n < THRESHOLD or 0 < missing < THRESHOLD
-                if not is_mean:
-                    for measure in field_measures:
-                        numerator = int(values_by_measure[measure['id']][group])
-                        small |= (0 < numerator < THRESHOLD or 0 < n - numerator < THRESHOLD)
-                state = 'suppressed' if small else 'ok'
-            field_states.append([row, group, n, state])
-
-        hidden = [item for item in field_states if item[3] == 'suppressed']
-        candidates = sorted(
-            [item for item in field_states if item[3] == 'ok'],
-            key=lambda item: (item[2], item[0]['id']),
-        )
-        # No totals for a field are published, but preserve the conservative
-        # partition protection used for the base geographic summaries.
-        while hidden and candidates and (len(hidden) < 2 or sum(x[2] for x in hidden) < THRESHOLD):
-            item = candidates.pop(0)
-            item[3] = 'suppressed'
-            hidden.append(item)
+            if n > row['count']:
+                raise ValueError('Field denominator exceeds mapped area count')
+            field_states.append([row, group, n, 'ok' if n else 'unavailable'])
 
         for measure in field_measures:
             visible = []

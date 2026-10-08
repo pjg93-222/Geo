@@ -18,9 +18,11 @@ FILES={'manifest.json','rows.json','geometry.json','streets.geojson','district.g
 FILES_V4=FILES|{'area_indices.json','adjacency.json'}
 FILES_FOR={'cu-summary-v1':FILES,'cu-summary-v2':FILES,'cu-summary-v3':FILES,'cu-summary-v4':FILES_V4}
 V3_UP=('cu-summary-v3','cu-summary-v4')
-V4_MANIFEST_KEYS={'row_framework','area_index_levels','area_index_catalog','area_floors','geometry_method'}
+V4_MANIFEST_KEYS={'row_framework','area_index_levels','area_index_catalog','geometry_method'}
 ROW_KEYS={'id','basis','level','label','count','source_count','status','partial','share','coverage'}
-MANIFEST_KEYS={'schema','snapshot','label','source_name','source_sha256','source_date','source_date_basis','created_at','encoding','input','bases','threshold','scope','support_likelihood','persistent_voices','geography','vintage_validation','privacy'}
+# Nothing is withheld (Paul 2026-10-08): a summary has no suppression threshold. Older v1-v3 bundles carry `threshold` (20) and
+# 'suppressed' cells; they still validate (a stored snapshot can be re-imported), but a v4 bundle must be built on a summary without them.
+MANIFEST_KEYS={'schema','snapshot','label','source_name','source_sha256','source_date','source_date_basis','created_at','encoding','input','bases','scope','support_likelihood','persistent_voices','geography','vintage_validation','privacy'}
 GEO_KEYS={'block_vintage','district_vintage','zcta_vintage','street_vintage','sources','street_method','street_polygons','street_unclosed_parts','street_invalid_parts','bounds','hashes'}
 MEASURE_KEYS={'id','label','group','field','aggregation','units','description'}
 MEASURE_FIELDS={}
@@ -50,11 +52,11 @@ def polygon(value):
     coordinates(value['coordinates'])
 
 def validate_measures(row):
-    """Validate compact, protected cells against the one approved source catalog."""
+    """Validate compact cells against the one approved source catalog. No cell is too small to show."""
     cells=row['measures']
     if not isinstance(cells,dict):raise ValueError('Invalid measure cells')
     if row['status']!='ok':
-        if cells:raise ValueError('Measures leaked from a hidden aggregate')
+        if cells:raise ValueError('Measures leaked from an unavailable aggregate')
         return
     if set(cells)!={measure['id'] for measure in MEASURES}:raise ValueError('Incomplete measure catalog')
     for measure in MEASURES:
@@ -63,11 +65,9 @@ def validate_measures(row):
         value,valid_count,coverage,percentile,status=cell
         if status not in ['ok','suppressed','unavailable']:raise ValueError('Invalid measure status')
         if status!='ok':
-            if any(item is not None for item in cell[:4]):raise ValueError('Hidden measure values leaked')
+            if any(item is not None for item in cell[:4]):raise ValueError('Measure values on a cell without a value')
             continue
-        if isinstance(valid_count,bool) or not isinstance(valid_count,int) or not 20<=valid_count<=row['count']:raise ValueError('Invalid measure denominator')
-        missing_count=row['count']-valid_count
-        if 0<missing_count<20:raise ValueError('Small measure missingness cell leaked')
+        if isinstance(valid_count,bool) or not isinstance(valid_count,int) or not 1<=valid_count<=row['count']:raise ValueError('Invalid measure denominator')
         number(coverage,0,1)
         if coverage!=valid_count/row['count']:raise ValueError('Inconsistent measure coverage')
         number(percentile,0,100)
@@ -75,7 +75,6 @@ def validate_measures(row):
         if measure['aggregation'] in ['share_nonzero','share_code']:
             numerator=value*valid_count
             if not math.isclose(numerator,round(numerator),rel_tol=0,abs_tol=1e-7):raise ValueError('Invalid measure numerator')
-            if any(0<count<20 for count in [round(numerator),valid_count-round(numerator)]):raise ValueError('Small measure share cell leaked')
     for identifiers in MEASURE_FIELDS.values():
         if len(identifiers)<2:continue
         field_cells=[cells[identifier] for identifier in identifiers]
@@ -86,11 +85,11 @@ def validate(payload):
     if not isinstance(payload,dict) or not isinstance(payload.get('manifest.json'),dict):raise ValueError('Invalid summary manifest')
     m=payload['manifest.json']
     version=m.get('schema')
-    if version not in FILES_FOR or m.get('threshold')!=20:raise ValueError('Unsupported summary schema or suppression threshold')
+    if version not in FILES_FOR or m.get('threshold',20)!=20:raise ValueError('Unsupported summary schema')
     keys(payload,FILES_FOR[version])
     measured=version in ('cu-summary-v2','cu-summary-v3','cu-summary-v4')
     levels=BASE_LEVELS+EXTRA_LEVELS if version in V3_UP else BASE_LEVELS
-    keys(m,MANIFEST_KEYS|({'measures','measure_methodology'} if measured else set())|({'hierarchy'} if version in V3_UP else set())|(V4_MANIFEST_KEYS if version=='cu-summary-v4' else set()))
+    keys(m,MANIFEST_KEYS|({'threshold'} & set(m))|({'measures','measure_methodology'} if measured else set())|({'hierarchy'} if version in V3_UP else set())|(V4_MANIFEST_KEYS if version=='cu-summary-v4' else set()))
     if measured:
         if not isinstance(m['measures'],list):raise ValueError('Invalid measure catalog')
         for measure in m['measures']:keys(measure,MEASURE_KEYS)
@@ -111,9 +110,7 @@ def validate(payload):
         if b['coverage']!=(b['mapped']/b['imported'] if b['imported'] else None):raise ValueError('Inconsistent coverage')
         number(b['coverage'],0,1,True)
         if not isinstance(b['excluded'],dict) or set(b['excluded'])-{'coarse_precision','out_of_scope','invalid_coordinates','invalid_geography','spatial_conflict','missing_evidence'}:raise ValueError('Unknown exclusion reason')
-        for v in b['excluded'].values():
-            number(v,nullable=True)
-            if v is not None and 0<v<20:raise ValueError('Small exclusion cell must be suppressed')
+        for v in b['excluded'].values():number(v,nullable=True)
     g=m['geography'];keys(g,GEO_KEYS)
     for k in ['block_vintage','district_vintage','zcta_vintage','street_vintage','street_method']:text(g[k],2000)
     keys(g['sources'],{'blocks','districts','roads','zcta'})
@@ -159,11 +156,11 @@ def validate(payload):
         for k in ['count','source_count']:number(r[k],nullable=True)
         if any(r[k] is not None and not isinstance(r[k],int) for k in ['count','source_count']):raise ValueError('Profile counts must be integers')
         for k in ['share','coverage']:number(r[k],0,1,True)
-        if r['status']!='ok' and any(r[k] is not None for k in ['count','source_count','share','coverage']):raise ValueError('Suppressed values leaked')
+        if r['status']!='ok' and any(r[k] is not None for k in ['count','source_count','share','coverage']):raise ValueError('Values on an area without a value')
         if r['status']=='ok':
-            if r['count'] is None or 0<r['count']<20:raise ValueError('Small count must be suppressed')
+            if r['count'] is None:raise ValueError('Missing count')
             source=r['source_count']
-            if source is not None and (source<r['count'] or 0<source<20 or 0<source-r['count']<20):raise ValueError('Small source or remainder cell leaked')
+            if source is not None and source<r['count']:raise ValueError('Source count below the area count')
             denominator=m['bases'][r['basis']]['zcta_mapped' if r['level']=='zcta' else 'mapped']
             expected_share=r['count']/denominator if denominator else None
             if r['share']!=expected_share:raise ValueError('Inconsistent share')
@@ -171,12 +168,9 @@ def validate(payload):
             if r['level'] in ('zcta',)+EXTRA_LEVELS and (source is not None or r['coverage'] is not None):raise ValueError('Assignment coverage is unavailable for polygon-assigned levels')
         if measured:validate_measures(r)
     for group in partitions.values():
-        if sum(r['status']=='suppressed' for r in group)==1:raise ValueError('Complementary suppression missing')
         if measured:
             for measure in MEASURES:
-                hidden=sum(r['status']=='suppressed' or (r['status']=='ok' and r['measures'][measure['id']][4]=='suppressed') for r in group)
                 published=sorted([r['measures'][measure['id']] for r in group if r['status']=='ok' and r['measures'][measure['id']][4]=='ok'],key=lambda cell:cell[0])
-                if hidden==1 and published:raise ValueError('Complementary measure suppression missing')
                 size=len(published);start=0
                 while start<size:
                     end=start+1

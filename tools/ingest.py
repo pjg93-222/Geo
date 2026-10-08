@@ -17,7 +17,6 @@ except ImportError:
 
 BASES={'registration':'svi_registration','residential':'sii'}
 FIELDS=['sii_persist_id','sii_statara_id','svi_registration_congressional_district']+[b+'_'+x for b in BASES.values() for x in ['state','zip','censusid','latitude','longitude','geolevel']]
-THRESHOLD=20
 
 def read_profiles(path, encoding='cp1252', extra_fields=()):
     fields=list(dict.fromkeys(FIELDS+list(extra_fields)))
@@ -82,26 +81,16 @@ def classify(df, prefix, block_lookup, district, state='CO', cd='005'):
     status[missing]='missing_evidence'
     return status,points,known,covered
 
-def protect(rows, total):
-    """Suppress primary cells and another cell when a subtotal would solve one hidden value."""
-    hidden=[]
+def settle(rows, total):
+    """Status and shares of one partition. Every area with records is shown, however few (nothing is withheld, Paul 2026-10-08);
+    an area with no source record is 'unavailable'."""
     for row in rows:
-        n=row['count'];source=row['source_count'];gap=source-n
-        if any(0<x<THRESHOLD for x in [n,source,gap]):hidden.append(row)
-        elif source==0:row['status']='unavailable'
-        else:row['status']='ok'
-    # Hide at least two cells and at least threshold records in every published partition.
-    candidates=sorted([r for r in rows if r not in hidden and r['source_count']>0],key=lambda r:r['source_count'])
-    while hidden and candidates and (len(hidden)<2 or sum(r['source_count'] for r in hidden)<THRESHOLD):
-        hidden.append(candidates.pop(0))
-    for row in rows:
-        if row in hidden:
-            row.update(count=None,source_count=None,share=None,coverage=None,status='suppressed')
-        elif row['status']=='unavailable':
-            row.update(count=None,source_count=None,share=None,coverage=None)
+        if row['source_count']==0:
+            row.update(count=None,source_count=None,share=None,coverage=None,status='unavailable')
         else:
+            row['status']='ok'
             row['share']=row['count']/total if total else None
-            row['coverage']=row['count']/row['source_count'] if row['source_count'] else None
+            row['coverage']=row['count']/row['source_count']
     return rows
 
 def feature(geoid,geom):
@@ -124,7 +113,7 @@ def ingest(csv_path, geo, output, encoding='cp1252', d=None):
         status,points,known,covered=classify(df,prefix,lookup,district,d['state'],d['cd'])
         mapped=status=='mapped';total=int(mapped.sum());counts=collections.Counter(status)
         reason_rows=[{'id':k,'count':int(v),'source_count':int(v)} for k,v in counts.items() if k!='mapped']
-        protect(reason_rows,len(df)-total)
+        settle(reason_rows,len(df)-total)
         summaries[basis]={'imported':len(df),'mapped':total,'unplaced':len(df)-total,'coverage':total/len(df) if len(df) else None,'excluded':{r['id']:r['count'] for r in reason_rows}}
         geoids=df[prefix+'_censusid'];zips=df[prefix+'_zip']
         zctaid=np.full(len(df),'',dtype=object)
@@ -150,14 +139,14 @@ def ingest(csv_path, geo, output, encoding='cp1252', d=None):
                 rows.append({'id':key,'basis':basis,'level':level,'label':('Block '+key[-4:]+' · '+key[:11]) if level=='block' else ('Postal ZIP '+key if level=='postal_zip' else 'ZCTA '+key),'count':n,'source_count':int(source_n),'status':'ok','partial':bool(partial),'share':None,'coverage':None})
                 if geom is not None and level in geometry and geom.intersects(district):
                     geometry[level][key]=feature(key,geom.simplify(0.000005 if level=='block' else 0.00003,preserve_topology=True))
-            protected=protect(rows,total_level)
-            aggregate_measures(df,keys,valid_keys&elig,protected)
+            settle(rows,total_level)
+            aggregate_measures(df,keys,valid_keys&elig,rows)
             if level=='zcta':
-                for row in protected:row['source_count']=None;row['coverage']=None
-            all_rows.extend(protected)
+                for row in rows:row['source_count']=None;row['coverage']=None
+            all_rows.extend(rows)
     provenance=json.loads((geo/'provenance.json').read_text())
     key=snapshot_key(source_hash,d['snapshot_prefix'])
-    manifest={'schema':SCHEMA,'snapshot':key,'label':d['label'],'source_name':csv_path.name,'source_sha256':source_hash,'source_date':source_date(csv_path.name),'source_date_basis':'Filename; not a verified date for every underlying field','created_at':datetime.now(timezone.utc).isoformat(),'encoding':encoding,'input':receipt,'bases':summaries,'threshold':THRESHOLD,'scope':'%s CD-%s source-file extract; does not establish complete electorate coverage'%(d['state_name'],d['cd']),'support_likelihood':'Not measured','persistent_voices':'Not measured','geography':provenance,'vintage_validation':'Vendor Census vintage is unspecified. Accepted fine-grained records match a 2020 Census identifier and their coordinate is covered by that exact official polygon.','privacy':'Fixed summary partitions; no individual records, arbitrary cohort filters, or cross-layer intersection totals. Primary and complementary small-cell suppression applied.','measures':MEASURES,'measure_methodology':MEASURE_METHODOLOGY}
+    manifest={'schema':SCHEMA,'snapshot':key,'label':d['label'],'source_name':csv_path.name,'source_sha256':source_hash,'source_date':source_date(csv_path.name),'source_date_basis':'Filename; not a verified date for every underlying field','created_at':datetime.now(timezone.utc).isoformat(),'encoding':encoding,'input':receipt,'bases':summaries,'scope':'%s CD-%s source-file extract; does not establish complete electorate coverage'%(d['state_name'],d['cd']),'support_likelihood':'Not measured','persistent_voices':'Not measured','geography':provenance,'vintage_validation':'Vendor Census vintage is unspecified. Accepted fine-grained records match a 2020 Census identifier and their coordinate is covered by that exact official polygon.','privacy':'Fixed summary partitions; no individual records, arbitrary cohort filters, or cross-layer intersection totals. Every area and cell is shown, however small (nothing is withheld).','measures':MEASURES,'measure_methodology':MEASURE_METHODOLOGY}
     files={'manifest.json':manifest,'rows.json':all_rows,'geometry.json':geometry,'streets.geojson':json.loads((geo/'streets.geojson').read_text()),'district.geojson':json.loads((geo/'district.geojson').read_text())}
     for name,data in files.items():(output/name).write_text(json.dumps(data,separators=(',',':'),allow_nan=False),encoding='utf-8')
     # Local receipt contains only diagnostics, never identifiers or individual coordinates.

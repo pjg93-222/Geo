@@ -377,14 +377,14 @@ class SnapshotKeyTests(unittest.TestCase):
         self.assertEqual(measures.snapshot_key(sha), measures.snapshot_key(sha, 'co-cd005-'))
         self.assertEqual(measures.snapshot_key(sha, 'or-cd005-')[len('or-cd005-'):], measures.snapshot_key(sha)[len('co-cd005-'):])
         self.assertRegex(measures.snapshot_key(sha, 'ct-cd001-'), r'^ct-cd001-[a-f0-9]{12}$')
-        args = ('b' * 64, 'c' * 64, 'd' * 64, 'e' * 64)
+        args = ('b' * 64, 'c' * 64, 'd' * 64)
         self.assertEqual(AL.snapshot_key(*args), AL.snapshot_key(*args, prefix='co-cd005-'))
         self.assertEqual(AL.snapshot_key(*args, 'or-cd005-')[len('or-cd005-'):], AL.snapshot_key(*args)[len('co-cd005-'):])
 
     def test_a_manifest_takes_the_district_prefix(self):
-        kwargs = dict(base_key='or-cd005-0123456789ab', area_sha='c' * 64, suppressed_sha='d' * 64,
+        kwargs = dict(base_key='or-cd005-0123456789ab', area_sha='c' * 64,
                       frozen={'framework_config_sha256': 'e' * 64, 'plan_sha256': 'f' * 64, 'criteria_sha256': '1' * 64},
-                      run_id='r', d1_audit={}, created_at='t', concordance={})
+                      run_id='r', created_at='t', concordance={})
         manifest = build_bundle_v4.apply_v4_manifest({}, [], {}, prefix='or-cd005-', **kwargs)
         self.assertRegex(manifest['snapshot'], r'^or-cd005-[a-f0-9]{12}$')
         self.assertTrue(build_bundle_v4.apply_v4_manifest({}, [], {}, **kwargs)['snapshot'].startswith('co-cd005-'))
@@ -449,41 +449,35 @@ class PseudoAreaTests(unittest.TestCase):
     def row(level, ident, suppressed='0', group='ovr', basis='registration'):
         return {'basis': basis, 'level': level, 'area_id': ident, 'suppressed': suppressed, 'group': group}
 
-    def table(self):
-        area = [self.row('block', '410050001001001'), self.row('block', 'nan'), self.row('block', 'nan', group='cua')]
-        return area, [self.row('block', '410050001001002', '1')]
-
     def test_the_nan_area_is_dropped_once_and_the_counts_still_reconcile(self):
-        area, suppressed = self.table()
-        receipt = {'D2_counts': {'registration/block': {'areas': 3, 'published': 2}}}
-        kept_area, kept_suppressed, dropped = build_bundle_v4.drop_pseudo_areas(area, suppressed, D.get('or-05'))
+        area = [self.row('block', '410050001001001'), self.row('block', 'nan'), self.row('block', 'nan', group='cua')]
+        receipt = {'D2_counts': {'registration/block': {'areas': 2, 'published': 1}}}
+        kept_area, dropped = build_bundle_v4.drop_pseudo_areas(area, D.get('or-05'))
         self.assertEqual([r['area_id'] for r in kept_area], ['410050001001001'])
-        self.assertEqual(len(kept_suppressed), 1)
-        self.assertEqual(dropped, {'registration/block': {'published': 1, 'withheld': 0}})     # two group rows, one area
-        published, withheld = build_bundle_v4.check_area_table([], kept_area, kept_suppressed, receipt, dropped)
-        self.assertEqual((len(published[('registration', 'block')]), len(withheld[('registration', 'block')])), (1, 1))
-        with self.assertRaisesRegex(build_bundle_v4.BuildError, 'Published areas of registration/block'):
-            build_bundle_v4.check_area_table([], kept_area, kept_suppressed, receipt)           # without the drop count
+        self.assertEqual(dropped, {'registration/block': 1})                                    # two group rows, one area
+        shown = build_bundle_v4.check_area_table(kept_area, receipt, dropped)
+        self.assertEqual(len(shown[('registration', 'block')]), 1)
+        with self.assertRaisesRegex(build_bundle_v4.BuildError, 'Areas of registration/block'):
+            build_bundle_v4.check_area_table(kept_area, receipt)                                # without the drop count
+        with self.assertRaisesRegex(build_bundle_v4.BuildError, 'marks an area suppressed'):
+            build_bundle_v4.check_area_table([self.row('block', '410050001001001', '1')], receipt, dropped)
 
-    def test_a_withheld_nan_is_counted_too_and_ids_follow_each_levels_pattern(self):
+    def test_ids_follow_each_levels_pattern(self):
         d = D.get('or-05')
-        area = [self.row('precinct', '41005-123'), self.row('precinct', '12345'), self.row('zip', '97045', basis='residence'),
-                self.row('zip', 'nan', basis='residence')]
-        suppressed = [self.row('precinct', 'nan', '1'), self.row('zip', '97999', '1', basis='residence')]
-        kept_area, kept_suppressed, dropped = build_bundle_v4.drop_pseudo_areas(area, suppressed, d)
+        area = [self.row('precinct', '41005-123'), self.row('precinct', '12345'), self.row('precinct', 'nan'),
+                self.row('zip', '97045', basis='residence'), self.row('zip', 'nan', basis='residence')]
+        kept_area, dropped = build_bundle_v4.drop_pseudo_areas(area, d)
         self.assertEqual([r['area_id'] for r in kept_area], ['41005-123', '97045'])
-        self.assertEqual([r['area_id'] for r in kept_suppressed], ['97999'])
-        self.assertEqual(dropped, {'registration/precinct': {'published': 1, 'withheld': 1},
-                                   'residence/zip': {'published': 1, 'withheld': 0}})
+        self.assertEqual(dropped, {'registration/precinct': 2, 'residence/zip': 1})
 
-    def test_standings_of_a_level_are_re_ranked_without_its_dropped_published_area(self):
+    def test_standings_of_a_level_are_re_ranked_without_its_dropped_area(self):
         ids, values = ['97001', '97002', '97003', 'nan'], [10.0, 20.0, 30.0, 40.0]
         ranks = AL.midrank(values)
         area = [dict(self.row('zip', i, group='ovr'), eb_mean=v, area_pct=p, band=AL.band(p), top10_share_eb=v / 100,
                      top10_area_pct=p, top10_band=AL.band(p)) for i, v, p in zip(ids, values, ranks)]
         other = dict(self.row('block', '410050001001001'), eb_mean=5.0, area_pct=50.0, band=3, top10_share_eb=0.05,
                      top10_area_pct=50.0, top10_band=3)
-        kept, _, dropped = build_bundle_v4.drop_pseudo_areas(area + [other], [], D.get('or-05'))
+        kept, dropped = build_bundle_v4.drop_pseudo_areas(area + [other], D.get('or-05'))
         changed = build_bundle_v4.rerank_after_drop(kept, dropped)
         zips = [r for r in kept if r['level'] == 'zip']
         self.assertEqual([r['area_pct'] for r in zips], AL.midrank(values[:3]))      # what the app's validator recomputes
@@ -492,19 +486,10 @@ class PseudoAreaTests(unittest.TestCase):
         self.assertEqual((other['area_pct'], other['band']), (50.0, 3))                   # a level with no dropped area is untouched
         self.assertEqual(build_bundle_v4.rerank_after_drop(kept, {}), {})
 
-    def test_blocks_read_from_the_state_file_are_the_published_ones_and_those_of_a_bare_published_tract(self):
-        t1, t2, t3, t4 = ('09110%06d' % n for n in (1, 2, 3, 4))
-        missing = [t1 + '1001', t2 + '1001', t2 + '1002', t3 + '1001', t4 + '1001']
-        # t1: a published block is missing; t2: published tract, no polygon at all; t3: tract not published; t4: published
-        # tract that already has a block polygon
-        read = build_bundle_v4.blocks_to_read_from_source(missing, {t4 + '2001'}, {t1 + '1001'}, {t1, t2, t4})
-        self.assertEqual(read, [t1 + '1001', t2 + '1001', t2 + '1002'])
-        self.assertEqual(build_bundle_v4.blocks_to_read_from_source([], set(), set(), {t2}), [])
-
     def test_colorado_ids_all_stay(self):
         area = [self.row('block', '080410001001001'), self.row('precinct', '0804100621'), self.row('tract', '08041000102'),
                 self.row('zip', '80916')]
-        kept_area, _, dropped = build_bundle_v4.drop_pseudo_areas(area, [], D.get('co-05'))
+        kept_area, dropped = build_bundle_v4.drop_pseudo_areas(area, D.get('co-05'))
         self.assertEqual((len(kept_area), dropped), (4, {}))
 
 
@@ -540,7 +525,7 @@ class DistrictChainTests(unittest.TestCase):
             cls.shapefile_zip(root / 'shp' / name, cls.geography / 'hierarchy' / (name + '.zip'), ids, district)
         header = FIELDS_ALL
         cls.csv_path = root / 'statara_ct_cd001_20260904.csv'
-        people = [(new_a, 30), (old_a, 30), (new_b, 25)]
+        people = [(new_a, 30), (old_a, 30), (new_b, 5)]          # new_b: an area under 20 people, shown like any other
         with cls.csv_path.open('w', newline='', encoding='cp1252') as stream:
             writer = csv.DictWriter(stream, fieldnames=header)
             writer.writeheader()
@@ -580,19 +565,28 @@ class DistrictChainTests(unittest.TestCase):
         self.assertEqual((manifest['label'], manifest['source_date']), ('Connecticut · District 01', '2026-09-04'))
         self.assertRegex(manifest['snapshot'], r'^ct-cd001-[a-f0-9]{12}$')
         self.assertTrue(manifest['scope'].startswith('Connecticut CD-001 source-file extract'))
-        self.assertEqual(manifest['bases']['registration']['mapped'], 85)
+        self.assertEqual(manifest['bases']['registration']['mapped'], 65)
 
     def test_an_old_county_id_and_its_region_id_are_one_block_area(self):
         for basis in ('registration', 'residential'):
             blocks = {r['id']: r for r in self.v2_payload['rows.json'] if r['basis'] == basis and r['level'] == 'block'}
             self.assertEqual(set(blocks), {self.new_a, self.new_b}, basis)
-            self.assertEqual((blocks[self.new_a]['count'], blocks[self.new_b]['count']), (60, 25), basis)
+            self.assertEqual((blocks[self.new_a]['count'], blocks[self.new_b]['count']), (60, 5), basis)
         self.assertNotIn(self.old_a, self.v2_payload['geometry.json']['block'])
+
+    def test_nothing_is_suppressed_not_even_a_five_person_block(self):
+        for payload in (self.v2_payload, self.v3_payload):
+            self.assertNotIn('threshold', payload['manifest.json'])
+            self.assertTrue(all(r['status'] == 'ok' for r in payload['rows.json']))
+            self.assertTrue(all(c[4] != 'suppressed' for r in payload['rows.json'] for c in r['measures'].values()))
+        small = next(r for r in self.v2_payload['rows.json'] if r['id'] == self.new_b and r['basis'] == 'registration')
+        self.assertEqual((small['count'], small['source_count'], small['share']), (5, 5, 5 / 65))
+        self.assertIn(small['id'], self.v2_payload['geometry.json']['block'])
 
     def test_zctas_are_five_digit_and_valid(self):
         self.assertEqual({r['id'] for r in self.v2_payload['rows.json'] if r['level'] == 'zcta'}, {'06001'})
         self.assertEqual(set(self.v2_payload['geometry.json']['zcta']), {'06001'})
-        self.assertEqual(self.v2_payload['manifest.json']['bases']['registration']['zcta_mapped'], 85)
+        self.assertEqual(self.v2_payload['manifest.json']['bases']['registration']['zcta_mapped'], 65)
 
     def test_v3_hierarchy_is_the_districts_own(self):
         manifest = self.v3_payload['manifest.json']

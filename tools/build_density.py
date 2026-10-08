@@ -2,9 +2,9 @@
 
 Population density = POP20 / ALAND20 (square km) of the TIGER2025 tabblock20 blocks; a block with ALAND20 = 0 has none. An
 area's blocks are the distinct blocks its registered people live in (a block shared by two precincts counts in each), so its
-land is the land of its inhabited blocks. Voter density = those people / the same land, and only for areas the D2 area table
-publishes: an area withheld for size (under 20 people or 10 households) has none. People in a block with no block row or
-with ALAND20 = 0 count in neither number. The road-span voter density (people per 100 m) belongs to the street plan.
+land is the land of its inhabited blocks. Voter density = those people / the same land, for every area (nothing is withheld).
+People in a block with no block row or with ALAND20 = 0 count in neither number. The road-span voter density (people per 100 m)
+belongs to the street plan.
 
     <venv python> -m tools.build_density --district or-05          (writes <data dir>/density.json)
 
@@ -38,19 +38,11 @@ def read_people(path):
         return pd.read_sql('SELECT %s FROM person' % ', '.join(LEVELS.values()), db).fillna('')
 
 
-def published_ids(path):
-    """{level: ids} of the registration-basis `ovr` rows of the D2 area table, which lists the published areas only."""
-    table = pd.read_csv(path, usecols=['basis', 'level', 'area_id', 'group', 'suppressed'], dtype=str,
-                        keep_default_na=False)                    # an id may read 'nan' or 'NA'
-    table = table[(table.basis == 'registration') & (table.group == 'ovr') & table.suppressed.isin(('0', '0.0'))]
-    return {level: set(ids) for level, ids in table.groupby('level').area_id}
-
-
 def listed(series, digits):
     return [None if pd.isna(v) else v for v in series.round(digits).tolist()]
 
 
-def compute(people, blocks, published, aliases):
+def compute(people, blocks, aliases):
     """(levels, counts, join). blocks: GEOID20, POP20, ALAND20 as TIGER has them; aliases carry a TIGER id to the id the
     voter file and the area table use (Connecticut: county codes to planning-region codes; other ids stay)."""
     blocks = blocks.assign(block=blocks.GEOID20.map(lambda g: aliases.get(g, g))).set_index('block')
@@ -68,11 +60,9 @@ def compute(people, blocks, published, aliases):
         inhabited = used.drop_duplicates([column, 'reg_block']).groupby(column)[['POP20', 'ALAND20']].sum().reindex(ids)
         km2 = inhabited.ALAND20 / 1e6
         voters = used.groupby(column).size().reindex(ids)
-        shown = pd.Series(ids, index=ids).isin(published.get(level, ()))
         levels[level] = {'ids': ids, 'pop_density': listed(inhabited.POP20 / km2, 3),
-                         'voter_density': listed((voters / km2).where(shown), 3), 'land_km2': listed(km2, 6)}
-        counts[level] = {'areas': len(ids), 'published': int(shown.sum()),
-                         'published_without_people': len(published.get(level, ())) - int(shown.sum()),
+                         'voter_density': listed(voters / km2, 3), 'land_km2': listed(km2, 6)}
+        counts[level] = {'areas': len(ids),
                          'pop_density': sum(v is not None for v in levels[level]['pop_density']),
                          'voter_density': sum(v is not None for v in levels[level]['voter_density'])}
     return levels, counts, join
@@ -90,8 +80,7 @@ def main(argv=None):
     gb.run('running', 'start', 'density.json build for %s (counts only)' % d['id'])
     try:
         blocks = pyogrio.read_dataframe(blocks_zip, columns=['GEOID20', 'POP20', 'ALAND20'], read_geometry=False)
-        levels, counts, join = compute(read_people(D.data_dir(d) / 'scores.sqlite3'), blocks,
-                                       published_ids(D.rowfw_build(d) / 'area_scores_rowfw-1.0.0.csv'), D.block_aliases(d))
+        levels, counts, join = compute(read_people(D.data_dir(d) / 'scores.sqlite3'), blocks, D.block_aliases(d))
     except Exception as error:
         gb.failed('build', 'density build crashed: %s: %s' % (type(error).__name__, error))
         raise
@@ -103,7 +92,7 @@ def main(argv=None):
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     document = {'schema': SCHEMA, 'district': d['id'], 'blocks_source': {'file': blocks_zip.name, 'sha256': digest},
                 'join': join, 'counts': counts, 'levels': levels,
-                'notes': 'per square km; a block shared by two areas counts in each; voter density only for published areas'}
+                'notes': 'per square km; a block shared by two areas counts in each; every area is shown'}
     out.parent.mkdir(parents=True, exist_ok=True)
     temporary = out.with_name(out.name + '.tmp')
     temporary.write_text(json.dumps(document, separators=(',', ':')), encoding='utf-8')
