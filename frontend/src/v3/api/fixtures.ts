@@ -180,7 +180,7 @@ export function fixtureFile<T>(path:string):Promise<T>{
   }
   return p as Promise<T>;
 }
-interface Geo{blockIds:string[];precinctOf:Map<string,string>;tractOf:Map<string,string>;zips:string[];published:string[];
+interface Geo{blockIds:string[];precinctOf:Map<string,string>;tractOf:Map<string,string>;zips:string[];homes:string[];
   blockIndex:Map<string,number>;precinctIndex:Map<string,number>;blocks:AreasPayload;precincts:AreasPayload;}
 let geoP:Promise<Geo>|null=null;
 function geoWorld():Promise<Geo>{
@@ -189,8 +189,8 @@ function geoWorld():Promise<Geo>{
   ]).then(([b,p,z])=>{
     const precinctOf=new Map<string,string>();const tractOf=new Map<string,string>();
     b.ids.forEach((id,i)=>{precinctOf.set(id,b.precinct[i]!);tractOf.set(id,b.parent[i]!);});
-    const published=b.ids.filter((_id,i)=>b.status[i]==='ok'&&(b.n[i]??0)>=40);
-    return {blockIds:b.ids,precinctOf,tractOf,zips:z.ids,published,
+    const homes=b.ids.filter((_id,i)=>b.status[i]==='ok'&&(b.n[i]??0)>=40);   // blocks big enough to place a fixture household in
+    return {blockIds:b.ids,precinctOf,tractOf,zips:z.ids,homes,
       blockIndex:new Map(b.ids.map((id,i)=>[id,i])),precinctIndex:new Map(p.ids.map((id,i)=>[id,i])),blocks:b,precincts:p};
   });
   geoP.catch(()=>{geoP=null;});
@@ -198,7 +198,7 @@ function geoWorld():Promise<Geo>{
 }
 interface Placed{block:string;precinct:string;tract:string;zip:string}
 function place(g:Geo,hh:number):Placed{
-  const block=g.published[hash('blk',hh)%g.published.length];
+  const block=g.homes[hash('blk',hh)%g.homes.length];
   return {block,precinct:g.precinctOf.get(block)!,tract:g.tractOf.get(block)!,zip:g.zips[hash('zip',block)%g.zips.length]};
 }
 
@@ -351,9 +351,9 @@ export async function fixtureProfile(id:string):Promise<Profile>{
   const mean=members.reduce((s,m)=>s+m.ovr_pct,0)/members.length;
   members.sort((a,b)=>Number(b.self)-Number(a.self)||b.ovr_pct-a.ovr_pct);
   const ctx=(level:Level,areaId:string,payload:AreasPayload,idx:number|undefined):AreaRef=>{
-    const i=idx??-1;const withheld=i<0||payload.status[i]!=='ok';
-    return {level,id:areaId,label:areaLabel(level,areaId),pct:withheld?null:payload.groups.ovr.top10_pct[i],
-      top10:withheld?null:payload.groups.ovr.top10[i],withheld};
+    const i=idx??-1;const none=i<0||payload.status[i]!=='ok';
+    return {level,id:areaId,label:areaLabel(level,areaId),pct:none?null:payload.groups.ovr.top10_pct[i],
+      top10:none?null:payload.groups.ovr.top10[i],n:i<0?null:payload.n[i],households:i<0?null:payload.households[i]};
   };
   const card=(score:number,grade:Grade,single=false)=>{
     const hw=2.5+8*(1-c.measured/100);

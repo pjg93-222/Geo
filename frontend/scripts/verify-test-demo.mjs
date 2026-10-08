@@ -36,7 +36,7 @@ try{
   await page.waitForFunction(()=>window.__cuMap?.isStyleLoaded()&&window.__cuTiming?.map!=null);
   assert.equal(await page.locator('html').getAttribute('data-source'),'fixture');
   assert.equal(await page.locator('html').getAttribute('data-demo'),'1');
-  assert.equal(await page.locator('.legend-withheld').count(),0);
+  assert.equal(await page.locator('.legend').getByText('Withheld').count(),0);assert.ok((await page.locator('.legend').innerText()).includes('No registered people'));
   await capture('01-map-overview-1920');
   const search=page.getByRole('combobox',{name:'Search areas or people'});
   await search.fill('Precinct 214');await page.getByRole('option').first().waitFor();await search.press('Enter');

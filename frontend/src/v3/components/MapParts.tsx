@@ -4,7 +4,7 @@ import {useEffect,useRef,useState} from 'react';
 import {Minus,Plus} from 'lucide-react';
 import {GradeBox,Sk,Switch,ValueBar,cx} from './ui';
 import {Link,INDEX_NAME} from './Header';
-import type {HouseholdPopover,StreetPayload,Meta,OverlayLayer} from '../types';
+import type {HouseholdPopover,StreetPayload,OverlayLayer} from '../types';
 import {ENDASH,MIDDOT,householdLabel,int,round,seconds} from '../lib/format';
 import {LAYER_NAME,luminance,type Mode,type Overlay,type OverlayLegend} from '../lib/overlay';
 import {useTiming} from '../lib/timing';
@@ -19,7 +19,7 @@ const LEAN_RAMP=['var(--reg-d)','var(--reg-r)','var(--reg-u)','var(--reg-o)','va
 const TOP_NAME:Partial<Record<OverlayLayer,string>>={ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',sup:'Candidate support'};
 
 /** `overlay` is the legend of a density, blend or two-layer map; without it this is the legend of an index layer (share, lean or % measured). */
-export function Legend(p:{group:OverlayLayer;measured:boolean;onMeasured:(v:boolean)=>void;loading:boolean;floors?:Meta['floors'];overlay?:OverlayLegend|null}){
+export function Legend(p:{group:OverlayLayer;measured:boolean;onMeasured:(v:boolean)=>void;loading:boolean;overlay?:OverlayLegend|null}){
   let title:string,sub:string,labels:string[],ramp:string[];
   if(p.overlay){({title,sub,labels,ramp}=p.overlay);}
   else if(p.measured){title='% measured';sub='Area mean of % measured';labels=MEASURED_LABELS;ramp=RAMP;}
@@ -39,7 +39,7 @@ export function Legend(p:{group:OverlayLayer;measured:boolean;onMeasured:(v:bool
     :<ul className="legend-swatches">
       {ramp.map((c,i)=><li key={i}><i style={p.loading?undefined:{background:c}} className={cx(p.loading&&'sk')}/><span>{p.loading?'':labels[i]}</span></li>)}
     </ul>}
-    <p className="legend-note"><i className="hatch" aria-hidden="true" style={{display:'inline-block',width:14,height:14,marginRight:7,verticalAlign:'middle'}}/>Withheld · under {p.floors?.min_n??20} people or {p.floors?.min_households??10} households</p>
+    <p className="legend-note"><i className="none-swatch" aria-hidden="true"/>{p.overlay?'No registered people, or no value for this layer':'No registered people'}</p>
     {!p.overlay&&<Switch className="legend-switch" checked={p.measured} onChange={p.onMeasured} label="% measured" labelClass="legend-note"/>}
   </section>;
 }

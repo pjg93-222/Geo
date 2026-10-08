@@ -86,9 +86,9 @@ def zscore(v):
     return (v - v.mean()) / (v.std() + 1e-9)
 
 
-def midrank_pct(values, ok):
-    """Midrank percentile (0-100) among the published areas; None where withheld."""
-    vals = np.array([v if o else np.nan for v, o in zip(values, ok)], dtype=float)
+def midrank_pct(values):
+    """Midrank percentile (0-100) among all the areas of the level."""
+    vals = np.array(values, dtype=float)
     out = [None] * len(vals)
     pub = np.where(~np.isnan(vals))[0]
     srt = np.sort(vals[pub])
@@ -164,7 +164,6 @@ def main():
     n_rows = apportion(n_rows, 109150)
     hh = apportion((n_rows - 1).astype(float), 45000)
     assert np.all(hh <= n_rows)
-    ok_block = np.ones(nb, dtype=bool)  # No floor for synthetic test data.
 
     def mean_vals(f, centre, spread, noise):
         return np.clip(centre + spread * f + RNG.normal(0, noise, nb), 3, 97)
@@ -187,37 +186,37 @@ def main():
     reg_d = np.clip(0.30 + 0.035 * f_lean + RNG.normal(0, 0.03, nb), 0.1, 0.6)
     reg_r = np.clip(1 - reg_u - reg_d - 0.02 - RNG.uniform(0, 0.03, nb), 0.08, 0.7)
 
-    def build_level(level, ids, labels, n_arr, hh_arr, ok, mean, top, lean, meas, shares, parent, extra):
-        """Columnar area payload. mean/top: dict group -> list (None where withheld)."""
+    def build_level(level, ids, labels, n_arr, hh_arr, mean, top, lean, meas, shares, parent, extra):
+        """Columnar area payload. mean/top: dict group -> list. Every area has values."""
         cells = {}
         for g in group_ids:
-            m = [None if not o else float(v) for v, o in zip(mean[g], ok)]
-            t = [None if not o else float(v) for v, o in zip(top[g], ok)]
-            se = [None if not o else float(14.0 / math.sqrt(max(nr, 1)) + 0.4) for nr, o in zip(n_arr, ok)]
-            tse = [None if not o else float(max(0.004, 0.55 * tv / math.sqrt(max(nr / 12.0, 1)))) for nr, o, tv in zip(n_arr, ok, top[g])]
+            m = [float(v) for v in mean[g]]
+            t = [float(v) for v in top[g]]
+            se = [float(14.0 / math.sqrt(max(nr, 1)) + 0.4) for nr in n_arr]
+            tse = [float(max(0.004, 0.55 * tv / math.sqrt(max(nr / 12.0, 1)))) for nr, tv in zip(n_arr, top[g])]
             cells[g] = {
                 'mean': [rnd(v, 2) for v in m],
                 'se': [rnd(v, 2) for v in se],
-                'measured': [rnd(v, 1) if o else None for v, o in zip(meas, ok)],
-                'pct': midrank_pct(m, ok),
+                'measured': [rnd(v, 1) for v in meas],
+                'pct': midrank_pct(m),
                 'top10': [rnd(v, 4) for v in t],
                 'top10_se': [rnd(v, 4) for v in tse],
-                'top10_pct': midrank_pct(t, ok),
+                'top10_pct': midrank_pct(t),
             }
         cells['lean'] = {
-            'mean': [rnd(v, 2) if o else None for v, o in zip(lean, ok)],
-            'se': [rnd(25.0 / math.sqrt(max(nr, 1)) + 0.5, 2) if o else None for nr, o in zip(n_arr, ok)],
-            'measured': [rnd(v, 1) if o else None for v, o in zip(meas, ok)],
-            'share_d': [rnd(v, 4) if o else None for v, o in zip(shares[0], ok)],
-            'share_r': [rnd(v, 4) if o else None for v, o in zip(shares[1], ok)],
-            'share_u': [rnd(v, 4) if o else None for v, o in zip(shares[2], ok)],
+            'mean': [rnd(v, 2) for v in lean],
+            'se': [rnd(25.0 / math.sqrt(max(nr, 1)) + 0.5, 2) for nr in n_arr],
+            'measured': [rnd(v, 1) for v in meas],
+            'share_d': [rnd(v, 4) for v in shares[0]],
+            'share_r': [rnd(v, 4) for v in shares[1]],
+            'share_u': [rnd(v, 4) for v in shares[2]],
         }
         payload = {
             'schema': 'v3-areas-1', 'snapshot': 'fixture-v3', 'basis': 'registration', 'level': level,
             'ids': ids, 'labels': labels,
-            'status': ['ok' if o else 'withheld' for o in ok],
-            'n': [int(x) if o else None for x, o in zip(n_arr, ok)],
-            'households': [int(x) if o else None for x, o in zip(hh_arr, ok)],
+            'status': ['ok'] * len(ids),
+            'n': [int(x) for x in n_arr],
+            'households': [int(x) for x in hh_arr],
             'parent': parent,
             'groups': cells,
         }
@@ -265,7 +264,7 @@ def main():
             feats.append(feature(i, blocks[i], tol, {'lx': lx, 'ly': ly}))
         (OUT / 'geometry' / f'block.{variant}.json').write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}, separators=(',', ':')), encoding='utf-8')
     block_payload = build_level(
-        'block', bids, [lab_block(i) for i in bids], n_rows, hh, ok_block, mean_b, top_b, lean_b, meas_b,
+        'block', bids, [lab_block(i) for i in bids], n_rows, hh, mean_b, top_b, lean_b, meas_b,
         (reg_d, reg_r, reg_u), [tract_of[i] for i in bids],
         {'precinct': [precinct_of[i] for i in bids], 'tract': [tract_of[i] for i in bids], 'blocks': [None] * nb})
     (OUT / 'areas' / 'block.json').write_text(json.dumps(block_payload, separators=(',', ':')), encoding='utf-8')
@@ -275,7 +274,6 @@ def main():
         a = agg([[index_of[b] for b in mem] for mem in member_lists])
         n_arr = np.array(a['n'])
         hh_arr = np.array(a['hh'])
-        ok = np.ones(len(n_arr), dtype=bool)
         for variant, tol in (('coarse', COARSE), ('fine', FINE)):
             feats = []
             for c, mem in zip(codes, member_lists):
@@ -283,7 +281,7 @@ def main():
                 lx, ly = label_point(g)
                 feats.append(feature(c, g, tol * 1.6, {'lx': lx, 'ly': ly}))
             (OUT / 'geometry' / f'{level}.{variant}.json').write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}, separators=(',', ':')), encoding='utf-8')
-        payload = build_level(level, codes, [labeller(c) for c in codes], n_arr, hh_arr, ok, a['mean'], a['top'], a['lean'], a['meas'],
+        payload = build_level(level, codes, [labeller(c) for c in codes], n_arr, hh_arr, a['mean'], a['top'], a['lean'], a['meas'],
                               (a['sd'], a['sr'], a['su']), [None] * len(codes),
                               {'tract': modal_tract, 'blocks': a['blocks'], 'precinct': [None] * len(codes)})
         (OUT / 'areas' / f'{level}.json').write_text(json.dumps(payload, separators=(',', ':')), encoding='utf-8')
@@ -328,7 +326,7 @@ def main():
         'weights': {'cua': 40, 'part': 35, 'soi': 25},
         'levels': ['block', 'precinct', 'tract', 'zip'],
         'bbox': [round(v, 5) for v in dgeom.bounds],
-        'floors': {'min_n': 0, 'min_households': 0},
+        'small_area': {'min_n': 20, 'min_households': 10},
     }
     (OUT / 'meta.json').write_text(json.dumps(meta, separators=(',', ':')), encoding='utf-8')
     for p in sorted(OUT.rglob('*.json')):

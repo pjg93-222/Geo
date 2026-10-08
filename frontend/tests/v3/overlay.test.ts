@@ -9,12 +9,12 @@ import type {AreasPayload, Density, Features, Meta} from '../../src/v3/types.ts'
 // areas.ts imports its neighbours without a file extension, so node needs a resolve hook to load it straight from source.
 registerHooks({resolve: (spec, ctx, next) => ctx.parentURL?.includes('/src/v3/') && /^\.{1,2}\//.test(spec) && !/\.[cm]?[jt]sx?$/.test(spec) ? next(spec + '.ts', ctx) : next(spec, ctx)});
 const O = await import('../../src/v3/lib/overlay.ts');
-const {BIN_PENDING, BIN_WITHHELD, binsFor} = await import('../../src/v3/lib/areas.ts');
+const {BIN_PENDING, BIN_NONE, binsFor} = await import('../../src/v3/lib/areas.ts');
 
-// ---- a synthetic area table: 23 blocks, two withheld, every score a permutation of 0..22 so standings never tie ----------------------
-const N = 23, WITHHELD_AT = [3, 17];
+// ---- a synthetic area table: 23 blocks, two with no registered people, every score a permutation of 0..22 so standings never tie ----------------------
+const N = 23, EMPTY_AT = [3, 17];
 const ids = Array.from({length: N}, (_, i) => `b${String(i).padStart(2, '0')}`);
-const status = ids.map((_, i) => (WITHHELD_AT.includes(i) ? 'withheld' : 'ok')) as ('ok' | 'withheld')[];
+const status = ids.map((_, i) => (EMPTY_AT.includes(i) ? 'empty' : 'ok')) as ('ok' | 'empty')[];
 const col = (g: (i: number) => number) => ids.map((_, i) => (status[i] === 'ok' ? g(i) : null));
 const cell = (k: number) => ({
   mean: col(i => 20 + ((i * k) % N)), se: col(() => 2), measured: col(i => 10 + ((i * k) % N) * 3), pct: col(i => (100 * ((i * k) % N)) / (N - 1)),
@@ -30,29 +30,29 @@ const areas = (withSup = true): AreasPayload => ({
   },
 });
 const meta = {share_breaks: [0.05, 0.08, 0.12, 0.18], measured_breaks: [20, 40, 60, 80]} as unknown as Meta;
-// density.json: b02 and b10 have no population density (no land), b05 is missing from the file, voter density is null for the withheld blocks
+// density.json: b02 and b10 have no population density (no land), b05 is missing from the file, voter density is null for the empty blocks
 const density = (): Density => {
   const keep = ids.filter(id => id !== 'b05');
   return {
     schema: 'density-1', district: 'x', blocks_source: {file: 'blocks.zip', sha256: '0'}, join: {rate: 0.995},
     levels: {block: {ids: keep, land_km2: keep.map(() => 1), pop_density: keep.map((id, i) => (i === 2 || i === 9 ? null : 10 * (i + 1) + (i % 3))),
-      voter_density: keep.map((id, i) => (WITHHELD_AT.includes(ids.indexOf(id)) ? null : 5 * (i + 1) + (i % 4)))}},
+      voter_density: keep.map((id, i) => (EMPTY_AT.includes(ids.indexOf(id)) ? null : 5 * (i + 1) + (i % 4)))}},
   };
 };
 const single = (layer: string): import('../../src/v3/lib/overlay.ts').Overlay => ({mode: 'single', layer: layer as never, blend: {}, pair: ['cua', 'part']});
 const counts = (bins: Uint8Array, upTo = 5) => Array.from({length: upTo}, (_, c) => Array.from(bins.subarray(0, N)).filter(b => b === c).length);
 
-test('layer standings: payload pct for index layers, midrank for lean and density, nothing for withheld areas', () => {
+test('layer standings: payload pct for index layers, midrank for lean and density, nothing for areas with no registered people', () => {
   const a = areas();
   assert.deepEqual(O.layerPct(a, null, 'part'), a.groups.part.pct);
   assert.equal(O.layerPct(a, null, 'part')[3], null);
   const lean = O.layerPct(a, null, 'lean');
   assert.equal(lean[3], null); assert.equal(lean[17], null);
-  assert.equal(Math.min(...lean.filter((x): x is number => x != null)), 100 * 0.5 / 21, 'lowest of 21 published areas');
+  assert.equal(Math.min(...lean.filter((x): x is number => x != null)), 100 * 0.5 / 21, 'lowest of 21 areas with people');
   const pop = O.layerPct(a, density(), 'pop_density');
   assert.equal(pop[5], null, 'an area density.json does not hold');
-  assert.equal(pop[3], null, 'a withheld area');
-  assert.equal(pop.filter(x => x == null).length, 5, 'withheld (2), absent from the file (1), no land (2)');
+  assert.equal(pop[3], null, 'an area with no registered people');
+  assert.equal(pop.filter(x => x == null).length, 5, 'empty (2), absent from the file (1), no land (2)');
   assert.deepEqual(O.midrank([5, 5, 1, null, 9]), [50, 50, 12.5, null, 87.5], 'ties share their midrank');
   assert.deepEqual(O.layerPct(a, null, 'voter_density'), a.ids.map(() => null), 'no density.json: nothing to show');
 });
@@ -68,26 +68,26 @@ test('blend: the weighted mean of the standings, in fifths of areas', () => {
   const r = O.overlayBins({mode: 'blend', layer: 'ovr', blend: {part: 3, sup: 1}, pair: ['cua', 'part']}, a, null, meta);
   const c = counts(r.bins);
   assert.equal(c.reduce((x, y) => x + y, 0), 21); assert.ok(Math.max(...c) - Math.min(...c) <= 1, `fifths ${c}`);
-  assert.equal(r.bins[3], BIN_WITHHELD); assert.equal(r.bins[N], BIN_PENDING);
+  assert.equal(r.bins[3], BIN_NONE); assert.equal(r.bins[N], BIN_PENDING);
   // weights are free numbers: 3:1 and 30:10 are the same blend
   assert.deepEqual(O.overlayBins({mode: 'blend', layer: 'ovr', blend: {part: 30, sup: 10}, pair: ['cua', 'part']}, a, null, meta).bins, r.bins);
-  // a layer with no value for an area (no density.json here) withholds that area
+  // a layer with no value for an area (no density.json here) leaves that area plain pale
   const none = O.overlayBins({mode: 'blend', layer: 'ovr', blend: {part: 1, pop_density: 1}, pair: ['cua', 'part']}, a, null, meta);
-  assert.ok(Array.from(none.bins.subarray(0, N)).every(b => b === BIN_WITHHELD));
+  assert.ok(Array.from(none.bins.subarray(0, N)).every(b => b === BIN_NONE));
 });
 
-test('two layers: thirds at 100/3 and 200/3, class = 3 * first + second; no value or a withheld area stays withheld', () => {
+test('two layers: thirds at 100/3 and 200/3, class = 3 * first + second; no value or an empty area stays plain pale', () => {
   assert.equal(O.biClass(10, 90), 2); assert.equal(O.biClass(90, 10), 6); assert.equal(O.biClass(0, 0), 0); assert.equal(O.biClass(100, 100), 8);
   assert.equal(O.biClass(100 / 3, 50), 4, 'a standing at the break goes up'); assert.equal(O.biClass(100 / 3 - 0.01, 200 / 3), 2);
   assert.equal(O.biClass(null, 5), null); assert.equal(O.biClass(5, null), null);
   const a = areas(), r = O.overlayBins({mode: 'bi', layer: 'ovr', blend: {}, pair: ['part', 'sup']}, a, null, meta);
   const p = O.layerPct(a, null, 'part'), s = O.layerPct(a, null, 'sup');
-  ids.forEach((_, i) => assert.equal(r.bins[i], p[i] == null ? BIN_WITHHELD : O.biClass(p[i], s[i])));
+  ids.forEach((_, i) => assert.equal(r.bins[i], p[i] == null ? BIN_NONE : O.biClass(p[i], s[i])));
   assert.equal(r.bins[N], BIN_PENDING); assert.equal(r.palette.length, 9);
-  // a density layer with no value for an area (b05 absent, b02 and b10 without land) withholds it
+  // a density layer with no value for an area (b05 absent, b02 and b10 without land) leaves it plain pale
   const d = O.overlayBins({mode: 'bi', layer: 'ovr', blend: {}, pair: ['part', 'pop_density']}, a, density(), meta);
-  assert.equal(d.bins[5], BIN_WITHHELD); assert.equal(d.bins[3], BIN_WITHHELD);
-  assert.equal(d.bins[ids.indexOf('b10')], BIN_WITHHELD, 'null population density');
+  assert.equal(d.bins[5], BIN_NONE); assert.equal(d.bins[3], BIN_NONE);
+  assert.equal(d.bins[ids.indexOf('b10')], BIN_NONE, 'null population density');
   assert.ok(d.bins[0] < 9);
 });
 
@@ -100,16 +100,16 @@ test('colorado default: one overall layer gives the same bins and palette as tod
   }
   assert.equal(O.overlayBins(single('lean'), a, null, meta).palette, O.LEAN_RAMP);
   assert.deepEqual(O.overlayBins(single('lean'), a, null, meta).bins, binsFor(a, 'lean', 'share', meta));
-  // a candidate layer the payload does not carry is withheld, not a crash
-  assert.ok(Array.from(O.overlayBins(single('sup'), a, null, meta).bins.subarray(0, N)).every(b => b === BIN_WITHHELD));
+  // a candidate layer the payload does not carry is plain pale, not a crash
+  assert.ok(Array.from(O.overlayBins(single('sup'), a, null, meta).bins.subarray(0, N)).every(b => b === BIN_NONE));
   assert.deepEqual(O.overlayBins(single('sup'), areas(), null, meta).bins, binsFor(areas(), 'sup', 'share', meta));
 });
 
-test('density layers: fifths of the published values, the breaks named in the legend', () => {
+test('density layers: fifths of the values, the breaks named in the legend', () => {
   const a = areas(), d = density();
   const r = O.overlayBins(single('pop_density'), a, d, meta);
   const v = Array.from(r.bins.subarray(0, N));
-  assert.equal(v.filter(b => b === BIN_WITHHELD).length, 5, 'withheld (2) + absent (1) + no land (2)');
+  assert.equal(v.filter(b => b === BIN_NONE).length, 5, 'empty (2) + absent (1) + no land (2)');
   const used = v.filter(b => b < 5), c = [0, 1, 2, 3, 4].map(k => used.filter(b => b === k).length);
   assert.ok(Math.max(...c) - Math.min(...c) <= 1, `fifths ${c}`);
   assert.equal(r.legend!.title, 'Population density'); assert.equal(r.legend!.sub, 'People per km² · fifths of areas');
@@ -118,7 +118,7 @@ test('density layers: fifths of the published values, the breaks named in the le
   const label = (x: number) => O.overlayBins(single('pop_density'), a, {...d, levels: {block: {...d.levels.block!, pop_density: d.levels.block!.ids.map(() => x)}}}, meta).legend!.labels[0];
   assert.deepEqual([8.44, 196.4, 1049, 1174, 3513, 12400].map(label), ['Under 8.4', 'Under 196', 'Under 1k', 'Under 1.2k', 'Under 3.5k', 'Under 12k']);
   assert.equal(O.overlayBins(single('voter_density'), a, d, meta).legend!.sub, 'Registered voters per km² · fifths of areas');
-  assert.ok(Array.from(O.overlayBins(single('voter_density'), a, d, meta).bins.subarray(0, N)).every((b, i) => status[i] === 'ok' || b === BIN_WITHHELD), 'voter density is withheld where the area is');
+  assert.ok(Array.from(O.overlayBins(single('voter_density'), a, d, meta).bins.subarray(0, N)).every((b, i) => status[i] === 'ok' || b === BIN_NONE), 'voter density is plain pale where the area has no registered people');
   assert.deepEqual(O.fifths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), [3, 5, 7, 9]); assert.deepEqual(O.fifths([null]), []);
 });
 
@@ -138,11 +138,11 @@ test('legends: one per mode, with plain text for every part', () => {
 
 test('palettes: five or nine colors, and the sentinels never collide with a class', () => {
   assert.equal(O.SHARE_RAMP.length, 5); assert.equal(O.LEAN_RAMP.length, 5); assert.equal(O.BI_PALETTE.length, 9);
-  assert.ok(BIN_WITHHELD > O.BI_PALETTE.length - 1 && BIN_PENDING > O.BI_PALETTE.length - 1 && BIN_WITHHELD !== BIN_PENDING);
-  assert.ok(BIN_WITHHELD <= 255 && BIN_PENDING <= 255, 'they live in a Uint8Array');
+  assert.ok(BIN_NONE > O.BI_PALETTE.length - 1 && BIN_PENDING > O.BI_PALETTE.length - 1 && BIN_NONE !== BIN_PENDING);
+  assert.ok(BIN_NONE <= 255 && BIN_PENDING <= 255, 'they live in a Uint8Array');
   const a = areas(), d = density();
   for (const r of [O.overlayBins({mode: 'bi', layer: 'ovr', blend: {}, pair: ['part', 'sup']}, a, d, meta), O.overlayBins(single('pop_density'), a, d, meta), O.overlayBins(single('ovr'), a, d, meta)]) {
-    const classes = Array.from(r.bins).filter(b => b !== BIN_WITHHELD && b !== BIN_PENDING);
+    const classes = Array.from(r.bins).filter(b => b !== BIN_NONE && b !== BIN_PENDING);
     assert.ok(classes.every(b => b < r.palette.length), 'every class has a color');
   }
 });

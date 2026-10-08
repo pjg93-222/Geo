@@ -83,8 +83,8 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const idIndex=useMemo(()=>new Map((areas?.ids??[]).map((id,i)=>[id,i])),[areas]);
   const selIndex=selected?idIndex.get(selected):undefined;
   const areaV=useMemo(()=>areas&&selIndex!==undefined?areaView(areas,selIndex,group):null,[areas,selIndex,group]);
-  // the district summary is the score store's own means when the server sends them (they include withheld areas);
-  // otherwise it is the people-weighted mean of the published areas
+  // the district summary is the score store's own means when the server sends them;
+  // otherwise it is the people-weighted mean of the areas with registered people
   const summary=useMemo(()=>{
     const d=meta?.district_mean;
     if(d)return {ovr:d.score.ovr,cua:d.score.cua,part:d.score.part,soi:d.score.soi,lean:d.lean,measured:d.measured.ovr,measuredBy:d.measured,people:meta!.people,mix:meta!.district_registration};
@@ -109,9 +109,9 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
     setFocus({bounds:featureBounds(feat),nonce:f.nonce});
   },[geo,loadedLevel,level]);
 
-  // neighboring areas for rail variant B: the selected area plus the 6 nearest published by centroid, in code order
+  // neighboring areas for rail variant B: the selected area plus the 6 nearest with registered people by centroid, in code order
   const neighbors=useMemo<Neighbour[]|null>(()=>{
-    if(!areas||!geo||!selected||areaV?.withheld||level==='block'||loadedLevel!==level||selIndex===undefined)return null;
+    if(!areas||!geo||!selected||areaV?.empty||level==='block'||loadedLevel!==level||selIndex===undefined)return null;
     const cand:{id:string;x:number;y:number;v:number|null}[]=[];
     const cosLat=Math.cos(38.8*Math.PI/180);
     for(const f of geo.fc.features){
@@ -182,7 +182,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
           zoom={mapRef.current?.view()?.zoom??0} width={pane.clientWidth} height={pane.clientHeight}/>}
         <ZoomControl onZoom={d=>mapRef.current?.zoomBy(d)}/>
         <LayersPanel o={ov} layers={layers} hidden={streetActive} onChange={next=>{begin('map');setO(next);}}/>
-        {streetActive?<HouseholdLegend/>:<Legend group={ov.layer} measured={measured} onMeasured={v=>{begin('map');setMeasured(v);}} loading={!areas} floors={meta?.floors} overlay={result?.legend}/>}
+        {streetActive?<HouseholdLegend/>:<Legend group={ov.layer} measured={measured} onMeasured={v=>{begin('map');setMeasured(v);}} loading={!areas} overlay={result?.legend}/>}
         <Readout/>
         {selHousehold&&popPos&&pane&&<Popover data={pop} x={popPos.x} y={popPos.y} paneW={pane.clientWidth} paneH={pane.clientHeight}
           onClose={()=>{setSelHousehold(null);setPop(null);}}/>}

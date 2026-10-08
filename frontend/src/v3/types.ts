@@ -26,17 +26,18 @@ export interface Meta{
   /** Present only for a district whose overall is interim (OR, CT); Colorado's meta has no such key. Shown as given under the overall weights. */
   overall_note?:string;
   levels:Level[];bbox:[number,number,number,number];
-  floors:{min_n:number;min_households:number};
+  /** Below either count an area carries a plain "Small area" note and nothing is hidden. Older servers do not send it; the screens then use 20 and 10. */
+  small_area?:{min_n:number;min_households:number};
   /** District means from the score store (live only): expected scores, % measured per group, mean lean. Authoritative for the empty-selection rail. */
   district_mean?:{score:Record<'ovr'|'cua'|'part'|'soi',number>;measured:Record<Group,number>;lean:number};
 }
 
-/** One scored group of an area table, columnar (index i = area i). Withheld areas hold null everywhere. */
+/** One scored group of an area table, columnar (index i = area i). An area with no registered people holds null everywhere. */
 export interface ScoreCell{
   mean:(number|null)[];       // eb_mean, standing points 0..100
   se:(number|null)[];         // eb_se, posterior SD of the mean
   measured:(number|null)[];   // measured_pct_mean
-  pct:(number|null)[];        // area_pct, midrank percentile among published areas of the level
+  pct:(number|null)[];        // area_pct, midrank percentile among the areas of the level
   top10:(number|null)[];      // top10_share_eb, 0..1
   top10_se:(number|null)[];   // top10_eb_se
   top10_pct:(number|null)[];  // top10_area_pct
@@ -47,7 +48,7 @@ export interface LeanCell{
 }
 export interface AreasPayload{
   schema:'v3-areas-1';snapshot:string;basis:'registration';level:Level;
-  ids:string[];labels:string[];status:('ok'|'withheld')[];
+  ids:string[];labels:string[];status:('ok'|'empty')[];   // 'empty': no registered people, so no values
   n:(number|null)[];households:(number|null)[];
   parent:(string|null)[];     // block -> tract id
   precinct:(string|null)[];   // block -> modal precinct id
@@ -86,7 +87,7 @@ export interface FieldRow{
 }
 export interface FieldGroup{id:'cua'|'part'|'soi'|'lean';label:string;n_fields:number;observed:number;fields:FieldRow[]}
 export interface HouseholdMember{person_id:string;name:string;age:number|null;ovr_pct:number;grade:Grade;self:boolean}
-export interface AreaRef{level:Level;id:string;label:string;pct:number|null;top10:number|null;withheld:boolean}
+export interface AreaRef{level:Level;id:string;label:string;pct:number|null;top10:number|null;n:number|null;households:number|null}
 export interface Profile{
   person_id:string;name:string;age:number|null;household_size:number;
   registration:'D'|'R'|'U'|'O';block:string;precinct:string;
@@ -128,7 +129,7 @@ export interface Features{
   overlay:{layers:OverlayLayer[];density:boolean};
   roi:FeatureRoi|null;
 }
-/** Per level, parallel arrays over `ids`; null where an area has no value (no land, or voter density withheld). */
+/** Per level, parallel arrays over `ids`; null where an area has no value (no land, or no registered people). */
 export interface DensityLevel{ids:string[];pop_density:(number|null)[];voter_density:(number|null)[];land_km2:(number|null)[]}
 export interface Density{
   schema:'density-1';district:string;blocks_source:{file:string;sha256:string};

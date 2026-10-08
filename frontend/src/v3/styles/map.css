@@ -31,8 +31,6 @@
 .legend-swatches li{width:86u;flex:none;text-align:center}
 .legend-swatches i{display:block;width:86u;height:54u;border-radius:6u}
 .legend-swatches span{display:block;margin:11u -22u 0;white-space:nowrap;font-size:20u;line-height:1.3;letter-spacing:-.01em}
-.legend-withheld{display:flex;align-items:center;gap:21u;margin-top:18u;font-size:20u;line-height:1.3;color:var(--muted);letter-spacing:-.01em}
-.legend-withheld .hatch{width:62u;height:43u}
 .legend-switch{margin-top:19u}
 .legend-note{font-size:20u;color:var(--muted)}
 
@@ -60,8 +58,8 @@
 .headline{font-size:96u;font-weight:600;line-height:1;letter-spacing:-.03em;color:var(--teal);margin-top:30u;min-height:96u;white-space:nowrap}
 .headline.ink{color:var(--ink)}
 .headline-cap{font-size:28u;line-height:1.3;letter-spacing:-.02em;margin-top:1.6u;min-height:36u}
-.headline-cap.note{font-size:21u;color:var(--muted)}
 .headline-likely{font-size:27u;line-height:1.3;letter-spacing:-.02em;color:var(--subtle);margin-top:7.6u;min-height:35u}
+.small-note{font-size:21u;line-height:1.3;letter-spacing:-.01em;color:var(--muted);margin-top:4u}
 .rule.a1{margin-top:37u}
 .eyebrow{font-size:22u;line-height:1.3;letter-spacing:-.01em;color:var(--subtle);margin:27u 0 19.5u}
 .row{height:138u}
@@ -85,7 +83,6 @@
 .rb-headline{font-size:78u;font-weight:700;line-height:1;letter-spacing:-.03em;color:var(--teal);margin-top:22u;min-height:78u;white-space:nowrap}
 .rb-headline.ink{color:var(--ink)}
 .rb-cap{font-size:23u;line-height:1.3;letter-spacing:-.01em;margin-top:0;min-height:30u}
-.rb-cap.note{font-size:21u;color:var(--muted)}
 .rb-likely{font-size:21u;line-height:1.3;letter-spacing:-.01em;color:var(--subtle);margin-top:2.4u;min-height:27u}
 .rule.b1{margin-top:23.5u}
 .rb-row{height:88u;margin-top:0}

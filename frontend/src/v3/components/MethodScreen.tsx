@@ -1,6 +1,7 @@
 import {PageHeader,useFeatures} from './Header';
 import type {Meta} from '../types';
 import {indicesText,int,supportMethodText} from '../lib/format';
+import {SMALL_AREA} from '../lib/areas';
 
 export function MethodScreen({meta}:{meta:Meta|null}){
   const w=meta?.weights;
@@ -17,7 +18,7 @@ export function MethodScreen({meta}:{meta:Meta|null}){
       <section><h2 className="section-title">Political views</h2><p>Registration, affiliation and outlook remain separate categorical fields. They are not combined into a displayed belief score, standardized, ranked, or included in overall standing{w?.sup!==undefined&&', except that party registration and the modeled partisan score are inputs to Candidate support'}. The Outlook filter uses stored outlook responses. The registration map shows the largest registration group, with category proportions in the detail panel; Mixed means a tie.</p><p>Missing categories display as Unknown and conflicting positive responses as Multiple responses. No missing opinion is assigned a middle position. Differences between registration, affiliation and outlook are preserved. Ethical beliefs are not part of this framework.</p></section>
       <section><h2 className="section-title">Field evidence</h2><p>The framework has 40 fields: 12 in Credit Union Alignment, 10 in Participation, 7 in Sphere of Influence and 11 political categories. Profiles retain the stored values and their available evidence details. Political fields show no score contribution. Data grades and measured percentages summarize field coverage.</p></section>
       <section><h2 className="section-title">Households</h2><p>Household membership and locations come from the local household store. Listed members are people in the dataset, which may not contain every household resident. Supplied household facts are preserved; membership is not rewritten to force them to agree.</p></section>
-      <section><h2 className="section-title">Areas</h2><p>The map uses the active snapshot’s registration geography, public boundaries and local road data. Areas with fewer than {meta?.floors.min_n??20} people or {meta?.floors.min_households??10} households are withheld. Grades belong to people and indices, not areas.</p></section>
+      <section><h2 className="section-title">Areas</h2><p>The map uses the active snapshot’s registration geography, public boundaries and local road data. Every area is shown. Areas with fewer than {meta?.small_area?.min_n??SMALL_AREA.min_n} people or {meta?.small_area?.min_households??SMALL_AREA.min_households} households carry a small-area note: their values rest on few voters and are pulled toward the larger area around them. Grades belong to people and indices, not areas.</p></section>
     </main>
   </div>;
 }

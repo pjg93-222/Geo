@@ -1,13 +1,13 @@
 // Map overlay modes (Phase 4D): one layer, a weighted blend of layers, or two layers on a 3 x 3 grid. Everything is worked out
 // here from the area payload and density.json, so the map itself only needs one bin per area and a palette.
 import type {AreasPayload,CandidateInfo,Density,Features,Group,Meta,OverlayLayer} from '../types';
-import {BIN_PENDING,BIN_WITHHELD,binsFor} from './areas.ts';
+import {BIN_NONE,BIN_PENDING,binsFor} from './areas.ts';
 import {ENDASH,MIDDOT,binOf,int,round} from './format.ts';
 
 export const SHARE_RAMP=['#E6F1EC','#C2E0DB','#8BC2BC','#54979B','#286D73'];
 export const LEAN_RAMP=['#95ADCE','#E7A490','#C6C2D3','#F5F1E9','#E5DFDA'];
 /** Bivariate palette, index = 3 * (first layer's third) + (second layer's third). The first layer runs teal across (--s1, a light --s3, a
- *  deepened --s4), the second runs plum down (white, a pale --hatch-stripe, a mid --accent), each cell the product of the two. Both axes darken
+ *  deepened --s4), the second runs plum down (white, a pale lavender, a mid --accent), each cell the product of the two. Both axes darken
  *  at every step, and the lowest cell is at least 3:1 in luminance from each of the other three corners (tested). */
 export const BI_PALETTE=['#E6F1EC','#BFBBDA','#7B6CAC','#9FCFC8','#84A1B9','#555D92','#3F8589','#34677F','#223B64'];
 
@@ -75,12 +75,12 @@ export function midrank(v:(number|null)[]):(number|null)[]{
   }
   return out;
 }
-/** density.json values per area of the payload; null for a withheld area or an id density.json does not hold. */
+/** density.json values per area of the payload; null for an area with no registered people or an id density.json does not hold. */
 function densityValues(p:AreasPayload,d:Density|null,layer:'pop_density'|'voter_density'):(number|null)[]{
   const lv=d?.levels[p.level];const at=new Map((lv?.ids??[]).map((id,i)=>[id,i]));
   return p.ids.map((id,i)=>{const k=at.get(id);return k===undefined||p.status[i]!=='ok'?null:lv![layer][k]??null;});
 }
-/** Standing 0..100 of each area among the published areas that have a value, for any layer. */
+/** Standing 0..100 of each area among the areas that have a value, for any layer. */
 export function layerPct(p:AreasPayload,d:Density|null,layer:OverlayLayer):(number|null)[]{
   if(isDensity(layer))return midrank(densityValues(p,d,layer));
   if(layer==='lean')return midrank(p.groups.lean.mean.map((x,i)=>p.status[i]==='ok'?x:null));
@@ -111,7 +111,7 @@ export function biClass(a:number|null,b:number|null):number|null{
 
 function toBins(p:AreasPayload,cls:(i:number)=>number|null):Uint8Array{
   const out=new Uint8Array(p.ids.length+1);out[p.ids.length]=BIN_PENDING;
-  p.ids.forEach((_,i)=>{out[i]=cls(i)??BIN_WITHHELD;});
+  p.ids.forEach((_,i)=>{out[i]=cls(i)??BIN_NONE;});
   return out;
 }
 /** A density break in at most five characters: 8.4, 196, 1.1k, 12k. */

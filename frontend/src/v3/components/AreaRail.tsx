@@ -1,7 +1,7 @@
 // Right rail of the map screens. Variant A (Block level, render 01-v2) and variant B (Precinct, Tract, ZIP, render 04)
 // share the same data; with nothing selected the rail shows the district summary in layout A.
 import {LeanBar,RangeBar,Sk,cx} from './ui';
-import type {AreaView} from '../lib/areas';
+import {smallNote,type AreaView} from '../lib/areas';
 import type {Group,Meta} from '../types';
 import {
   ENDASH,MIDDOT,RANGE,LEVEL_PLURAL,int,countLabel,leanBand,ordinal,rateText,round,shareText,signed,
@@ -10,7 +10,7 @@ import {
 import {INDEX_NAME,INDEX_TOP10_NAME} from './Header';
 
 const ROW_NAMES=['ovr','cua','part','soi'] as const;
-const WITHHELD='Withheld · under 20 people or 10 households';
+const EMPTY='No registered people';
 
 export interface Neighbour{id:string;short:string;value:number|null;selected:boolean}
 export interface DistrictSummary{ovr:number;cua:number;part:number;soi:number;lean:number;measured:number;people:number;measuredBy?:Record<Group,number>;mix?:{d:number;r:number;u:number;o:number}}
@@ -66,7 +66,7 @@ function RailA(p:AreaRailProps){
   const summary=!v;
   const plural=LEVEL_PLURAL[p.level];
   const title=v?areaLabel(p.level,v.id):meta.district_label;
-  const sub=v?subtitleA(p):'All published areas';
+  const sub=v?subtitleA(p):'All areas';
   const g=p.group;
   const rate=g==='lean'?null:meta.district_rate[g];
   // headline
@@ -76,8 +76,8 @@ function RailA(p:AreaRailProps){
     headline=g==='lean'?registration.value:`${rateText(rate??0.1)}%`;ink=g==='lean';
     caption=g==='lean'?registration.label:`of people are in the ${topName(g)} top 10%`;
     likely='';
-  }else if(v!.withheld){
-    headline='';caption=WITHHELD;likely='';
+  }else if(v!.empty){
+    headline='';caption=EMPTY;likely='';
   }else if(g==='lean'&&v!.lean){
     const registration=registrationHeadline(v!.mix);headline=registration.value;ink=true;
     caption=registration.label;
@@ -92,18 +92,20 @@ function RailA(p:AreaRailProps){
     people:summary?meta.people:v!.n,households:summary?meta.households:v!.households,
     measured:summary?(p.summary?.measuredBy?.[g]??p.summary?.measured??null):v!.measured,
   };
+  const note=v?smallNote(v.n,v.households,meta.small_area):null;
   return <div className="railA">
     <h2 className="rail-title" title={title}>{title}</h2>
     <p className="rail-sub">{sub}</p>
     <div className={cx('headline',ink&&'ink')}>{headline}</div>
-    <p className={cx('headline-cap',v?.withheld&&'note')}>{caption}</p>
+    <p className="headline-cap">{caption}</p>
     <p className="headline-likely">{likely}</p>
+    {note&&<p className="small-note">{note}</p>}
     <hr className="rule a1"/>
     <p className="eyebrow">{eyebrow}</p>
     {ROW_NAMES.map((k,i)=>{
       const r=v?.rows[i];
       const mean=summary?(p.summary as DistrictSummary)[k]:r?.mean;
-      const has=mean!==undefined&&mean!==null&&!(v?.withheld);
+      const has=mean!==undefined&&mean!==null;
       return <div className="row" key={k}>
         <div className="row-head"><span className="row-label">{INDEX_NAME[k]}</span><span className="row-value">{has?round(mean!):''}</span></div>
         <div className="row-sub">{has?(summary?'District mean':`${ordinal(r!.pct)} among ${plural} ${MIDDOT} likely ${RANGE(r!.lo,r!.hi)}`):' '}</div>
@@ -114,7 +116,7 @@ function RailA(p:AreaRailProps){
     <div className="row lean">
       <div className="row-head"><span className="row-label">Registration mix</span></div>
       <div className="row-sub">Not part of overall standing</div>
-      {!v?.withheld&&<RegistrationShares mix={summary?p.summary?.mix:v?.mix}/>}
+      {!v?.empty&&<RegistrationShares mix={summary?p.summary?.mix:v?.mix}/>}
     </div>
     <hr className="rule a3"/>
     <dl className="facts">
@@ -135,13 +137,14 @@ function RailB(p:AreaRailProps){
   else sub=v.blocks!=null?countLabel(v.blocks,'block'):'';
   const plural=LEVEL_PLURAL[p.level];
   let headline:React.ReactNode='';let caption='';let likely='';let ink=false;
-  if(v.withheld){caption=WITHHELD;}
+  if(v.empty){caption=EMPTY;}
   else if(g==='lean'&&v.lean){
     const registration=registrationHeadline(v.mix);headline=registration.value;ink=true;caption=registration.label;
   }else if(v.share){
     headline=`${shareText(v.share.value)}%`;caption=`in the ${topName(g)} top 10%, shrunk`;
     likely=`Likely ${shareText(v.share.lo)}${ENDASH}${shareText(v.share.hi)}%`;
   }
+  const note=smallNote(v.n,v.households,meta.small_area);
   const mix=v.mix;
   const segs=mix?[
     {k:'d',label:'Democrat',share:mix.d,color:'var(--reg-d)'},{k:'r',label:'Republican',share:mix.r,color:'var(--reg-r)'},
@@ -152,17 +155,18 @@ function RailB(p:AreaRailProps){
     <h2 className="rb-title" title={title}>{title}</h2>
     <p className="rb-sub">{sub}</p>
     <div className={cx('rb-headline',ink&&'ink')}>{headline}</div>
-    <p className={cx('rb-cap',v.withheld&&'note')}>{caption}</p>
+    <p className="rb-cap">{caption}</p>
     <p className="rb-likely">{likely}</p>
+    {note&&<p className="small-note">{note}</p>}
     <hr className="rule b1"/>
     {ROW_NAMES.map((k,i)=>{
       const r=v.rows[i];
       return <div className="rb-row" key={k}>
         <span className="rb-label">{INDEX_NAME[k]}</span>
         <div className="rb-line">
-          <span className="rb-value">{r&&!v.withheld?round(r.mean):''}</span>
-          <span className="rb-rowlikely">{r&&!v.withheld?`likely ${RANGE(r.lo,r.hi)}`:''}</span>
-          {r&&!v.withheld?<RangeBar variant="railB" value={r.mean} lo={r.lo} hi={r.hi}/>:<div className="rbar v-railB"/>}
+          <span className="rb-value">{r?round(r.mean):''}</span>
+          <span className="rb-rowlikely">{r?`likely ${RANGE(r.lo,r.hi)}`:''}</span>
+          {r?<RangeBar variant="railB" value={r.mean} lo={r.lo} hi={r.hi}/>:<div className="rbar v-railB"/>}
         </div>
       </div>;
     })}
@@ -173,7 +177,7 @@ function RailB(p:AreaRailProps){
       <div><dt>% measured</dt><dd>{v.measured!=null?`${round(v.measured)}%`:''}</dd></div>
     </dl>
     <hr className="rule b3"/>
-    {mix&&!v.withheld&&<>
+    {mix&&<>
       <h3 className="rb-section">Registration mix</h3>
       <div className="mixbar" role="img" aria-label="Registration mix">
         {segs.map(s=>{

@@ -22,7 +22,7 @@
   --s1:#E6F1EC;--s2:#C2E0DB;--s3:#8BC2BC;--s4:#54979B;--s5:#286D73;
   --strong-r:#BE5E43;--lean-r:#DD9E85;--centre:#E5DFDA;--lean-d:#8DACCF;--strong-d:#4978AF;
   --reg-d:#95ADCE;--reg-r:#E7A490;--reg-u:#C6C2D3;--reg-o:#F5F1E9;
-  --hatch-stripe:#C8B8E6;--hatch-base:#FAF8FC;
+  --none-fill:#FAF8FC;
 
   --shadow-overlay:0 6u 24u rgba(42,36,86,.12);
   --shadow-popover:0 8u 28u rgba(42,36,86,.14);

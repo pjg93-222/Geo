@@ -29,7 +29,8 @@ button:disabled{cursor:default}
 @keyframes shimmer{0%{background-position:120% 0}100%{background-position:-120% 0}}
 @media (prefers-reduced-motion:reduce){.sk{animation:none}}
 
-.hatch{
-  display:inline-block;flex:none;border-radius:6u;
-  background:repeating-linear-gradient(135deg,var(--hatch-stripe) 0 5u,var(--hatch-base) 5u 11u);
+/* the plain pale fill of an area with no registered people: the map fill, the legend swatch */
+.none-swatch{
+  display:inline-block;flex:none;width:26px;height:14px;margin-right:8px;vertical-align:middle;border-radius:3px;
+  background:var(--none-fill);border:1px solid var(--line);
 }

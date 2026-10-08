@@ -113,7 +113,7 @@ for(const level of ['block','precinct','tract','zip']){
     assert.equal(column.length,a.ids.length);assert.ok(column.every(Number.isFinite));
   }
   if(level!=='zip'){assert.equal(a.n.reduce((s,n)=>s+n,0),f.fixtureTotals().people);assert.equal(a.households.reduce((s,n)=>s+n,0),f.fixtureTotals().households);}
-  report.layers[level]={areas:a.ids.length,minimumPeople:Math.min(...a.n),withheld:0};
+  report.layers[level]={areas:a.ids.length,minimumPeople:Math.min(...a.n),empty:0};
 }
 report.checks=['200 deterministic profiles','8000 sampled fields and contributions','full-cohort household counts, tenure, shared facts and score reconciliation','full-cohort exclusive raw opinion categories with valid crossovers preserved','raw categorical opinion responses without back-fitting','opinion/profile invariance after cohort and balanced selection','40/35/25 composition','household reconciliation','invalid IDs rejected','complete dummy population and reversible pagination','100-row balanced view','all four no-floor synthetic layers with geometry'];
 report.totals=f.fixtureTotals();

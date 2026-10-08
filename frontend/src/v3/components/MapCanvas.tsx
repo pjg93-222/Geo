@@ -1,7 +1,7 @@
 // MapLibre canvas for the map screens (IMPLEMENTATION_PLAN 7.3). Land is a flat background; area fills are opaque and
 // colored by a per-feature bin looked up in a literal array, so an index switch only rewrites one paint expression
-// (no network, no re-tiling). Two fill layers cross-fade over 150 ms, so the map is never blank. Withheld areas get a
-// diagonal hatch. Roads are white lines over the fills; household markers appear at street zoom.
+// (no network, no re-tiling). Two fill layers cross-fade over 150 ms, so the map is never blank. Every area with registered
+// people is colored; one with none gets a plain pale fill. Roads are white lines over the fills; household markers appear at street zoom.
 import {forwardRef,useEffect,useImperativeHandle,useRef,useState} from 'react';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -9,13 +9,13 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type {AreaGeometry,StreetPoint} from '../types';
 import {getRoads} from '../api/client';
 import {uPx} from '../lib/units';
-import {BIN_PENDING,BIN_WITHHELD} from '../lib/areas';
+import {BIN_NONE,BIN_PENDING} from '../lib/areas';
 import {mark} from '../lib/timing';
 
 maplibregl.setWorkerUrl(workerUrl);
 
 export const STREET_ZOOM=15;
-const HATCH_BASE='#FAF8FC';
+const NONE_FILL='#FAF8FC';   // = --none-fill, the legend swatch of an area with no registered people
 const SKELETON='#EDE7ED';
 
 export interface MapView{zoom:number;bounds:[number,number,number,number];center:[number,number]}
@@ -43,20 +43,7 @@ export interface MapCanvasProps{
 
 function colorExpr(arr:number[],palette:string[]):maplibregl.ExpressionSpecification{
   return ['match',['at',['get','i'],['literal',arr]],
-    ...palette.flatMap((c,i)=>[i,c]),BIN_WITHHELD,HATCH_BASE,BIN_PENDING,SKELETON,SKELETON] as unknown as maplibregl.ExpressionSpecification;
-}
-function hatchOpacityExpr(arr:number[]):maplibregl.ExpressionSpecification{
-  return ['case',['==',['at',['get','i'],['literal',arr]],BIN_WITHHELD],1,0] as unknown as maplibregl.ExpressionSpecification;
-}
-function hatchImage():{width:number;height:number;data:Uint8Array}{
-  // 45 degree stripes, period 12 device px (6 css px at pixelRatio 2), stripe 6: the 11u period / 5u stripe of the render
-  const size=12;const data=new Uint8Array(size*size*4);
-  const [r,g,b]=[0xC8,0xB8,0xE6];
-  for(let y=0;y<size;y++)for(let x=0;x<size;x++){
-    const on=((x+y)%size)<5.4;const o=(y*size+x)*4;
-    data[o]=r;data[o+1]=g;data[o+2]=b;data[o+3]=on?255:0;
-  }
-  return {width:size,height:size,data};
+    ...palette.flatMap((c,i)=>[i,c]),BIN_NONE,NONE_FILL,BIN_PENDING,SKELETON,SKELETON] as unknown as maplibregl.ExpressionSpecification;
 }
 const empty:GeoJSON.FeatureCollection={type:'FeatureCollection',features:[]};
 
@@ -100,7 +87,6 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
     const road=(base:number,extra=0)=>['interpolate',['exponential',2],['zoom'],10,base+extra,12,base*1.5+extra,14,base*3+extra,16,base*7+extra,18,base*22+extra] as unknown as maplibregl.ExpressionSpecification;
     const casing=(base:number)=>road(base,3*u);
     m.on('load',()=>{
-      m.addImage('hatch',hatchImage(),{pixelRatio:2});
       m.addSource('areas',{type:'geojson',data:empty,tolerance:0.2,buffer:16});
       m.addSource('district',{type:'geojson',data:empty});
       m.addSource('roads',{type:'geojson',data:empty,tolerance:0.3});
@@ -111,7 +97,6 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
         m.addLayer({id:'fill-'+id,type:'fill',source:'areas',maxzoom:STREET_ZOOM,
           paint:{'fill-color':idle,'fill-opacity':id==='a'?1:0,'fill-antialias':false,'fill-opacity-transition':{duration:0,delay:0}}});
       }
-      m.addLayer({id:'hatch',type:'fill',source:'areas',maxzoom:STREET_ZOOM,paint:{'fill-pattern':'hatch','fill-opacity':hatchOpacityExpr([]),'fill-antialias':false}});
       const kinds:[string,number][]=[['S1400',1.5*u*1.15],['S1200',3*u],['S1100',4*u]];
       for(const [kind,base] of kinds){
         m.addLayer({id:'casing-'+kind,type:'line',source:'roads',minzoom:14,filter:['==',['get','kind'],kind],layout:{'line-cap':'round','line-join':'round'},
@@ -180,12 +165,10 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
     if(!props.bins){
       // cold load: the shapes draw at once in the skeleton color
       for(const id of bothLayers)m.setPaintProperty('fill-'+id,'fill-color',SKELETON);
-      m.setPaintProperty('hatch','fill-opacity',0);
       return;
     }
     const arr=Array.from(props.bins);
     const expr=colorExpr(arr,props.palette);
-    m.setPaintProperty('hatch','fill-opacity',hatchOpacityExpr(arr));
     const animate=painted.current&&lastGeom.current===props.geometry&&!!props.geometry;
     lastGeom.current=props.geometry;
     const topNow=front.current;
@@ -204,7 +187,7 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
     }
     const back=topNow==='a'?'b':'a';
     m.setPaintProperty('fill-'+back,'fill-color',expr);
-    m.moveLayer('fill-'+back,'hatch');
+    m.moveLayer('fill-'+back,'casing-S1400');
     m.setPaintProperty('fill-'+back,'fill-opacity-transition',{duration:150,delay:0});
     m.setPaintProperty('fill-'+back,'fill-opacity',1);
     mark('colors-set');

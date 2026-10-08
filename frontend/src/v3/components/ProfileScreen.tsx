@@ -5,6 +5,7 @@ import {ChevronDown,ChevronRight} from 'lucide-react';
 import {PageHeader,Link} from './Header';
 import {GradeBox,RangeBar,Sk,ValueBar,cx} from './ui';
 import {describeOpinions} from '../lib/opinions';
+import {smallNote} from '../lib/areas';
 import type {AreaRef,CandidateInfo,FieldGroup,IndexCard,Meta,Profile} from '../types';
 import {ENDASH,MIDDOT,RANGE,areaLabel,blockLabel,leanBand,ordinal,precinctLabel,raceModeText,round,signed,REG_LABEL,shareText,int} from '../lib/format';
 import {getProfile} from '../api/client';
@@ -15,7 +16,6 @@ import type {Route} from '../lib/router';
 function backTarget():string{
   try{return '/people'+(sessionStorage.getItem('v3.people.query')||'');}catch{return '/people';}
 }
-const WITHHELD='Withheld · under 20 people or 10 households';
 
 export function ProfileScreen({meta,route}:{meta:Meta|null;route:Route}){
   const [p,setP]=useState<Profile|null>(null);
@@ -31,7 +31,7 @@ export function ProfileScreen({meta,route}:{meta:Meta|null;route:Route}){
   return <div className="screen profile-screen">
     <PageHeader meta={meta} active="people"/>
     <main className="profile">
-      {error?<div className="page-error" role="alert">{error}<p><Link to="/people" className="back-link">← People</Link></p></div>:p?<Body p={p} candidate={meta?.candidate}/>:<ProfileSkeleton/>}
+      {error?<div className="page-error" role="alert">{error}<p><Link to="/people" className="back-link">← People</Link></p></div>:p?<Body p={p} candidate={meta?.candidate} small={meta?.small_area}/>:<ProfileSkeleton/>}
     </main>
   </div>;
 }
@@ -44,7 +44,7 @@ function ProfileSkeleton(){
   </div>;
 }
 
-function Body({p,candidate}:{p:Profile;candidate?:CandidateInfo}){
+function Body({p,candidate,small}:{p:Profile;candidate?:CandidateInfo;small?:Meta['small_area']}){
   const reg=p.registration_label??REG_LABEL[p.registration]??'Unknown';
   const opinions=describeOpinions(p.groups.find(g=>g.id==='lean')?.fields??[]);
   const [open,setOpen]=useState<Record<string,boolean>>({cua:true,part:false,soi:false,lean:false});
@@ -119,8 +119,8 @@ function Body({p,candidate}:{p:Profile;candidate?:CandidateInfo}){
         </section>
         <section className="context" aria-label="Area context">
           <h2 className="section-title sm">Area context</h2>
-          <ContextRow a={p.area_context.block}/>
-          <ContextRow a={p.area_context.precinct}/>
+          <ContextRow a={p.area_context.block} small={small}/>
+          <ContextRow a={p.area_context.precinct} small={small}/>
         </section>
       </div>
     </div>
@@ -179,16 +179,18 @@ function Group({g,open,onToggle}:{g:FieldGroup;open:boolean;onToggle:()=>void}){
   </div>;
 }
 
-function ContextRow({a}:{a:AreaRef}){
+function ContextRow({a,small}:{a:AreaRef;small?:Meta['small_area']}){
   if(!a.id)return <div className="ctx-row"><div className="ctx-text"><div className="ac-row">{a.level==='block'?'Census block':'Precinct'}</div><div className="ac-sub">Not supplied</div></div></div>;
+  const note=smallNote(a.n,a.households,small);
   return <div className="ctx-row">
     <div className="ctx-text">
       <div className="ac-row">{a.label||areaLabel(a.level,a.id)}</div>
-      <div className="ac-sub">{a.withheld?WITHHELD:`${ordinal(a.pct!)} ${MIDDOT} ${shareText(a.top10!)}% in top 10%`}</div>
+      <div className="ac-sub">{a.pct!=null&&a.top10!=null?`${ordinal(a.pct)} ${MIDDOT} ${shareText(a.top10)}% in top 10%`:' '}</div>
+      {note&&<div className="ac-sub">{note}</div>}
     </div>
-    {a.withheld?<i className="hatch ctx-hatch"/>:<div className="strip" role="img" aria-label="Position among areas">
+    {a.pct!=null&&<div className="strip" role="img" aria-label="Position among areas">
       {['s1','s2','s3','s4','s5'].map(s=><i key={s} style={{background:`var(--${s})`}}/>)}
-      <b style={{left:`${Math.max(0,Math.min(100,a.pct!))}%`}}/>
+      <b style={{left:`${Math.max(0,Math.min(100,a.pct))}%`}}/>
     </div>}
   </div>;
 }

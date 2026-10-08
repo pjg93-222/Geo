@@ -48,6 +48,18 @@ test('local dataset labeling replaces the test preview',()=>{
  assert.ok(header.includes('Local dataset'));
  assert.ok(!header.includes('Test-dummy preview'));
  const legend=readFileSync(path.join(root,'components/MapParts.tsx'),'utf8');
- assert.ok(legend.includes('p.floors?.min_n'));
- assert.ok(legend.includes('Withheld'));
+ assert.ok(legend.includes('No registered people'));
+ assert.ok(!legend.includes('Withheld'));
+});
+
+test('nothing is withheld: no withholding wording, hatch or floors in any v3 string or stylesheet',()=>{
+ const WITHHOLD=/withh[eo]ld|\bhatch\b|suppress|minimum-count|published area|\bfloors\b/i;
+ const bad:string[]=[];
+ for(const f of files)for(const s of strings(readFileSync(f,'utf8')))if(WITHHOLD.test(s))bad.push(`${path.relative(root,f)}: ${s.slice(0,80)}`);
+ const styles=path.join(root,'styles');
+ for(const n of readdirSync(styles))if(n.endsWith('.css')&&WITHHOLD.test(readFileSync(path.join(styles,n),'utf8')))bad.push(`styles/${n}`);
+ assert.deepEqual(bad,[]);
+ const rail=readFileSync(path.join(root,'components/AreaRail.tsx'),'utf8');
+ assert.ok(rail.includes('No registered people'),'an area with no registered people says so');
+ assert.ok(rail.includes('smallNote('),'a small area carries the note');
 });
