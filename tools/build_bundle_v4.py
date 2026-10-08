@@ -445,7 +445,13 @@ def build(args, log):
         import pyogrio
         frame = pyogrio.read_dataframe(args.blocks_gpkg, where='geoid IN (%s)' % ','.join(
             "'%s'" % i for i in missing_blocks))
-        for ident, geom in zip(frame['geoid'].tolist(), frame.geometry.tolist()):
+        found = dict(zip(frame['geoid'].tolist(), frame.geometry.tolist()))
+        if d['id'] != 'co-05':      # a district's blocks.gpkg holds only the blocks touching it: a published block registered outside it is read from the state file
+            from tools import prepare_geography
+            rest = [i for i in missing_blocks if i in published_ids['block'] and i not in found]
+            if rest:
+                found.update(prepare_geography.blocks_from_source(Path(args.blocks_gpkg).with_name('blocks.zip'), d, rest))
+        for ident, geom in found.items():
             added[ident] = geom
             block_geoms[ident] = geom
             geometry['block'][ident] = feature(ident, geom)

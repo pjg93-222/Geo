@@ -74,6 +74,50 @@ class RecodeBlocksTests(unittest.TestCase):
         self.assertEqual(len(aliases), counts['aliases'])
 
 
+def write_shapefile_zip(frame, path):
+    """A zipped shapefile of `frame` at `path` (what the Census block and county downloads are)."""
+    folder = Path(tempfile.mkdtemp(dir=path.parent))
+    frame.to_file(folder / 'layer.shp')
+    with zipfile.ZipFile(path, 'w') as archive:
+        for part in sorted(folder.iterdir()):
+            archive.write(part, part.name)
+
+
+class BlocksFromSourceTests(unittest.TestCase):
+    """Part B: a published block registered outside the district is read from the state block file, not blocks.gpkg."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup)
+
+    def source(self, rows):
+        cols = ['GEOID20', 'TRACTCE20', 'BLOCKCE20', 'INTPTLON20', 'INTPTLAT20']
+        geoms = [box(x - .01, y - .01, x + .01, y + .01) for _, _, _, x, y in rows]
+        frame = gpd.GeoDataFrame([(g, g[5:11], g[11:], '%+.7f' % x, '%+.7f' % y) for g, _, _, x, y in rows], columns=cols,
+                                 geometry=geoms, crs=4326)
+        write_shapefile_zip(frame, self.root / 'blocks.zip')
+        return self.root / 'blocks.zip'
+
+    def test_oregon_blocks_are_found_by_their_geoid(self):
+        zipped = self.source([('410050001001001', 0, 0, .5, .5), ('410050001001002', 0, 0, .6, .5), ('410050002001001', 0, 0, .7, .5)])
+        found = prepare_geography.blocks_from_source(zipped, D.get('or-05'), ['410050001001002', '410050002001001', '419999999999999'])
+        self.assertEqual(sorted(found), ['410050001001002', '410050002001001'])
+        self.assertTrue(all(g.geom_type == 'Polygon' for g in found.values()))
+
+    def test_connecticut_blocks_are_found_by_their_region_id(self):
+        zipped = self.source([('090010462201013', 0, 0, .5, .5), ('090010462201014', 0, 0, 1.5, .5), ('090030462201013', 0, 0, 1.5, .6)])
+        regions = gpd.GeoDataFrame({'STATEFP': ['09', '09'], 'COUNTYFP': ['110', '130']}, geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)], crs=4326)
+        write_shapefile_zip(regions, self.root / 'county.zip')
+        with patch.object(prepare_geography, 'COUNTIES', self.root / 'county.zip'):
+            found = prepare_geography.blocks_from_source(zipped, D.get('ct-01'), ['091100462201013', '091300462201013', '091100462201099'])
+        self.assertEqual(sorted(found), ['091100462201013', '091300462201013'])      # the same tract and block number in two regions
+
+    def test_nothing_found_is_an_empty_answer(self):
+        zipped = self.source([('410050001001001', 0, 0, .5, .5)])
+        self.assertEqual(prepare_geography.blocks_from_source(zipped, D.get('or-05'), ['410059999999999']), {})
+
+
 class DistrictShapeTests(unittest.TestCase):
     def test_union_of_the_districts_rows_and_failure_when_missing(self):
         frame = gpd.GeoDataFrame({'STATEFP': ['41', '41', '41', '09'], 'CD119FP': ['05', '05', '04', '05']},

@@ -120,6 +120,21 @@ def alias_map(blocks):
     return dict(zip(blocks.geoid[alias], blocks.geoid[~alias].loc[blocks.index[alias]]))
 
 
+def blocks_from_source(blocks_zip, d, ids):
+    """{geoid: geometry} (EPSG:4326) of the table blocks `ids` that a district's blocks.gpkg lacks (it keeps only the blocks
+    touching the district), read from the state block file; Connecticut ids are re-coded by region as in prepare_district."""
+    where = 'TRACTCE20 IN (%s) AND BLOCKCE20 IN (%s)' % tuple(
+        ','.join("'%s'" % x for x in sorted({i[a:b] for i in ids})) for a, b in ((5, 11), (11, 15)))
+    blocks = gpd.read_file(blocks_zip, where=where).to_crs(4326)
+    if blocks.empty:
+        return {}
+    if d['block_regions']:
+        blocks, _ = recode_blocks(blocks, gpd.read_file(COUNTIES, where="STATEFP = '%s'" % d['state_fips']).to_crs(4326), d['state_fips'])
+    else:
+        blocks = blocks.assign(geoid=blocks.GEOID20.astype(str))
+    return {g: geom for g, geom in zip(blocks.geoid, blocks.geometry) if g in set(ids)}
+
+
 def join_receipt(csv_path, geoids):
     """{column: {rows, blank, joined, rate}} for the two block-id columns of a source CSV (counts only); rate is
     joined / non-blank rows."""
