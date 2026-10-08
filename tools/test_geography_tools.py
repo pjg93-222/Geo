@@ -492,6 +492,15 @@ class PseudoAreaTests(unittest.TestCase):
         self.assertEqual((other['area_pct'], other['band']), (50.0, 3))                   # a level with no dropped area is untouched
         self.assertEqual(build_bundle_v4.rerank_after_drop(kept, {}), {})
 
+    def test_blocks_read_from_the_state_file_are_the_published_ones_and_those_of_a_bare_published_tract(self):
+        t1, t2, t3, t4 = ('09110%06d' % n for n in (1, 2, 3, 4))
+        missing = [t1 + '1001', t2 + '1001', t2 + '1002', t3 + '1001', t4 + '1001']
+        # t1: a published block is missing; t2: published tract, no polygon at all; t3: tract not published; t4: published
+        # tract that already has a block polygon
+        read = build_bundle_v4.blocks_to_read_from_source(missing, {t4 + '2001'}, {t1 + '1001'}, {t1, t2, t4})
+        self.assertEqual(read, [t1 + '1001', t2 + '1001', t2 + '1002'])
+        self.assertEqual(build_bundle_v4.blocks_to_read_from_source([], set(), set(), {t2}), [])
+
     def test_colorado_ids_all_stay(self):
         area = [self.row('block', '080410001001001'), self.row('precinct', '0804100621'), self.row('tract', '08041000102'),
                 self.row('zip', '80916')]

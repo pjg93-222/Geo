@@ -140,6 +140,13 @@ def rerank_after_drop(area_rows, dropped):
     return changed
 
 
+def blocks_to_read_from_source(missing, have, published_blocks, published_tracts):
+    """The table blocks of `missing` (no polygon yet) to read from the state block file: the published ones, and every block
+    of a published tract that no block in `have` or in the published blocks covers (a tract needs a polygon too)."""
+    bare = published_tracts - {i[:11] for i in set(have) | set(published_blocks)}
+    return [i for i in missing if i in published_blocks or i[:11] in bare]
+
+
 def check_area_table(columns, rows, suppressed, receipt, dropped=None):
     dropped = dropped or {}
     published = {}
@@ -446,9 +453,11 @@ def build(args, log):
         frame = pyogrio.read_dataframe(args.blocks_gpkg, where='geoid IN (%s)' % ','.join(
             "'%s'" % i for i in missing_blocks))
         found = dict(zip(frame['geoid'].tolist(), frame.geometry.tolist()))
-        if d['id'] != 'co-05':      # a district's blocks.gpkg holds only the blocks touching it: a published block registered outside it is read from the state file
+        if d['id'] != 'co-05':      # a district's blocks.gpkg holds only the blocks touching it: a published block registered outside it,
+            # and the table blocks of a published tract that would otherwise have none, are read from the state file
             from tools import prepare_geography
-            rest = [i for i in missing_blocks if i in published_ids['block'] and i not in found]
+            rest = blocks_to_read_from_source([i for i in missing_blocks if i not in found],
+                                              set(block_geoms) | set(found), published_ids['block'], published_ids['tract'])
             if rest:
                 found.update(prepare_geography.blocks_from_source(Path(args.blocks_gpkg).with_name('blocks.zip'), d, rest))
         for ident, geom in found.items():
