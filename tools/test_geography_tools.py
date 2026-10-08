@@ -345,10 +345,15 @@ class SnapshotKeyTests(unittest.TestCase):
         self.assertRegex(manifest['snapshot'], r'^or-cd005-[a-f0-9]{12}$')
         self.assertTrue(build_bundle_v4.apply_v4_manifest({}, [], {}, **kwargs)['snapshot'].startswith('co-cd005-'))
 
-    def test_district_pins_fail_closed_until_set(self):
+    def test_district_pins_are_each_districts_own_freeze(self):
         self.assertIs(AL.FROZEN_SHA256_BY_DISTRICT['co-05'], AL.FROZEN_SHA256)
         self.assertEqual(set(AL.FROZEN_SHA256_BY_DISTRICT), set(D.DISTRICTS))
-        self.assertIsNone(AL.FROZEN_SHA256_BY_DISTRICT['or-05'])
+        for district in ('or-05', 'ct-01'):
+            pin = AL.FROZEN_SHA256_BY_DISTRICT[district]
+            self.assertEqual(set(pin), set(AL.FROZEN_SHA256))
+            self.assertTrue(all(AL.HEX64.fullmatch(sha) for sha in pin.values()))
+            self.assertNotEqual(pin, AL.FROZEN_SHA256)
+        self.assertNotEqual(AL.FROZEN_SHA256_BY_DISTRICT['or-05'], AL.FROZEN_SHA256_BY_DISTRICT['ct-01'])
 
 
 class ZctaCleanTests(unittest.TestCase):

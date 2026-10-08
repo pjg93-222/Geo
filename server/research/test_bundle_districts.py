@@ -120,6 +120,13 @@ class DistrictBundleTests(SimpleTestCase):
             self.reject(lambda p: None, message=message, pin=pin)
         self.assertIs(AL.FROZEN_SHA256_BY_DISTRICT['co-05'], AL.FROZEN_SHA256)
 
+    def test_a_wrong_freeze_is_refused_against_the_real_district_pins(self):
+        # self.oregon claims Colorado's three frozen shas; Oregon's real pin must still refuse it, and so must Connecticut's.
+        self.reject(lambda p: None, message='frozen', pin=AL.FROZEN_SHA256_BY_DISTRICT['or-05'])
+        with self.assertRaises(ValueError) as caught:
+            validate_as(OR, copy.deepcopy(self.oregon), pin=AL.FROZEN_SHA256_BY_DISTRICT['ct-01'])
+        self.assertIn('frozen', str(caught.exception))
+
 
 class DistrictMetaTests(SimpleTestCase):
     @classmethod

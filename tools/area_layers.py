@@ -15,9 +15,21 @@ FROZEN_SHA256 = {
     'plan_sha256': 'f1ffa1a097605c781e8b6eaa65641308e7ec192f983de96f01b13db7d3da5e3a',
     'criteria_sha256': '114a051cdbf2ed00fccb94ab44551a1592e570354c06c66d9dac7eacd0aeb90b',
 }
-# The district's own freeze (Phase 3b re-freezes rowfw on each district's data). None fails closed: the builder and the
-# validator reject a bundle for a district until its three shas are pinned here after its freeze.
-FROZEN_SHA256_BY_DISTRICT = {'co-05': FROZEN_SHA256, 'or-05': None, 'ct-01': None}
+# The district's own freeze (Phase 3b re-freezes rowfw on each district's data), pinned from its PLAN.receipt.json. A
+# district without an entry (None) fails closed: the builder and the validator reject its bundle until it is pinned here.
+FROZEN_SHA256_BY_DISTRICT = {
+    'co-05': FROZEN_SHA256,
+    'or-05': {
+        'framework_config_sha256': 'e8499d0a9a371adc6871eda658089ddf6f109067721f4a7110c0b13adfb12540',
+        'plan_sha256': '7645762d4e17aa2a023b780e64a63aa8459c124e4c6ff5d439fb96f0b1fd856a',
+        'criteria_sha256': '55ffd72049c3fb7416576441da6406d854c6198f38143ed9d948aaa6cc6b1dd4',
+    },
+    'ct-01': {
+        'framework_config_sha256': '0df70c9d47df8ce87d43ae6a022c292a242d2facecac046d0d3bfb15a138d33c',
+        'plan_sha256': '81249df41506a6c836fffb3fa9c620e4b4d2cebfd9ad3a188a4e4c1266e63530',
+        'criteria_sha256': '579f6a53787b3d747f2507b5ce7eea73737c78cc4e10e362492d4755e6d03fd3',
+    },
+}
 GROUPS = ('ovr', 'cua', 'part', 'soi', 'lean')
 INDEX_GROUPS = ('ovr', 'cua', 'part', 'soi')
 BASIS_LEVELS = {'registration': ('block', 'precinct', 'tract', 'zip'), 'residence': ('tract', 'zip')}
