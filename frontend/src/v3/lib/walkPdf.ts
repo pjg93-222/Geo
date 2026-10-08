@@ -423,8 +423,8 @@ function drawCover(doc:jsPDF,payload:WalkListPayload,area:string,scores?:WalkSco
 const WIDTH={address:80,phone:74,pri:30,gen:30,abs:34,party:36,age:28,gender:44,reg:58,s:20,u:20,o:20,gap:14,nh:26,mv:26};
 const KEYS=['address','name','phone','pri','gen','abs','party','age','gender','reg','s','u','o','gap','nh','mv'] as const;
 const SCORE_AT=10,SCORE_WIDTH=24;   // the score columns (when printed) sit after Reg. Date, before the result boxes
-const SCORE_HEAD:Record<ScoreKey,string>={ovr:'Ovr',sup:'Sup',part:'Part'};
-const SCORE_WORDS:Record<ScoreKey,string>={ovr:'Ovr overall',sup:'Sup candidate support',part:'Part participation'};
+const SCORE_HEAD:Record<ScoreKey,string>={ovr:'Ovr',sup:'Sup',part:'Part',push:'Push'};
+const SCORE_WORDS:Record<ScoreKey,string>={ovr:'Ovr overall',sup:'Sup candidate support',part:'Part participation',push:'Push needs a push'};
 interface RowMeta{approx:boolean;cont:boolean}
 
 function drawRunTitle(doc:jsPDF,run:WalkRun,total:number,cont:boolean):void {

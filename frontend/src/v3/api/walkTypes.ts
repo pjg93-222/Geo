@@ -88,5 +88,5 @@ export interface WalkPlan {
 }
 export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number }
 
-// POST /api/v3/walk/scores {ids} -> {scores}; `sup` only in candidate districts. Whole numbers, for the printed list.
-export interface WalkScores { scores: Record<string, { ovr: number; part: number; sup?: number }> }
+// POST /api/v3/walk/scores {ids} -> {scores}; `sup` and `push` (Needs a push) only in candidate districts. Whole numbers, for the printed list.
+export interface WalkScores { scores: Record<string, { ovr: number; part: number; sup?: number; push?: number }> }

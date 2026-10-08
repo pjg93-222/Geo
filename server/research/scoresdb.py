@@ -12,6 +12,7 @@ import re
 import sqlite3
 import threading
 import zlib
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -103,6 +104,32 @@ class StoreInfo:
         self._balanced_lock = threading.Lock()
         self._outlooks = None
         self._outlook_lock = threading.Lock()
+        self._push = None
+        self._push_lock = threading.Lock()
+
+    def push(self):
+        """(push 0..100 per person in pos order, positions from the highest push down with ties by position, the push
+        values ascending) of a candidate district: field_labels.push of the stored support and participation standings,
+        worked out on first use, so the store needs no rebuild."""
+        if self._push is None:
+            with self._push_lock:
+                if self._push is None:
+                    conn = _open(self.path)
+                    try:
+                        standings = np.fromiter(chain.from_iterable(conn.execute(
+                            'SELECT s.sup_pct, p.part_pct FROM support s JOIN person p ON p.pos = s.pos ORDER BY s.pos')),
+                            dtype=np.float64).reshape(-1, 2)
+                    finally:
+                        conn.close()
+                    if len(standings) != self.n:
+                        raise StoreError('The support table does not cover every person')
+                    value = FL.push(standings[:, 0], standings[:, 1])
+                    order = np.lexsort((np.arange(len(value)), -value)).astype(np.int32)
+                    ascending = np.sort(value)
+                    for array in (value, order, ascending):
+                        array.flags.writeable = False
+                    self._push = value, order, ascending
+        return self._push
 
     def outlook_codes(self):
         """One cached category per stored evidence row; never derive views from the lean score.

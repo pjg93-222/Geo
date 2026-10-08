@@ -40,9 +40,9 @@
 .people .thead,.people .trow{grid-template-columns:56px minmax(155px,1.1fr) minmax(235px,1.5fr) 100px 112px 80px minmax(166px,1.1fr) 72px minmax(160px,1fr);min-width:1236px;font-size:14px}
 .people .thead{height:56px}.people .trow{min-height:52px;height:52px}
 .people .tbody{min-width:1236px}
-/* a candidate district adds the Candidate support column after Alignment */
-.people .table.has-sup .thead,.people .table.has-sup .trow{grid-template-columns:56px minmax(155px,1.1fr) minmax(235px,1.5fr) 100px 112px 112px 80px minmax(166px,1.1fr) 72px minmax(160px,1fr);min-width:1348px}
-.people .table.has-sup .tbody,.people .table.has-sup .tfoot{min-width:1348px}
+/* a candidate district adds the Candidate support column after Alignment and Needs a push after Participation */
+.people .table.has-sup .thead,.people .table.has-sup .trow{grid-template-columns:56px minmax(155px,1.1fr) minmax(235px,1.5fr) 100px 112px 112px 100px 80px minmax(166px,1.1fr) 72px minmax(160px,1fr);min-width:1448px}
+.people .table.has-sup .tbody,.people .table.has-sup .tfoot{min-width:1448px}
 .people .thead>span,.people .trow>span{padding:0 12px!important;white-space:normal;line-height:1.35}
 .people .thead>span{font-size:12px}.people .c-name{font-size:14px}.people .c-overall{gap:10px}
 .people .c-overall b{min-width:24px}.people .c-overall em{font-size:12px;white-space:nowrap}

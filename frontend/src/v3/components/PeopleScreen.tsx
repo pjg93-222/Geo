@@ -10,6 +10,7 @@ import {LEVELS,LEVEL_LABEL,areaLabel,type Level} from '../lib/format';
 import {getAreas,getPeople} from '../api/client';
 import {begin,endAfterPaint} from '../lib/timing';
 import {replaceQuery,type Route} from '../lib/router';
+import {PRESET_WORDS} from '../lib/plan';
 
 const REG:{id:PeopleQuery['reg'];label:string}[]=[
   {id:'all',label:'All'},{id:'D',label:'Democrat'},{id:'R',label:'Republican'},{id:'U',label:'Unaffiliated'},{id:'O',label:'Other'}];
@@ -17,7 +18,7 @@ const GRADE:{id:PeopleQuery['grade'];label:string}[]=[{id:'ABCD',label:`A${ENDAS
 const LEAN:{id:PeopleQuery['lean'];label:string}[]=[
   {id:'all',label:'All'},{id:'-2',label:'Very conservative'},{id:'-1',label:'Somewhat conservative'},{id:'0',label:'Middle outlook'},{id:'1',label:'Somewhat liberal'},
   {id:'2',label:'Very liberal'},{id:'U',label:'Unknown / multiple responses'}];
-const SORT:{id:string;label:string}[]=[{id:'ovr',label:'Overall standing'},{id:'sup',label:'Candidate support'}];
+const SORT:{id:string;label:string}[]=[{id:'ovr',label:'Overall standing'},{id:'sup',label:'Candidate support'},{id:'push',label:'Needs a push'}];
 const LEAN_KEY:Record<string,string>={'-2':'strong-r','-1':'lean-r','0':'centre','1':'lean-d','2':'strong-d'};
 const STORE='v3.people.query';
 
@@ -27,7 +28,7 @@ function fromRoute(q:URLSearchParams):PeopleQuery{
   return {
     reg:reg&&REG.some(r=>r.id===reg)?reg:'all',grade:grade==='AB'?'AB':'ABCD',lean:lean&&LEAN.some(l=>l.id===lean)?lean:'all',
     level:level&&LEVELS.includes(level)?level:'',area:level?q.get('area')??'':'',balanced:q.get('balanced')==='1',after:q.get('after')??'',dir:q.get('dir')==='prev'?'prev':'next',
-    sort:q.get('sort')==='sup'?'sup':'',
+    sort:q.get('sort')==='sup'||q.get('sort')==='push'?q.get('sort') as 'sup'|'push':'',
   };
 }
 
@@ -112,7 +113,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   const areaShown=q.level&&q.area?(areaOpts?.find(o=>o.id===areaValue)?.label??areaLabel(q.level,q.area)):`All of ${meta?.district_label??'Congressional District 5'}`;
 
   const sup=meta?.weights.sup!==undefined;      // a candidate district whose overall counts candidate support
-  const sorted=q.sort==='sup'?'candidate support':'overall standing';
+  const sorted=q.sort==='sup'?'candidate support':q.sort==='push'?'Needs a push':'overall standing';
   const sub=`${meta?int(meta.people):''} people ${MIDDOT} ${weightsText(meta?.weights)}`;
   const pagerText=page?`${int(page.first)}${page.first===page.last?'':ENDASH+int(page.last)} of ${int(page.total)}`:'';
 
@@ -124,7 +125,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
       {meta?.overall_note&&<p className="page-sub">{meta.overall_note}</p>}
       <div className="filters">
         <Select label="Registration" shown={REG.find(r=>r.id===q.reg)!.label} value={q.reg} options={REG} onChange={v=>change({reg:v as PeopleQuery['reg']})}/>
-        {sup&&<Select label="Sort" shown={q.sort==='sup'?'Candidate support':'Overall standing'} value={q.sort||'ovr'} options={SORT} onChange={v=>change({sort:v==='sup'?'sup':''})}/>}
+        {sup&&<Select label="Sort" shown={SORT.find(o=>o.id===(q.sort||'ovr'))!.label} value={q.sort||'ovr'} options={SORT} onChange={v=>change({sort:v==='sup'||v==='push'?v:''})}/>}
         <Select label="Grade" shown={GRADE.find(r=>r.id===q.grade)!.label} value={q.grade} options={GRADE} onChange={v=>change({grade:v as PeopleQuery['grade']})}/>
         <Select label="Outlook" shown={LEAN.find(r=>r.id===q.lean)!.label} value={q.lean} options={LEAN} onChange={v=>change({lean:v as PeopleQuery['lean']})}/>
         <div className="select-area" onPointerDown={loadAreas} onFocus={loadAreas}>
@@ -157,7 +158,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
       <p className="scroll-hint">Scroll the table sideways to see all columns.</p>
       <section className={cx('table',sup&&'has-sup')} aria-label={`People ranked by ${sorted}`} aria-busy={busy}>
         <div className="thead">
-          <span>Rank</span><span>Name</span><span>Overall standing</span><span className="r">Alignment</span>{sup&&<span className="r">Candidate support</span>}<span className="r">Participation</span>
+          <span>Rank</span><span>Name</span><span>Overall standing</span><span className="r">Alignment</span>{sup&&<span className="r">Candidate support</span>}<span className="r">Participation</span>{sup&&<span className="r" title={PRESET_WORDS.push}>Needs a push</span>}
           <span className="r">Sphere</span><span>Political outlook</span><span title="Data coverage grade">Data grade</span><span>Percentile within registration</span>
         </div>
         <div className="tbody">
@@ -181,7 +182,7 @@ function Row({r,sup}:{r:PeopleRow;sup:boolean}){
     <span className="c-rank">{r.rank}</span>
     <span className="c-name" title={r.name}>{r.name}</span>
     <span className="c-overall"><b>{round(r.ovr_pct)}</b><RangeBar variant="table" value={r.ovr_pct} lo={r.lo} hi={r.hi}/><em>{RANGE(r.lo,r.hi)}</em></span>
-    <span className="c-num r">{round(r.cua_pct)}</span>{sup&&<span className="c-num r">{r.sup_pct==null?'':round(r.sup_pct)}</span>}<span className="c-num r">{round(r.part_pct)}</span><span className="c-num r">{round(r.soi_pct)}</span>
+    <span className="c-num r">{round(r.cua_pct)}</span>{sup&&<span className="c-num r">{r.sup_pct==null?'':round(r.sup_pct)}</span>}<span className="c-num r">{round(r.part_pct)}</span>{sup&&<span className="c-num r">{r.push==null?'':round(r.push)}</span>}<span className="c-num r">{round(r.soi_pct)}</span>
     <span className="c-lean" title={r.lean_label}>{r.lean_label}</span>
     <span className="c-grade"><GradeBox grade={r.ovr_grade} size="md"/></span>
     <span className="c-within">{ordinal(r.within_pct)} {MIDDOT} {r.within_group}</span>
@@ -190,6 +191,6 @@ function Row({r,sup}:{r:PeopleRow;sup:boolean}){
 function SkeletonRow({sup}:{sup:boolean}){
   return <div className="trow sk-row" aria-hidden="true">
     <span><Sk w={30} h={14}/></span><span><Sk w={200} h={14}/></span><span><Sk w={80} h={14}/></span>
-    <span className="r"/>{sup&&<span className="r"/>}<span className="r"/><span className="r"/><span/><span/><span/>
+    <span className="r"/>{sup&&<span className="r"/>}<span className="r"/>{sup&&<span className="r"/>}<span className="r"/><span/><span/><span/>
   </div>;
 }

@@ -96,10 +96,15 @@ export const CSV_COLUMNS=['Stop','Precinct','Street','Side','Address','Unit','Na
 
 // Printed scores (the Print scores toggle, off by default): whole numbers from 0 to 100 from POST /api/v3/walk/scores, by person id.
 export type WalkScoreMap=WalkScores['scores'];
-export const SCORE_NAMES={ovr:'Overall',sup:'Candidate support',part:'Participation'} as const;
+export const SCORE_NAMES={ovr:'Overall',sup:'Candidate support',part:'Participation',push:'Needs a push'} as const;
 export type ScoreKey=keyof typeof SCORE_NAMES;
-/** The score columns of a printed list: overall and participation, and candidate support when anyone listed has a support score (Colorado has none). None without scores. */
-export const scoreColumns=(scores?:WalkScoreMap):ScoreKey[]=>!scores?[]:Object.values(scores).some(s=>s.sup!=null)?['ovr','sup','part']:['ovr','part'];
+/** The score columns of a printed list: overall and participation, candidate support when anyone listed has a support score, then Needs a push when anyone has
+ *  one (Colorado has neither). None without scores. */
+export const scoreColumns=(scores?:WalkScoreMap):ScoreKey[]=>{
+  if(!scores)return [];
+  const has=(k:'sup'|'push')=>Object.values(scores).some(s=>s[k]!=null);
+  return ['ovr',...has('sup')?['sup' as const]:[],'part',...has('push')?['push' as const]:[]];
+};
 /** One person's score as text; blank when the person has none. */
 export function scoreCell(scores:WalkScoreMap|undefined,id:string,key:ScoreKey):string{
   const v=scores&&Object.hasOwn(scores,id)?scores[id][key]:undefined;

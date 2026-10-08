@@ -50,7 +50,8 @@ test('scores come in requests of at most 1,500 ids', () => {
 test('wording: the race, and a plain explanation for each preset the server offers (no advisory words)', () => {
   const ADVISORY = /\b(prospect|prospects|target|targets|targeting|best|recommend|recommended|priority|priorities|should|ideal|worth|likely to join|persuad|persuasion|convert|opportunity|high[- ]value|insufficient evidence)\b/i;
   assert.equal(raceWords('general'), 'General election'); assert.equal(raceWords('primary'), 'Primary election'); assert.equal(raceWords(undefined), 'General election');
-  assert.deepEqual(Object.keys(PRESET_WORDS).sort(), ['identify', 'mixed', 'turnout']);
+  assert.deepEqual(Object.keys(PRESET_WORDS).sort(), ['identify', 'mixed', 'push', 'turnout']);
+  assert.equal(PRESET_WORDS.push, 'People who need a push: undecided people who usually vote, and supporters who may not vote. Sure supporters who always vote and sure opponents rank lowest.');
   for (const [id, text] of Object.entries(PRESET_WORDS)) assert.ok(text.length > 40 && !ADVISORY.test(text), id);
   const screen = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/StreetPlan.tsx'), 'utf8');
   const words = [...screen.matchAll(/'([^'\n]{12,})'|>([^<>{}]{12,})</g)].map(m => m[1] ?? m[2]);

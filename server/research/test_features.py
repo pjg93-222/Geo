@@ -75,12 +75,12 @@ class FeaturesTests(TestCase):
                 'primary_universe': 'party_only',
                 'signals': {'partisan': 1, 'presidential': 1, 'registration': 1, 'primary_ballot': 1}})
             roi = body['roi']
-            self.assertEqual([p['id'] for p in roi['presets']], ['mixed', 'turnout', 'identify'])
+            self.assertEqual([p['id'] for p in roi['presets']], ['push', 'mixed', 'turnout', 'identify'])
             self.assertEqual([p['label'] for p in roi['presets']],
-                             ['Mixed-support streets', 'Supporter turnout', 'Voter identification'])
+                             ['Needs a push', 'Mixed-support streets', 'Supporter turnout', 'Voter identification'])
             self.assertTrue(all(p['formula'] for p in roi['presets']))
             self.assertEqual({k: v for k, v in roi.items() if k != 'presets'}, {
-                'preset': 'mixed', 'p': 'participation', 'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0},
+                'preset': 'push', 'p': 'participation', 'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0},
                 'min_doors': 5, 'min_length_m': 50})
 
     def test_the_mode_shown_is_the_configured_one_primary_included(self):

@@ -3,6 +3,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import path from 'node:path';
+import {PRESET_WORDS} from '../../src/v3/lib/plan.ts';
 import {indicesText, raceModeText, supportMethodText, weightTerms, weightsText} from '../../src/v3/lib/format.ts';
 
 // the T17(d) style gate of tools/field_labels.py, read from its source so the two cannot drift
@@ -52,5 +54,15 @@ test('none of the new strings uses advisory wording', () => {
   const strings = [weightsText(FOUR), indicesText(FOUR), raceModeText('general'), raceModeText('primary'), 'Candidate support', 'Sort', 'Overall standing',
     'Sorted by candidate support', supportMethodText('Janelle Bynum', 'Democrat', 'general', SIGNALS),
     supportMethodText('Luke Bronin', 'Democrat', 'primary', {...SIGNALS, partisan: 2})];
+  for (const text of strings) assert.ok(!ADVISORY.test(text), text);
+});
+
+test('Needs a push on the People and Profile screens: a column and a sort for candidate districts only, the two parts in plain words', () => {
+  const read = (f: string) => readFileSync(path.join(import.meta.dirname, '../../src/v3/components/' + f), 'utf8');
+  const people = read('PeopleScreen.tsx'), profile = read('ProfileScreen.tsx');
+  assert.ok(/\{id:'push',label:'Needs a push'\}/.test(people) && /\{sup&&<Select label="Sort"/.test(people), 'the sort is offered with the other candidate sort');
+  assert.ok(/\{sup&&<span className="r" title=\{PRESET_WORDS\.push\}>Needs a push<\/span>\}/.test(people) && /\{sup&&<span className="c-num r">\{r\.push==null\?'':round\(r\.push\)\}<\/span>\}/.test(people), 'the column shows only where candidate support does');
+  assert.ok(/undecided and likely to vote, \{round\(push\.supporter\)\} supporter who may not vote/.test(profile), 'the profile gives both parts in words');
+  const strings = ['Needs a push', 'Sorted by Needs a push', PRESET_WORDS.push, 'undecided and likely to vote', 'supporter who may not vote'];
   for (const text of strings) assert.ok(!ADVISORY.test(text), text);
 });

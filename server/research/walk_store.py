@@ -37,6 +37,8 @@ SOURCES = ('walk', 'contacts', 'scores', 'street')
 AREA_COLUMNS = ('ss', 'sh', 'precinct')
 SUGGEST_MIN = 0.6               # a street this similar to the typed one is close enough to offer
 CHUNK = 900                     # ids per IN (...)
+# field_labels.push of one person in 0..1 (the tests compare the two): s = sup_pct / 100, p = part_pct / 100
+PUSH_SQL = '(1 - ABS(2 * sp.sup_pct / 100.0 - 1)) * sc.part_pct / 100.0 + sp.sup_pct / 100.0 * (1 - sc.part_pct / 100.0)'
 
 _lock = threading.Lock()
 _checked = None                 # ((data dir, stamps of the four files), Info)
@@ -456,20 +458,22 @@ class Store:
     def span_plan(self, area):
         """(rows, blocks) for the street plan of `area` (attach_scores first, and the support table must be there). rows:
         one per (placed block, street) with people in `area`: span_id, street_id, len_m, doors, people, scored (people
-        with a score row), the sums of the three presets (mixed, turnout, identify) and of s and p with their counts
-        (s_sum, s_n, p_sum, p_n); s = sup_score / 100 and p = part_pct / 100. A person with no score row or no support
-        counts in `identify` and in nothing else. blocks: {span id: its commonest census block}."""
+        with a score row), the sums of the four presets (push, mixed, turnout, identify) and of s and p with their counts
+        (s_sum, s_n, p_sum, p_n); s = sup_score / 100 and p = part_pct / 100, except in `push` (field_labels.push): s =
+        sup_pct / 100. A person with no score row or no support counts in `identify` and in nothing else.
+        blocks: {span id: its commonest census block}."""
         clause, args = _area(area, 'p')
         rows = self.conn.execute(
             "SELECT s.span_id, p.street_id, r.len_m, COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) AS doors, "
             "COUNT(*) AS people, COUNT(sc.person_id) AS scored, "
             "SUM((1 - ABS(2 * sp.sup_score / 100.0 - 1)) * sc.part_pct / 100.0) AS mixed, "
             "SUM(sp.sup_score / 100.0 * (1 - sc.part_pct / 100.0)) AS turnout, "
+            "SUM(%s) AS push, "
             "SUM(sp.sup_score IS NULL OR sp.sup_score BETWEEN 100 / 3.0 AND 200 / 3.0) AS identify, "
             "SUM(sp.sup_score) AS s_sum, COUNT(sp.sup_score) AS s_n, SUM(sc.part_pct) AS p_sum, COUNT(sc.part_pct) AS p_n "
             "FROM person p JOIN stop s ON s.id = p.stop_id JOIN road_span r ON r.id = s.span_id "
             "LEFT JOIN scores.person sc ON sc.person_id = p.person_id LEFT JOIN scores.support sp ON sp.pos = sc.pos "
-            "WHERE s.span_id IS NOT NULL%s GROUP BY s.span_id, p.street_id" % clause, args).fetchall()
+            "WHERE s.span_id IS NOT NULL%s GROUP BY s.span_id, p.street_id" % (PUSH_SQL, clause), args).fetchall()
         blocks = {}
         for span_id, block in self.conn.execute(      # most people first, then the lower id: one block per span
                 "SELECT s.span_id, sc.reg_block FROM person p JOIN stop s ON s.id = p.stop_id "

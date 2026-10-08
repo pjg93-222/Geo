@@ -199,6 +199,66 @@ class PeopleAndProfileTests(TestCase):
         scores = [r['sup_pct'] for r in page['rows']]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
+    # ---- Needs a push (Paul 2026-10-08): computed from sup_pct and part_pct when asked, no rebuild ---------------------
+    @staticmethod
+    def hand_push(sup_pct, part_pct):
+        """(1 - |2s - 1|) p + s (1 - p), on 0..100, written out again here."""
+        s, p = sup_pct / 100.0, part_pct / 100.0
+        return 100.0 * ((1 - abs(2 * s - 1)) * p + s * (1 - p))
+
+    def stored_push(self):
+        """[(person id, sup_pct, part_pct, push)] for the candidate store, highest push first, ties by position."""
+        rows = self.stored(self.candidate, 'SELECT p.person_id, s.sup_pct, p.part_pct, p.pos FROM support s JOIN person p ON p.pos = s.pos ORDER BY s.pos')
+        return sorted(((r[0], r[1], r[2], self.hand_push(r[1], r[2]), r[3]) for r in rows), key=lambda r: (-r[3], r[4]))
+
+    def test_every_row_of_a_candidate_store_carries_push_and_it_is_the_formula_of_its_two_standings(self):
+        page = self.get('/api/v3/people?basis=registration', self.candidate).json()
+        by_id = {r[0]: r for r in self.stored_push()}
+        for row in page['rows']:
+            want = by_id[row['person_id']]
+            self.assertAlmostEqual(row['push'], want[3], places=5)
+            self.assertTrue(0.0 <= row['push'] <= 100.0)
+
+    def test_sort_push_lists_people_from_the_highest_push_down_with_equals_for_ties(self):
+        want = self.stored_push()
+        page = self.get('/api/v3/people?basis=registration&sort=push', self.candidate).json()
+        self.assertEqual((page['total'], len(page['rows'])), (self.fx.n, 50))
+        self.assertEqual([r['person_id'] for r in page['rows']], [w[0] for w in want[:50]])
+        pushes = [r['push'] for r in page['rows']]
+        self.assertEqual(pushes, sorted(pushes, reverse=True))
+        higher = lambda value: sum(1 for w in want if w[3] > value + 1e-9)
+        tied = lambda value: sum(1 for w in want if abs(w[3] - value) <= 1e-9)
+        self.assertEqual([r['rank'] for r in page['rows']], [v3p.rank_text(higher(w[3]) + 1, tied(w[3])) for w in want[:50]])
+        nxt = self.get('/api/v3/people?basis=registration&sort=push&after=' + page['next'], self.candidate).json()
+        self.assertEqual([r['person_id'] for r in nxt['rows']], [w[0] for w in want[50:100]])
+        back = self.get('/api/v3/people?basis=registration&sort=push&dir=prev&after=' + nxt['prev'], self.candidate).json()
+        self.assertEqual([r['person_id'] for r in back['rows']], [w[0] for w in want[:50]])
+
+    def test_push_sort_composes_with_the_filters_and_leaves_the_default_order_alone(self):
+        page = self.get('/api/v3/people?basis=registration&sort=push&reg=D&grade=AB', self.candidate).json()
+        both = self.get('/api/v3/people?basis=registration&reg=D&grade=AB', self.candidate).json()
+        self.assertEqual(page['total'], both['total'])
+        self.assertEqual([r['push'] for r in page['rows']], sorted((r['push'] for r in page['rows']), reverse=True))
+        plain = self.get('/api/v3/people?basis=registration', self.fx.directory).json()
+        default = self.get('/api/v3/people?basis=registration', self.candidate).json()
+        self.assertEqual([r['person_id'] for r in default['rows']], [r['person_id'] for r in plain['rows']])
+
+    def test_colorado_has_no_push_no_sort_by_it_and_unchanged_rows(self):
+        self.assertEqual(self.get('/api/v3/people?basis=registration&sort=push', self.fx.directory).status_code, 400)
+        page = self.get('/api/v3/people?basis=registration', self.fx.directory).json()
+        self.assertTrue(all('push' not in r and 'sup_pct' not in r for r in page['rows']))
+        person = self.get('/api/v3/person?id=' + page['rows'][0]['person_id'], self.fx.directory).json()
+        self.assertNotIn('push', person['cards'])
+
+    def test_the_profile_gives_push_and_its_two_parts(self):
+        for person, sup_pct, part_pct, push, _ in self.stored_push()[:2] + self.stored_push()[-2:]:
+            card = self.get('/api/v3/person?id=' + person, self.candidate).json()['cards']['push']
+            s, p = sup_pct / 100.0, part_pct / 100.0
+            self.assertAlmostEqual(card['undecided'], 100.0 * (1 - abs(2 * s - 1)) * p, places=5)      # undecided and likely to vote
+            self.assertAlmostEqual(card['supporter'], 100.0 * s * (1 - p), places=5)                    # supporter who may not vote
+            self.assertAlmostEqual(card['value'], push, places=5)
+            self.assertAlmostEqual(card['undecided'] + card['supporter'], card['value'], places=4)
+
     def test_without_a_support_table_sort_sup_is_a_400_and_rows_have_no_sup_pct(self):
         self.assertEqual(self.get('/api/v3/people?basis=registration&sort=sup', self.fx.directory).status_code, 400)
         page = self.get('/api/v3/people?basis=registration&sort=cua', self.fx.directory).json()
@@ -212,7 +272,7 @@ class PeopleAndProfileTests(TestCase):
         for person, score, pct in stored:
             cards = self.get('/api/v3/person?id=' + person, self.candidate).json()['cards']
             self.assertEqual(cards['sup'], {'score': scoresdb.number(score), 'pct': scoresdb.number(pct)})
-            self.assertEqual(list(cards), ['cua', 'part', 'soi', 'lean', 'sup'])
+            self.assertEqual(list(cards), ['cua', 'part', 'soi', 'lean', 'sup', 'push'])
             plain = self.get('/api/v3/person?id=' + person, self.fx.directory).json()['cards']
             self.assertEqual(list(plain), ['cua', 'part', 'soi', 'lean'])
             self.assertEqual({k: cards[k] for k in plain}, plain)

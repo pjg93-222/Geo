@@ -7,6 +7,7 @@ export const MAX_LIST_PEOPLE=1500;   // people on one walk list, and in one scor
 
 /** What each preset counts, in plain words. A preset this page does not know falls back to the formula the server sends. */
 export const PRESET_WORDS:Record<string,string>={
+  push:'People who need a push: undecided people who usually vote, and supporters who may not vote. Sure supporters who always vote and sure opponents rank lowest.',
   mixed:'Many people whose support is split between the two sides and who vote often. A person counts most when their support is halfway, times their chance of voting.',
   turnout:'Many supporters who vote less often. A person counts their support times their chance of not voting.',
   identify:'Many people whose support is unknown or in the middle third. Each of them counts once.',

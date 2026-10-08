@@ -77,7 +77,7 @@ function Body({p,candidate}:{p:Profile;candidate?:CandidateInfo}){
 
     <div className={cx('p-cards',p.cards.sup&&'has-sup')}>
       <IndexPanel title={GROUP_LABEL.cua} card={p.cards.cua}/>
-      {p.cards.sup&&<SupportPanel card={p.cards.sup} candidate={candidate}/>}
+      {p.cards.sup&&<SupportPanel card={p.cards.sup} push={p.cards.push} candidate={candidate}/>}
       <IndexPanel title={GROUP_LABEL.part} card={p.cards.part}/>
       <IndexPanel title={GROUP_LABEL.soi} card={p.cards.soi}/>
     </div>
@@ -139,14 +139,15 @@ function IndexPanel({title,card}:{title:string;card:IndexCard}){
   </section>;
 }
 
-/** Candidate districts only: a score and a standing. Support has no likely range and no grade. */
-function SupportPanel({card,candidate}:{card:{score:number;pct:number};candidate?:CandidateInfo}){
+/** Candidate districts only: a score and a standing. Support has no likely range and no grade. `push`: Needs a push and its two parts, in plain words. */
+function SupportPanel({card,push,candidate}:{card:{score:number;pct:number};push?:NonNullable<Profile['cards']['push']>;candidate?:CandidateInfo}){
   return <section className="card">
     <h2 className="panel-title">Candidate support</h2>
     <div className="panel-number">{round(card.pct)}</div>
     <div className="panel-pct">{ordinal(card.pct)} percentile</div>
     <div className="panel-range">Support score {round(card.score)} of 100</div>
     {candidate&&<div className="support-mode">{raceModeText(candidate.race_mode)}</div>}
+    {push&&<div className="support-mode support-push"><b>Needs a push {round(push.value)}</b> of 100: {round(push.undecided)} undecided and likely to vote, {round(push.supporter)} supporter who may not vote</div>}
   </section>;
 }
 

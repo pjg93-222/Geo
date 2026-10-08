@@ -543,7 +543,7 @@ def overview(request):
 
 # ---- the street plan and the printed scores ------------------------------------------------------------------------
 
-SUMS = ('doors', 'people', 'scored', 'mixed', 'turnout', 'identify', 's_sum', 's_n', 'p_sum', 'p_n')
+SUMS = ('doors', 'people', 'scored', 'push', 'mixed', 'turnout', 'identify', 's_sum', 's_n', 'p_sum', 'p_n')
 MEASURE = {'value': 'value_per_100m', 'pop_density': 'pop_density', 'voter_density': 'voter_density'}   # weight -> plan column
 
 
@@ -668,7 +668,8 @@ def voter_scores(request):
         found = store.scores(wanted)
     candidate = bool(settings.DISTRICT['candidate'])
     return response({'scores': {ident: {'ovr': FL.display_round(ovr), 'part': FL.display_round(part),
-                                        **({'sup': FL.display_round(sup)} if candidate and sup is not None else {})}
+                                        **({'sup': FL.display_round(sup), 'push': FL.display_round(FL.push(sup, part))}
+                                           if candidate and sup is not None and part is not None else {})}
                                 for ident, (ovr, part, sup) in found.items()}})
 
 

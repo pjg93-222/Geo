@@ -64,8 +64,8 @@ export interface PeopleRow{
   ovr_pct:number;lo:number;hi:number;cua_pct:number;part_pct:number;soi_pct:number;
   lean_code:number|'U';lean_label:string;ovr_grade:Grade;
   within_pct:number;within_group:string;
-  /** Candidate districts only. */
-  sup_pct?:number;
+  /** Candidate districts only. `push`: Needs a push, 0 to 100. */
+  sup_pct?:number;push?:number;
 }
 export interface PeoplePage{
   rows:PeopleRow[];total:number;first:number;last:number;page:number;pages:number;
@@ -74,8 +74,8 @@ export interface PeoplePage{
 export interface PeopleQuery{
   reg:'all'|'D'|'R'|'U'|'O';grade:'ABCD'|'AB';lean:'all'|'-2'|'-1'|'0'|'1'|'2'|'U';
   level:Level|'';area:string;balanced:boolean;after:string;dir:'next'|'prev';
-  /** '' is the overall standing; 'sup' (candidate districts) sorts by candidate support. */
-  sort:''|'sup';
+  /** '' is the overall standing; 'sup' (candidate districts) sorts by candidate support and 'push' by Needs a push. */
+  sort:''|'sup'|'push';
 }
 
 // --- profile -----------------------------------------------------------------------------------------------------
@@ -92,7 +92,9 @@ export interface Profile{
   registration:'D'|'R'|'U'|'O';block:string;precinct:string;
   registration_label?:string;
   header:{pct:number;lo:number;hi:number;grade:Grade;measured_pct:number;within_pct:number;within_group:string};
-  cards:{cua:IndexCard;part:IndexCard;soi:IndexCard;lean:{lean:number;grade:Grade;undetermined:boolean};sup?:{score:number;pct:number}};
+  cards:{cua:IndexCard;part:IndexCard;soi:IndexCard;lean:{lean:number;grade:Grade;undetermined:boolean};sup?:{score:number;pct:number};
+    /** Needs a push 0 to 100 and its two parts: undecided and likely to vote, supporter who may not vote (candidate districts). */
+    push?:{value:number;undecided:number;supporter:number}};
   groups:FieldGroup[];
   household:{code:number;mean_pct:number;members:HouseholdMember[]};
   area_context:{block:AreaRef;precinct:AreaRef};

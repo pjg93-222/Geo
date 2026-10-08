@@ -33,7 +33,8 @@ MAX_STREET_POINTS = 5000
 MAX_HOUSEHOLD_PEOPLE = 100
 MAX_SEARCH = 8
 LEAN_PARAMS = {'all', '-2', '-1', '0', '1', '2', 'U'}
-SORTS = {'ovr': None, 'cua': 'ord_cua', 'part': 'ord_part', 'soi': 'ord_soi', 'within': 'ord_within', 'sup': 'ord_sup'}
+SORTS = {'ovr': None, 'cua': 'ord_cua', 'part': 'ord_part', 'soi': 'ord_soi', 'within': 'ord_within', 'sup': 'ord_sup',
+         'push': 'push'}       # push: the order worked out from the standings (StoreInfo.push), no stored column
 RANK_COLUMNS = {'ovr': ('ovr_rank', 'ovr_tie_n'), 'cua': ('cua_rank', 'cua_tie_n'), 'part': ('part_rank', 'part_tie_n'),
                 'soi': ('soi_rank', 'soi_tie_n'), 'within': ('reg_rank', None), 'sup': ('sup_rank', 'sup_tie_n')}   # sup: the support table
 AREA_LEVELS = {'registration': {'block': 'reg_block', 'precinct': 'reg_precinct', 'tract': 'reg_tract', 'zip': 'reg_zip'},
@@ -85,6 +86,13 @@ def flag(value, allowed=('0', '1')):
 
 def rank_text(rank, tie_n):
     return ('=' if tie_n and tie_n > 1 else '') + '{:,}'.format(int(rank))
+
+
+def push_rank(info, pos):
+    """(rank, people tied) of the person at `pos` (1-based) in the push order: 1 + the people with a higher push."""
+    value, _, ascending = info.push()
+    low, high = np.searchsorted(ascending, value[pos - 1], 'left'), np.searchsorted(ascending, value[pos - 1], 'right')
+    return len(ascending) - high + 1, high - low
 
 
 def registration_label(code):
@@ -155,7 +163,8 @@ class Listing:
 
     def __init__(self, info, q):
         mask = list_mask(info, q)
-        order = info.columns[SORTS[q['sort']]] if SORTS[q['sort']] else None
+        name = SORTS[q['sort']]
+        order = info.push()[1] if name == 'push' else info.columns[name] if name else None
         if order is None:
             self.positions = None if mask is None else np.flatnonzero(mask)
             self.sequence = None if mask is None else self.positions + 1
@@ -190,7 +199,7 @@ PEOPLE_COLUMNS = ('pos, person_id, hh, ovr_rank, ovr_tie_n, cua_rank, cua_tie_n,
 def people(request, demo):
     q = list_query(request)
     info = DB.info()
-    if q['sort'] == 'sup' and not info.support:
+    if q['sort'] in ('sup', 'push') and not info.support:
         raise BadRequest('No candidate support in this district')
     listing = Listing(info, q)
     total = listing.count
@@ -216,19 +225,21 @@ def people(request, demo):
         support = {r['pos']: r for r in conn.execute(
             'SELECT pos, sup_pct, sup_rank, sup_tie_n FROM support WHERE pos IN (%s)' % marks, [p + 1 for p in positions])
         } if info.support else {}
-        rank_column, tie_column = RANK_COLUMNS[q['sort']]
+        rank_column, tie_column = RANK_COLUMNS.get(q['sort'], (None, None))      # push: ranked from the values (push_rank)
         for r in ordered:
             code, label = DB.outlook_fields(DB.outlook_code(info, evidence[r['pos']]))
             ranked = support[r['pos']] if q['sort'] == 'sup' else r
             rows.append({
-                'rank': rank_text(ranked[rank_column], ranked[tie_column] if tie_column else 0),
+                'rank': rank_text(*push_rank(info, r['pos'])) if q['sort'] == 'push'
+                else rank_text(ranked[rank_column], ranked[tie_column] if tie_column else 0),
                 'person_id': r['person_id'], 'name': names.get(r['person_id'], ''),
                 'ovr_pct': DB.number(r['ovr_pct']), 'lo': DB.number(r['ovr_pct_lo90']),
                 'hi': DB.number(r['ovr_pct_hi90']), 'cua_pct': DB.number(r['cua_pct']),
                 'part_pct': DB.number(r['part_pct']), 'soi_pct': DB.number(r['soi_pct']),
                 'lean_code': code, 'lean_label': label, 'ovr_grade': r['ovr_grade'],
                 'within_pct': DB.number(r['ovr_pct_within_reg']), 'within_group': registration_label(r['reg_group']),
-                **({'sup_pct': DB.number(support[r['pos']]['sup_pct'])} if info.support else {}),
+                **({'sup_pct': DB.number(support[r['pos']]['sup_pct']),
+                    'push': DB.number(FL.push(support[r['pos']]['sup_pct'], r['part_pct']))} if info.support else {}),
             })
     return {
         'rows': rows, 'total': total, 'first': start + 1 if rows else 0, 'last': start + len(rows),
@@ -367,6 +378,8 @@ def person(request, demo):
     if info.support:          # candidate district: a score and a standing, no interval and no grade
         sup = conn.execute('SELECT sup_score, sup_pct FROM support WHERE pos=?', (r['pos'],)).fetchone()
         cards['sup'] = {'score': DB.number(sup['sup_score']), 'pct': DB.number(sup['sup_pct'])}
+        undecided, supporter = FL.push_parts(sup['sup_pct'], r['part_pct'])      # needs a push, in its two parts
+        cards['push'] = {'value': DB.number(undecided + supporter), 'undecided': DB.number(undecided), 'supporter': DB.number(supporter)}
     return {
         'person_id': ident, 'name': names.get(ident, ''), 'age': r['age'], 'household_size': r['hh_size'],
         'registration': FL.REG_GROUPS[r['reg_group']], 'block': r['reg_block'] or '', 'precinct': r['reg_precinct'] or '',

@@ -1299,6 +1299,16 @@ test('PDF with scores: a SCORES group with Ovr, Sup and Part after Reg. Date, a 
   assert.ok(pdfPages(plain).flat().every(t => !['SCORES', 'Ovr', 'Sup', 'Part'].includes(t)), 'with no scores there is no such column');
 });
 
+test('PDF with Needs a push: a Push column next to the others and its words on the cover; a district that sends none has no such column', async () => {
+  const pushed = {'a0-0': {ovr: 71, sup: 40, part: 88, push: 47}, 'a1-0': {ovr: 5, sup: 0, part: 100, push: 0}, p2: {ovr: 12, part: 5}};
+  const {doc} = await buildWalkPdf(scoredList(), {scores: pushed});
+  const pages = pdfPages(doc);
+  assert.ok(pages[0].some(t => t === 'Scores run 0 to 100, higher is more: Ovr overall, Sup candidate support, Part participation, Push needs a push.'), 'the cover names the Push column');
+  for (const t of pages.slice(1)) for (const h of ['SCORES', 'Ovr', 'Sup', 'Part', 'Push']) assert.ok(t.includes(h), h);
+  assert.ok(pages[1].includes('47'), 'the first run shows its push');
+  assert.ok(!pdfPages((await buildWalkPdf(scoredList(), {scores: SCORED})).doc).slice(1).some(t => t.includes('Push')), 'no push sent: no Push column');
+});
+
 test('PDF with scores in a district without a candidate (no support numbers): Ovr and Part only', async () => {
   const {doc} = await buildWalkPdf(scoredList(), {scores: {'a0-0': {ovr: 71, part: 88}}});
   const pages = pdfPages(doc);
@@ -1321,6 +1331,11 @@ test('CSV with scores: Overall, Candidate support and Participation after Result
   assert.ok(colorado[0].endsWith('"Result","Overall","Participation"') && colorado[1].endsWith('"","71","88"'));
   assert.deepEqual(walkCsvRows(p, undefined, undefined, undefined, {a: {ovr: 1, part: 2}})[0].slice(-3), ['', '1', '2']);
   assert.equal(scoreColumns(undefined).length, 0); assert.deepEqual(scoreColumns({}), ['ovr', 'part']);
+  assert.deepEqual(scoreColumns({a: {ovr: 1, sup: 2, part: 3, push: 4}}), ['ovr', 'sup', 'part', 'push'], 'Needs a push sits after the others');
+  assert.deepEqual(scoreColumns({a: {ovr: 1, sup: 2, part: 3}}), ['ovr', 'sup', 'part'], 'a server that sends no push adds no column');
+  const pushed = lines(buildWalkCsv(p, undefined, undefined, undefined, {a: {ovr: 71, sup: 40, part: 88, push: 47}, b: {ovr: 12, sup: 5, part: 5, push: 9}}));
+  assert.ok(pushed[0].endsWith('"Result","Overall","Candidate support","Participation","Needs a push"'));
+  assert.ok(pushed[1].endsWith('"","71","40","88","47"') && pushed[2].endsWith('"","12","5","5","9"') && pushed[3].endsWith('"","","","",""'));
 });
 
 test('page address: planned streets ride along, are enough to rebuild a list, and come back from a saved list', () => {

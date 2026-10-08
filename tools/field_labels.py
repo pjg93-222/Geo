@@ -87,10 +87,25 @@ BY_NAME = {row['name']: row for row in FIELDS}
 # (O-12); its fields and weights are the frozen rowfw-1.0.0 CUA weights above, checked on every score build.
 INDUSTRIES = {'cua': {'label': GROUP_LABELS['cua'], 'group': 'cua',
                       'fields': [(r['name'], r['label'], r['weight']) for r in FIELDS if r['group'] == 'cua']}}
-# Street plan presets (Phase 4E): id -> (label, formula in words); s = candidate support 0..1, p = participation standing 0..1
-ROI_PRESETS = {'mixed': ('Mixed-support streets', 'sum over people of (1 - |2s - 1|) x p'),
+# Street plan presets (Phase 4E): id -> (label, formula in words); s = candidate support 0..1, p = participation standing 0..1.
+# push (Paul 2026-10-08): s is the support standing (sup_pct / 100), see push(); the other three read the support score.
+ROI_PRESETS = {'push': ('Needs a push', 'sum over people of (1 - |2s - 1|) x p + s x (1 - p)'),
+               'mixed': ('Mixed-support streets', 'sum over people of (1 - |2s - 1|) x p'),
                'turnout': ('Supporter turnout', 'sum over people of s x (1 - p)'),
                'identify': ('Voter identification', 'people with s in the middle third or missing')}
+
+
+def push_parts(sup_pct, part_pct):
+    """Needs a push, 0..100, as its two parts: (undecided and likely to vote, supporter who may not vote) = (100 x (1 - |2s - 1|) x p,
+    100 x s x (1 - p)) with s = sup_pct / 100 and p = part_pct / 100. Numbers or numpy arrays."""
+    s, p = sup_pct / 100.0, part_pct / 100.0
+    return 100.0 * (1 - abs(2 * s - 1)) * p, 100.0 * s * (1 - p)
+
+
+def push(sup_pct, part_pct):
+    """The two parts of push_parts added: 0 for a sure supporter who always votes and for a sure opponent, 100 at most (s 0.5 with
+    p 1, or s 1 with p 0)."""
+    return sum(push_parts(sup_pct, part_pct))
 
 # Display of the source status. Order is the stored status code.
 STATUSES = ('observed', 'estimated_gpu_model', 'estimated_household_model', 'estimated_majority_default',

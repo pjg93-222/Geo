@@ -54,8 +54,9 @@ _INTERIM = {'cua': 40, 'part': 35, 'soi': 25}     # Colorado's weights, shown fo
 # candidate's party 1.0, the other major party 0.0, every other code 0.5).
 _SUPPORT = {'signals': {'partisan': 1, 'presidential': 1, 'registration': 1, 'primary_ballot': 1},
             'party_values': {}, 'ballot_years': (2014, 2025)}
-# Street plan (Phase 4E; Paul 2026-10-07): presets (field_labels.ROI_PRESETS), weights of the percentile-rank blend, floors
-_ROI = {'presets': ('mixed', 'turnout', 'identify'), 'preset': 'mixed', 'p': 'participation',
+# Street plan (Phase 4E; Paul 2026-10-07): presets (field_labels.ROI_PRESETS), weights of the percentile-rank blend, floors;
+# the default is "Needs a push" (Paul 2026-10-08), the other three stay as alternatives
+_ROI = {'presets': ('push', 'mixed', 'turnout', 'identify'), 'preset': 'push', 'p': 'participation',
         'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0}, 'min_doors': 5, 'min_length_m': 50}
 # NAMELSAD of every county the district polygon meets (area > 1e-10 deg2, the extend_geography rule), read from the
 # TIGER2025 county file on 2026-10-07; CT's TIGER2025 "counties" are the planning regions
