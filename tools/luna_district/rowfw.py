@@ -5,12 +5,15 @@ Colorado's row-framework folder (RF) is read and never written. `rowfw-copy` cop
 district.json, which every patched literal reads. The other steps run the copied code as child processes of the system
 Python 3.12 (pyarrow). Counts, hashes and paths only in every receipt and log. `rowfw-cleanup` removes the transient work
 folder; the copy never runs `close` (it would summarise tests that did not run).
+Phase 4B: a candidate district's copy takes candidate support as a fourth term of the overall (patch kind e; `rowfw-support` writes
+cache/support.npz, `rowfw-reset` clears a finished run so the copy can be redone).
 """
 import difflib
 import json
 import os
 import subprocess
 import time
+from fractions import Fraction as F
 from pathlib import Path
 
 from . import copy_stage as CS
@@ -45,7 +48,8 @@ def export_dir(district):
 
 
 # ------------------------------------------------------------------ the patch table (kind a = district count/path/hash,
-# b = a Colorado result pin kept active when district.json is_co, c = environment, d = no Colorado P0 baseline exists)
+# b = a Colorado result pin kept active when district.json is_co, c = environment, d = no Colorado P0 baseline exists,
+# e = the 4-term overall of a candidate district, Phase 4B)
 def dj(k):
     """Expression that reads district.json from the copy's own location (parents[k] of the file is the district copy root)."""
     return ("__import__('json').loads(__import__('pathlib').Path(__file__).resolve().parents[%d]"
@@ -55,6 +59,10 @@ def dj(k):
 _B = 'build/rowfw-1.0.0/'
 _ROOT_LINE = "ROOT = pathlib.Path(r'%s')" % LUNA
 _SCRATCH_LINE = "SCRATCH = pathlib.Path(r'%s')" % SCRATCH_CO
+# Phase 4B (kind e): the candidate districts' 4-term overall. district.json holds 'overall' and 'support' only for them; every
+# patched line takes the original expression for Colorado (a dict comprehension over the same three keys, `+ 0`, `+ 0.0`).
+_OV = dj(3) + ".get('overall', {})"
+_SUP = "np.load(cfg['overall'][cfg['overall']['default']]['support']['pct_file'])['sup_pct']"
 PATCHES = {
     'build_cache.py': [
         ('SRC_DIR = r"%s"' % CO_EXPORT, "SRC_DIR = %s['export_dir']" % dj(0), 1, 'a'),
@@ -82,7 +90,38 @@ PATCHES = {
         ("'rng.random(491308) float64; entry i belongs to model_source_row i + 1'",
          "'rng.random(' + str(N) + ') float64; entry i belongs to model_source_row i + 1'", 1, 'a'),
         ("    if not rc['within_1e-3']:", "    if not rc['within_1e-3'] and %s['is_co']:" % dj(3), 1, 'b'),
-        ("    if not all(ev['matches_spec_5_1'].values()):", "    if not all(ev['matches_spec_5_1'].values()) and %s['is_co']:" % dj(3), 1, 'b')],
+        ("    if not all(ev['matches_spec_5_1'].values()):", "    if not all(ev['matches_spec_5_1'].values()) and %s['is_co']:" % dj(3), 1, 'b'),
+        ("OVR_DEFAULT = {'cua': F(2, 5), 'part': F(7, 20), 'soi': F(1, 4)}",
+         "OVR_DEFAULT = {g: F(*v) for g, v in %s['overall']['weights'].items()} if 'overall' in %s else "
+         "{'cua': F(2, 5), 'part': F(7, 20), 'soi': F(1, 4)}" % (dj(3), dj(3)), 1, 'e'),
+        ("'default': 'W40_35_25',", "'default': %s.get('key', 'W40_35_25')," % _OV, 1, 'e'),
+        ("'W40_35_25': {'formula': 'ovr_score = 0.40 * cua_pct + 0.35 * part_pct + 0.25 * soi_pct',",
+         "%s.get('key', 'W40_35_25'): {'formula': %s.get('formula', 'ovr_score = 0.40 * cua_pct + 0.35 * part_pct + 0.25 * soi_pct')," % (_OV, _OV), 1, 'e'),
+        ("{g: W(OVR_DEFAULT[g]) for g in ('cua', 'part', 'soi')}", '{g: W(OVR_DEFAULT[g]) for g in OVR_DEFAULT}', 1, 'e'),
+        ("'standing': 'ovr_pct = midrank standing of ovr_score',",
+         "**({'support': %s['support']} if 'overall' in %s else {}), 'standing': 'ovr_pct = midrank standing of ovr_score'," % (dj(3), dj(3)), 1, 'e'),
+        ("'status': S_PAUL + ' (PR1: \"40/35/25 lobbyist\")'},",
+         "'status': %s['status'] if 'overall' in %s else S_PAUL + ' (PR1: \"40/35/25 lobbyist\")'}," % (_OV, dj(3)), 1, 'e'),
+        ("'D1': {'default': 'W40_35_25 overall (PR1, Paul ruling); lean a filter and colour',",
+         "'D1': {'default': (%s['key'] + ' overall (O-11, Paul ruling 2026-10-07); candidate support is a weight') if 'overall' in %s "
+         "else 'W40_35_25 overall (PR1, Paul ruling); lean a filter and colour'," % (_OV, dj(3)), 1, 'e'),
+        ("add('Overall weights', {'cua': 0.40, 'part': 0.35, 'soi': 0.25},", "add('Overall weights', {g: float(v) for g, v in OVR_DEFAULT.items()},", 1, 'e'),
+        ("'overall': {'cua': 0.40, 'part': 0.35, 'soi': 0.25}},", "'overall': {g: float(v) for g, v in OVR_DEFAULT.items()}},", 1, 'e')],
+    _B + 'rowfw/engine.py': [
+        ("for k, v in cfg['overall']['W40_35_25']['weights'].items()},", "for k, v in cfg['overall'][cfg['overall']['default']]['weights'].items()},", 1, 'e'),
+        ("    w = cfg['overall']['W40_35_25']['weights']", "    w = cfg['overall'][cfg['overall']['default']]['weights']", 1, 'e'),
+        ("+ float(w['soi']['value']) * out['soi_measured_pct'])",
+         "+ float(w['soi']['value']) * out['soi_measured_pct'] + float(w.get('sup', {'value': 0.0})['value']) * 100.0)", 1, 'e'),     # support is fully observed
+        ("    return {'ovr_score': w['cua'] * cua_pct + w['part'] * part_pct + w['soi'] * soi_pct,",
+         "    return {'ovr_score': w['cua'] * cua_pct + w['part'] * part_pct + w['soi'] * soi_pct + (w['sup'] * %s if 'sup' in w else 0), "
+         "**({'sup_pct': %s} if 'sup' in w else {})," % (_SUP, _SUP), 1, 'e')],
+    _B + 'rowfw/draws.py': [
+        ("ovr = w['cua'] * pct['cua'] + w['part'] * pt.cols['part_pct'] + w['soi'] * pct['soi']",
+         "ovr = w['cua'] * pct['cua'] + w['part'] * pt.cols['part_pct'] + w['soi'] * pct['soi'] + (w['sup'] * pt.cols['sup_pct'] if 'sup' in w else 0)", 1, 'e'),
+        ("w['cua'] * pc + w['part'] * pt.cols['part_pct'] + w['soi'] * ps)",
+         "w['cua'] * pc + w['part'] * pt.cols['part_pct'] + w['soi'] * ps + (w['sup'] * pt.cols['sup_pct'] if 'sup' in w else 0))", 1, 'e')],
+    _B + 'rowfw/outputs.py': [
+        ("st.ovr_w[g] * cols[f'{g}_pct'][canon] for g in ('cua', 'part', 'soi')}", "st.ovr_w[g] * cols[f'{g}_pct'][canon] for g in st.ovr_w}", 1, 'e')],
     'design/clarity_spec_facts.py': [
         ("ROOT = r'%s'" % LUNA, "ROOT = str(__import__('pathlib').Path(__file__).resolve().parents[1])", 1, 'a'),
         (r"CACHE = ROOT + r'\.local\row-framework-20260930\cache\inputs.parquet'", r"CACHE = ROOT + r'\cache\inputs.parquet'", 1, 'a'),
@@ -124,24 +163,39 @@ def apply_patches(rel, text, table=None):
 def district_json(district, cache_sha=None):
     cfg = DISTRICTS[district]
     manifest = read_json(export_dir(district) / 'manifest.json')
-    return {'id': district, 'terrier_district': TERRIER[district], 'is_co': cfg['is_co'], 'rows': cfg['rows'],
-            'households': cfg['households'], 'completed_values': cfg['completed_values'], 'export_dir': str(export_dir(district)),
-            'export_sha256': manifest['files']['synthetic_completed.csv.gz']['sha256'], 'cache_sha256': cache_sha}
+    out = {'id': district, 'terrier_district': TERRIER[district], 'is_co': cfg['is_co'], 'rows': cfg['rows'],
+           'households': cfg['households'], 'completed_values': cfg['completed_values'], 'export_dir': str(export_dir(district)),
+           'export_sha256': manifest['files']['synthetic_completed.csv.gz']['sha256'], 'cache_sha256': cache_sha}
+    d = _district(district)
+    if d['candidate']:                       # Phase 4B: the 4-term overall (the e patches read these two keys); Colorado has neither
+        w = d['score_weights']
+        out['overall'] = {'key': 'W' + '_'.join(str(v) for v in w.values()), 'weights': {g: [v, 100] for g, v in w.items()},
+                          'formula': 'ovr_score = ' + ' + '.join('%.2f * %s_pct' % (v / 100, g) for g, v in w.items()),
+                          'status': 'Paul ruling 2026-10-07 (O-11: candidate support counts in the overall, %s)' % '/'.join(str(v) for v in w.values())}
+        out['support'] = {'pct_file': str(dr(district) / 'cache' / 'support.npz'), 'sha256': None, 'candidate': d['candidate'],
+                          'party': d['party'], 'race_mode': d['race_mode'], 'signals': d['support']['signals']}
+    return out
 
 
-def _rulings_entry(label):
+def _rulings_entry(label, overall=None):
     return (f'\n## 2026-10-07: Terrier Phase 3b, {label} (a district copy of this build)\n\n'
             'This folder is a copy of the Colorado rowfw-1.0.0 code run on the district\'s own completed export. The R1 "Go, '
             'populate" above is Colorado\'s. For this district the go is Paul\'s approval of the multi-district build '
-            '(Terrier Phase 3b), as ruled by the lead on 2026-10-07 (Q-1). R2 to R10 apply unchanged; none is re-asked.\n')
+            '(Terrier Phase 3b), as ruled by the lead on 2026-10-07 (Q-1). R2 to R10 apply unchanged; none is re-asked.\n'
+            + (f'\nPaul ruled on 2026-10-07 (O-11) that candidate support counts in this district\'s overall: {overall["key"]}. '
+               'Colorado has no candidate and keeps 40/35/25.\n' if overall else ''))
 
 
-def _deviations_entry(label):
+def _deviations_entry(label, overall=None):
     return (f'\n## D-3b (2026-10-07): the district copy for {label}\n\n'
             'The method code is Colorado\'s, byte for byte, except the one-line patches in `copy-manifest.json` and '
             '`copy-diff.patch` (paths, counts and hashes read from `district.json`).\n\n'
             '- Party code W: lean 0.0 and registration group "other", like G, L, O and T (Phase 3b ruling Q-4). The freeze stops on any other unmapped code.\n'
-            '- Overall: Colorado\'s 40/35/25. Candidate support does not exist before Phase 4B, so the app shows this overall as interim.\n'
+            + ('- Overall (Phase 4B, O-11): ' + overall['key'] + ' with candidate support as the fourth term. `sup_pct` is read from `cache/support.npz` '
+               '(tools/support.py, general mode; its sha256 is pinned in the frozen config) by 16 one-line patches (kind e); Colorado\'s branch of each is '
+               'the original expression. Left as text, run by no stage here: the copied data dictionary text, the synthetic overall example, '
+               'and the diagnostics, docs, sensitivity and T01 readers of `W40_35_25` (see `residual-literals.txt`).\n' if overall else
+               '- Overall: Colorado\'s 40/35/25. Candidate support does not exist before Phase 4B, so the app shows this overall as interim.\n') +
             '- Tests: only T00 (the input contract) runs for this district. T01 to T18 are not run; the method code is Colorado\'s, where they ran. '
             'The Colorado ridit pin and the Colorado spec-evidence pin of the freeze are recorded, not enforced.\n'
             '- Geography: the precinct id is the district\'s precinct key (OR county-code, CT code-name); Connecticut block ids are normalised to the '
@@ -184,7 +238,8 @@ def build_copy(dest, district_cfg, label, rf=RF):
             diff.extend(difflib.unified_diff(text.splitlines(True), patched.splitlines(True), 'a/' + rel, 'b/' + rel, n=0))
         residual += [f'{rel}:{i}: [{m.group(0)}]' for i, line in enumerate(patched.splitlines(), 1) for m in CS.CENSUS.finditer(line)]
     rfb = dest / _B.rstrip('/')
-    for name, entry in (('RULINGS.md', _rulings_entry(label)), ('DEVIATIONS.md', _deviations_entry(label))):
+    overall = district_cfg.get('overall')
+    for name, entry in (('RULINGS.md', _rulings_entry(label, overall)), ('DEVIATIONS.md', _deviations_entry(label, overall))):
         with open(rfb / name, 'a', encoding='utf-8', newline='') as f:
             f.write(entry)
         files[_B + name]['appended_sha256'] = sha256_file(rfb / name)
@@ -467,15 +522,105 @@ def cache(district, redo=False, **_):
                 geography_missing_counts={k['name']: k['missing_count'] for k in doc['kept'] if k['name'] in GEO_COLUMNS})
 
 
+# ------------------------------------------------------------------ Phase 4B: candidate support and the redo of the run with the 4-term overall
+RESET_GLOBS = ('framework_config.json', 'criteria_rowfw-1.0.0.json', 'PLAN_rowfw-1.0.0.md', 'PLAN.receipt.json', 'area_scores_rowfw-1.0.0.csv',
+               '*_rowfw-1.0.0.parquet', '*_rowfw-1.0.0.manifest.json', 'summaries', 'release', 'tests/T*.json', 'tests/predicate_io',
+               'tests/superseded')
+
+
+def move_outputs(B, dest):
+    """Move the run outputs under `B` (RESET_GLOBS: the frozen files, the stage outputs, the tests' results) to `dest`; the code, the
+    cache and everything else stay. Returns the moved paths relative to `B`."""
+    moved = []
+    for pattern in RESET_GLOBS:
+        for p in sorted(Path(B).glob(pattern)):
+            target = Path(dest) / p.relative_to(B)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            p.replace(target)
+            moved.append(p.relative_to(B).as_posix())
+    return moved
+
+
+def reset(district, redo=False, **_):
+    """The run outputs of an earlier freeze go to superseded/<tag>/ so that `rowfw-copy --redo` and the later steps run afresh (nothing is deleted)."""
+    R = dr(district)
+    with RowfwStep(district, 'rowfw-reset') as st:
+        dest = R / 'superseded' / ('3b-' + utc_now().replace(':', ''))
+        moved = move_outputs(drb(district), dest)
+        st.note(moved=len(moved), superseded_dir=str(dest) if moved else None, paths=moved)
+
+
+def write_support(cache, out, d):
+    """Read the support inputs of the cache, check the score orientation, score every row and write `out` (npz of model_source_row, sup_score,
+    sup_pct, in_universe). Returns aggregates only."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import tools.support as S
+    names = pq.read_schema(cache).names
+    want = ['model_source_row', *S.INPUT_COLUMNS, *S.ballot_columns(names, d['support']['ballot_years'])]
+    table = pq.read_table(cache, columns=want)
+    msr = table.column('model_source_row').to_numpy().astype(np.int64)
+    assert (np.diff(msr) > 0).all(), 'model_source_row is not strictly increasing in the cache'
+    # a dictionary column must be decoded by cast: to_numpy() of one turns a null into its first dictionary entry
+    text = lambda col: col.cast(pa.string()) if pa.types.is_dictionary(col.type) else col
+    cols = {c: text(table.column(c)).to_numpy(zero_copy_only=False) for c in want[1:]}
+    means = S.orientation(cols)
+    r = S.compute(d, cols)
+    with open(str(out) + '.partial', 'wb') as f:
+        np.savez(f, model_source_row=msr, sup_score=r['sup_score'], sup_pct=r['sup_pct'], in_universe=r['in_universe'])
+    os.replace(str(out) + '.partial', out)
+    q = [0, 1, 5, 25, 50, 75, 95, 99, 100]
+    return {'rows': len(msr), 'ballot_columns': len(want) - 1 - len(S.INPUT_COLUMNS), 'coverage': r['coverage'],
+            'orientation_means': means, 'in_universe': int(r['in_universe'].sum()),
+            'sup_score_quantiles': dict(zip(map(str, q), np.round(np.percentile(r['sup_score'], q), 3).tolist()))}
+
+
+def support(district, redo=False, **_):
+    """cache/support.npz (tools/support.py, general mode) and its sha256 in district.json. A pure function of the cache and the config, so it
+    is always recomputed (no --redo needed). The work runs in a Python 3.12 child (pyarrow), like every rowfw step; primary mode stops in
+    tools/support.compute with PRIMARY_NOT_APPROVED."""
+    R, d = dr(district), _district(district)
+    if not d['candidate']:
+        raise SystemExit(f'{district}: no candidate, so no support score')
+    out = R / 'cache' / 'support.npz'
+    with RowfwStep(district, 'rowfw-support', outputs=[out], heavy=True, redo=True) as st:
+        result_file = st.D / 'work' / 'support-result.json'
+        result_file.parent.mkdir(parents=True, exist_ok=True)
+        code = (f'sys.path.insert(0, {str(TER)!r}); import json, tools.districts as D; from tools.luna_district.rowfw import write_support; '
+                f'print(json.dumps(write_support({str(R / "cache" / "inputs.parquet")!r}, {str(out)!r}, D.get({d["id"]!r}))))')
+        run_code(st, code, R, out=result_file)
+        result = json.loads(result_file.read_text(encoding='utf-8').strip().splitlines()[-1])
+        result_file.unlink()
+        assert result['rows'] == DISTRICTS[district]['rows'], result['rows']
+        sha = sha256_file(out)
+        meta = read_json(R / 'district.json')
+        if 'support' in meta:          # a copy made before the 4-term table has no support block; the run order (copy --redo, then support) always has it
+            write_json(R / 'district.json', {**meta, 'support': {**meta['support'], 'sha256': sha}})
+        st.note(support_sha256=sha, district_json_updated='support' in meta, **result)
+
+
 def freeze(district, redo=False, **_):
     R, B = dr(district), drb(district)
     outs = [B / n for n in ('framework_config.json', 'criteria_rowfw-1.0.0.json', 'PLAN_rowfw-1.0.0.md', 'PLAN.receipt.json')]
     clarity = R / 'design' / 'clarity_spec_facts_stdout.txt'
+    candidate = _district(district)['candidate']
+    npz = R / 'cache' / 'support.npz'
     with RowfwStep(district, 'rowfw-freeze', outputs=outs, heavy=True, redo=redo) as st:
+        if candidate:
+            assert npz.exists() and read_json(R / 'district.json').get('support', {}).get('sha256') == sha256_file(npz), \
+                'cache/support.npz is missing or differs from district.json: run rowfw-copy --redo, then rowfw-support'
         run_script(st, R / 'design' / 'clarity_spec_facts.py', [], R / 'design', out=str(clarity) + '.partial')
         os.replace(str(clarity) + '.partial', clarity)
         run_script(st, B / 'freeze' / 'freeze_rowfw.py', ['write'], B)
         cfg = read_json(B / 'framework_config.json')
+        if candidate:
+            ov = cfg['overall']
+            block, want = ov[ov['default']], read_json(R / 'district.json')['overall']
+            assert ov['default'] == want['key'], ov['default']
+            assert sum(F(w['num'], w['den']) for w in block['weights'].values()) == 1, block['weights']
+            assert block['support']['sha256'] == sha256_file(npz), 'the frozen config does not pin this support.npz'
+            st.note(overall=ov['default'], overall_weights={g: w['value'] for g, w in block['weights'].items()}, support_sha256=block['support']['sha256'])
         unmapped = {k: v for k, v in cfg['verification_at_freeze']['code_counts'].items() if k.endswith('__unmapped_codes') and v}
         assert not unmapped, f'unmapped codes (the lead decides): {unmapped}'
         counts = cfg['standing']['within_registration']['group_counts_at_freeze']
