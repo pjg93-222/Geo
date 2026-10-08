@@ -12,6 +12,9 @@ Inputs (all aggregate; no person row is read):
   * scores.sqlite3 (counts only: block, precinct, tract and ZIP codes of the registered people, to place blocks in
     precincts and to count blocks per area; its recorded area-table and suppressed-ids hashes must equal the files').
 
+A candidate district (Phase 4B) also gets the 'sup' group: per published area, the plain mean of the people's support scores (no
+shrinkage: shrink_B 0), read from the score store's support table, and the frozen overall's weights in the manifest.
+
 The district comes from CU_DISTRICT (default co-05; the server's variable): its snapshot prefix, rowfw build, score store,
 block file and frozen shas. Another district than co-05 needs --base (its cu-summary-v3 bundle).
 
@@ -24,6 +27,7 @@ from the D2 receipt; the final suppression audit is not clean; a registration bl
 no polygon; or the finished bundle fails the app's own validator.
 """
 import argparse
+import bisect
 import csv
 import hashlib
 import io
@@ -46,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools import area_layers as AL              # noqa: E402
 from tools import districts as D                 # noqa: E402
+from tools import scores_schema as S             # noqa: E402
 from tools.geography_levels import area_label, area_pattern    # noqa: E402
 from tools.glassbox import GlassBox, new_run_id  # noqa: E402
 
@@ -217,6 +222,91 @@ def modal(first, second, counts, second_ids):
     return {a: second_ids[v[1]] for a, v in best.items()}
 
 
+# ---- candidate support (Phase 4B) -----------------------------------------------------------------------------------
+
+Z90 = 1.6449        # two-sided 90% normal quantile
+
+
+def read_support(path):
+    """Counts only: sup_score and sup_pct per person in pos order, the area codes and dictionaries of the six area columns, and the
+    store's recorded `support` metadata."""
+    connection = sqlite3.connect(Path(path).as_uri() + '?mode=ro', uri=True)
+    try:
+        row = connection.execute("SELECT value FROM metadata WHERE key = 'support'").fetchone()
+        require(row is not None, 'The score store has no candidate support')
+        rows = np.array(connection.execute('SELECT sup_score, sup_pct FROM support ORDER BY pos').fetchall(), dtype=np.float64)
+        names = tuple('a_' + c for c in S.AREA_COLUMNS)
+        marks = ','.join('?' * len(names))
+        codes = {n: np.frombuffer(b, dtype=np.dtype(t), count=c) for n, t, c, b in connection.execute(
+            'SELECT name, dtype, n, data FROM list_column WHERE name IN (%s)' % marks, names)}
+        dicts = {n: json.loads(i) for n, i in connection.execute('SELECT name, ids FROM list_dict WHERE name IN (%s)' % marks, names)}
+    finally:
+        connection.close()
+    require(len(rows) and len(rows) == len(codes['a_reg_block']), 'The support table does not cover the people')
+    return json.loads(row[0]), rows[:, 0], rows[:, 1], codes, dicts
+
+
+def sup_stats(counts, score, pct, codes, dicts):
+    """{(basis, level, id): (support scores, standings)} of the people of every published area. counts = {(basis, level, id): n_rows}:
+    the people found in an area must be exactly the n_rows the other groups were computed on."""
+    stats, order = {}, {}
+    for (basis, level, ident), n in counts.items():
+        name = 'a_' + S.AREA_LEVEL_OF[(basis, level)]
+        if name not in order:
+            sort = np.argsort(codes[name], kind='stable')
+            order[name] = (sort, codes[name][sort], {i: k for k, i in enumerate(dicts[name])})
+        sort, ordered, index = order[name]
+        k = index.get(ident)
+        require(k is not None, 'A published area has no people in the score store')
+        found = sort[np.searchsorted(ordered, k, 'left'):np.searchsorted(ordered, k, 'right')]
+        require(len(found) == n, 'The score store holds %d people in an area the area table counts as %d' % (len(found), n))
+        stats[(basis, level, ident)] = (score[found], pct[found])
+    return stats
+
+
+def sup_cells(stats):
+    """{(basis, level, id): the cells of the 'sup' group in AL.STANDING_COLUMNS order}. A plain mean (eb_mean = raw_mean, shrink_B 0,
+    everyone measured); eb_se = sd / sqrt(n); the top-10 share is the share of people with sup_pct >= 90; each standing is the midrank among
+    the level's published areas, and its 90% bounds are the midranks of the value -/+ 1.645 se among those areas."""
+    one = {}
+    for key, (score, pct) in stats.items():
+        n, share = len(score), float(np.mean(np.asarray(pct) >= 90.0))
+        one[key] = (float(np.mean(score)), float(np.std(score, ddof=1)) / math.sqrt(n), share, math.sqrt(share * (1.0 - share) / n))
+    cells = {}
+    for level in sorted({k[:2] for k in one}):
+        keys = sorted(k for k in one if k[:2] == level)
+        means, shares = [one[k][0] for k in keys], [one[k][2] for k in keys]
+        sorted_means, sorted_shares = sorted(round(v, 9) for v in means), sorted(round(v, 9) for v in shares)
+
+        def standing(ordered, value):
+            value = round(value, 9)
+            low, high = bisect.bisect_left(ordered, value), bisect.bisect_right(ordered, value)
+            return 100.0 * (low + (high - low) / 2.0) / len(ordered)
+        for key, pct, top in zip(keys, AL.midrank(means), AL.midrank(shares)):
+            mean, se, share, share_se = one[key]
+            cells[key] = [mean, mean, se, 0.0, 100.0, pct, AL.band(pct), standing(sorted_means, mean - Z90 * se),
+                          standing(sorted_means, mean + Z90 * se), share, share, 0.0, share_se, top, AL.band(top),
+                          standing(sorted_shares, share - Z90 * share_se), standing(sorted_shares, share + Z90 * share_se)]
+    return cells
+
+
+def support_layer(d, rfb, scores_path, area_rows):
+    """(cells, overall_weights, support_model) of a candidate district. Fails closed unless the frozen overall is the district's, and the
+    score store was built from the support file the frozen config pins, for the district's present settings."""
+    config = json.load(open(Path(rfb) / 'framework_config.json', encoding='utf-8'))
+    overall = config.get('overall', {})
+    block = overall.get(overall.get('default'), {})
+    weights = {g: int(round(w['value'] * 100)) for g, w in block.get('weights', {}).items()}
+    require(weights == d['score_weights'], 'The frozen overall weights differ from tools/districts.py')
+    recorded, score, pct, codes, dicts = read_support(scores_path)
+    model = {k: d[k] for k in ('candidate', 'party', 'race_mode')} | {'signals': d['support']['signals']}
+    require({k: recorded.get(k) for k in model} == model == {k: block['support'].get(k) for k in model},
+            'The score store or the frozen config was built for other support settings than tools/districts.py')
+    require(recorded['sha256'] == block['support']['sha256'], 'The score store was built from another support file than the frozen config pins')
+    counts = {(r['basis'], r['level'], r['area_id']): int(float(r['n_rows'])) for r in area_rows if r['group'] == 'ovr'}
+    return sup_cells(sup_stats(counts, score, pct, codes, dicts)), weights, model
+
+
 # ---- geometry ----------------------------------------------------------------------------------------------------
 
 def round_coords(coords):
@@ -262,15 +352,17 @@ def neighbours(geoms):
 
 # ---- pure assembly (also used by the tests) -----------------------------------------------------------------------
 
-def make_area_file(area_rows, suppressed_rows, relations_for=None):
+def make_area_file(area_rows, suppressed_rows, relations_for=None, d=None, sup=None):
     """area_indices.json from the area table.
 
     area_rows: dict rows in the layout of area_scores_rowfw-1.0.0.csv (published areas, one row per group);
     suppressed_rows: dict rows with basis, level and area_id (withheld areas); relations_for(basis, level, id) gives
-    the block, precinct, tract and block-count relations of a published area (missing keys stay null).
+    the block, precinct, tract and block-count relations of a published area (missing keys stay null). For a candidate district `d`,
+    `sup` is {(basis, level, id): the area's 'sup' cells} (sup_cells) and the file carries that group too.
     Returns (file, published {(basis, level): ids}, withheld {(basis, level): ids}).
     """
     relations_for = relations_for or (lambda basis, level, ident: {})
+    names, columns = AL.groups(d), AL.columns(d)
     published, withheld, by_area = {}, {}, {}
     for row in area_rows:
         published.setdefault((row['basis'], row['level']), set()).add(row['area_id'])
@@ -291,10 +383,13 @@ def make_area_file(area_rows, suppressed_rows, relations_for=None):
                 require(all(int(float(g['n_rows'])) == n_rows and int(float(g['n_households'])) == n_hh
                             for g in groups.values()), 'Counts differ between the groups of one area')
                 cells = {}
-                for group in AL.GROUPS:
+                for group in names:
+                    if group == 'sup':
+                        cells[group] = sup[(basis, level, ident)]
+                        continue
                     record = groups[group]
                     values = []
-                    for column in AL.COLUMNS[group]:
+                    for column in columns[group]:
                         value = number(record[column])
                         require(value is not None, 'A published value is missing: %s %s' % (group, column))
                         values.append(int(round(value)) if column in AL.INTEGER_COLUMNS else value)
@@ -305,7 +400,7 @@ def make_area_file(area_rows, suppressed_rows, relations_for=None):
                 base.update({'status': 'withheld', 'n_rows': None, 'n_households': None, 'groups': None, **relations})
             rows.append(base)
     return ({'schema': 'area-indices-1', 'rowfw_version': AL.ROWFW_VERSION,
-             'columns': {g: list(AL.COLUMNS[g]) for g in AL.GROUPS}, 'rows': rows}, published, withheld)
+             'columns': {g: list(columns[g]) for g in names}, 'rows': rows}, published, withheld)
 
 
 GEOMETRY_METHOD = {
@@ -320,8 +415,9 @@ GEOMETRY_METHOD = {
 
 
 def apply_v4_manifest(manifest, rows, adjacency, *, base_key, area_sha, suppressed_sha, frozen, run_id, d1_audit,
-                      created_at, concordance, prefix='co-cd005-'):
-    """Turn a v3 manifest into the v4 manifest (mutates and returns it)."""
+                      created_at, concordance, prefix='co-cd005-', d=None, overall_weights=None, support_model=None):
+    """Turn a v3 manifest into the v4 manifest (mutates and returns it). A candidate district `d` passes the frozen overall's weights and
+    the support model (candidate, party, race mode, signals); they are recorded in row_framework."""
     key = AL.snapshot_key(base_key, area_sha, suppressed_sha, frozen['framework_config_sha256'], prefix)
     manifest.update({
         'schema': 'cu-summary-v4', 'snapshot': key, 'created_at': created_at,
@@ -331,9 +427,11 @@ def apply_v4_manifest(manifest, rows, adjacency, *, base_key, area_sha, suppress
             'd1_audit': d1_audit, 'area_indices_sha256': AL.sha256_json(rows),
             'withheld_set_sha256': AL.withheld_set_sha256(rows), 'adjacency_sha256': AL.sha256_json(adjacency)},
         'area_index_levels': {b: list(l) for b, l in AL.BASIS_LEVELS.items()},
-        'area_index_catalog': {'groups': AL.INDEX_CATALOG, 'layers': AL.LAYERS},
+        'area_index_catalog': {'groups': AL.index_catalog(d), 'layers': AL.LAYERS},
         'area_floors': {'min_n': AL.MIN_N, 'min_households': AL.MIN_HOUSEHOLDS},
         'geometry_method': {**GEOMETRY_METHOD, 'concordance': concordance}})
+    if overall_weights is not None:
+        manifest['row_framework'].update(overall_weights=overall_weights, support_model=support_model)
     return manifest
 
 
@@ -434,7 +532,11 @@ def build(args, log):
             return {'n_blocks': tract_nblocks.get(ident)}
         return {'n_blocks': zip_nblocks.get(zip_code.get(ident))}
 
-    area_file, _, _ = make_area_file(area_rows, suppressed_rows, relations_for)
+    sup = overall_weights = support_model = None
+    if d['candidate']:
+        box.stage('running', 'support', 'candidate support means per published area')
+        sup, overall_weights, support_model = support_layer(d, rfb, args.scores, area_rows)
+    area_file, _, _ = make_area_file(area_rows, suppressed_rows, relations_for, d, sup)
     rows = area_file['rows']
     log('area rows', len(rows))
 
@@ -531,7 +633,8 @@ def build(args, log):
                    'withheld_without_polygon': withheld_without_polygon}
     apply_v4_manifest(manifest, rows, adjacency, base_key=base_key, area_sha=area_sha, suppressed_sha=suppressed_sha,
                       frozen=frozen, run_id=receipt['run_id'], d1_audit=d1_audit,
-                      created_at=meta_built(args.scores), concordance=concordance, prefix=d['snapshot_prefix'])
+                      created_at=meta_built(args.scores), concordance=concordance, prefix=d['snapshot_prefix'], d=d,
+                      overall_weights=overall_weights, support_model=support_model)
     key = manifest['snapshot']
     payload_files = {
         'manifest.json': dumps(manifest).encode('utf-8'), 'rows.json': blobs['rows.json'],
@@ -570,6 +673,8 @@ def build(args, log):
         'file_bytes': {name: len(data) for name, data in payload_files.items()},
         'seconds': round(time.time() - started, 1), 'validated': not args.skip_validate,
     }
+    if sup is not None:
+        result['candidate_support'] = {'areas': len(sup), 'overall_weights': overall_weights, 'support_model': support_model}
     box.run('completed', 'complete', 'cu-summary-v4 bundle written: %d area rows, %d bytes' % (len(rows), result['zip_bytes']))
     return result
 

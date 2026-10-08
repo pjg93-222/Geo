@@ -47,6 +47,14 @@ def competition_rank_within(group_codes, rank):
     return result
 
 
+def support_rank(score):
+    """(competition rank, tie size) of round(score, 9), highest first: rank = 1 + the number of strictly higher values."""
+    key = -np.round(np.asarray(score, dtype=np.float64), 9)
+    ordered = np.sort(key)
+    rank = np.searchsorted(ordered, key, side='left') + 1
+    return rank, np.searchsorted(ordered, key, side='right') - rank + 1
+
+
 def factorize(values):
     """Strings (or None) -> (int32 codes with -1 for missing, ids list)."""
     text = np.array([('' if v is None else str(v)) for v in values], dtype=object).astype(str)
@@ -166,6 +174,12 @@ def write_scores_db(path, data, meta, demo_key, log=None, replace=True):
     for name in ('cua', 'part', 'soi'):
         list_columns['ord_' + name] = np.lexsort((positions, take(name + '_rank'))).astype(np.int32)
     list_columns['ord_within'] = np.lexsort((positions, -take('ovr_pct_within_reg').astype(np.float64))).astype(np.int32)
+    sup = data.get('support')               # candidate district only (Phase 4B): sup_score, sup_pct, in_universe aligned to the source rows, info
+    if sup is not None:
+        if not np.isfinite(np.asarray(sup['sup_score'], dtype=np.float64)).all() or not np.isfinite(np.asarray(sup['sup_pct'], dtype=np.float64)).all():
+            raise ValueError('Candidate support has a missing value')
+        sup_rank, sup_tie = (a[order] for a in support_rank(sup['sup_score']))
+        list_columns['ord_sup'] = np.lexsort((positions, sup_rank)).astype(np.int32)
 
     # ---- metadata derived from the data ------------------------------------------------------------------
     group_counts = {code: int((reg_group == index).sum()) for code, index in REG_GROUP_INDEX.items()}
@@ -261,6 +275,13 @@ def write_scores_db(path, data, meta, demo_key, log=None, replace=True):
             connection.executemany('INSERT INTO value_dict(fid,code,literal) VALUES (?,?,?)',
                                    [(fid, code, str(text)) for code, text in enumerate(literals)])
 
+        # candidate support, joined to person on pos
+        if sup is not None:
+            connection.execute(S.SUPPORT_TABLE)
+            connection.executemany('INSERT INTO support(pos,sup_score,sup_pct,sup_rank,sup_tie_n,in_universe) VALUES (?,?,?,?,?,?)', zip(
+                pos.tolist(), _floats(np.asarray(sup['sup_score'])[order]), _floats(np.asarray(sup['sup_pct'])[order]),
+                sup_rank.tolist(), sup_tie.tolist(), np.asarray(sup['in_universe'])[order].astype(np.int64).tolist()))
+
         # households
         household = data['household']
         hnames = S.HOUSEHOLD_COLUMN_NAMES
@@ -306,6 +327,10 @@ def write_scores_db(path, data, meta, demo_key, log=None, replace=True):
                              for name, a in list_columns.items()},
             'contribution_sum_max_abs_diff': sums,
         })
+        if sup is not None:
+            metadata['support'] = sup['info']
+        elif 'support' in metadata:
+            raise ValueError('Support metadata without a support table')
         missing = [key for key in S.REQUIRED_METADATA if key not in metadata]
         if missing:
             raise ValueError('Missing metadata keys: ' + ', '.join(missing))

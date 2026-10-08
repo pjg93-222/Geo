@@ -64,6 +64,11 @@ INDEX_CATALOG = [
     {'id': 'soi', 'label': 'Sphere of Influence', 'control': 'Sphere of Influence', 'top10': 'Sphere of Influence'},
     {'id': 'lean', 'label': 'Partisan lean', 'control': 'Partisan lean', 'top10': None},
 ]
+# A candidate district (Phase 4B) adds the 'sup' group right after 'ovr': a plain mean of person support scores, STANDING_COLUMNS.
+CANDIDATE_GROUPS = ('ovr', 'sup') + GROUPS[1:]
+CANDIDATE_COLUMNS = {**COLUMNS, 'sup': STANDING_COLUMNS}
+CANDIDATE_CATALOG = INDEX_CATALOG[:1] + [{'id': 'sup', 'label': 'Candidate support', 'control': 'Candidate support',
+                                          'top10': 'Candidate support'}] + INDEX_CATALOG[1:]
 LAYERS = [
     {'id': 'top10_share_eb', 'label': 'Share of people in the top 10%', 'default': True},
     {'id': 'eb_mean', 'label': 'Area mean of person scores', 'default': False},
@@ -111,3 +116,16 @@ def snapshot_key(base_key, area_table_sha256, suppressed_ids_sha256, config_sha2
 
 def group_cells(group):
     return COLUMNS[group]
+
+
+def groups(d=None):
+    """The area groups of district entry `d`: GROUPS itself for Colorado and any district without a candidate."""
+    return CANDIDATE_GROUPS if d and d.get('candidate') else GROUPS
+
+
+def columns(d=None):
+    return CANDIDATE_COLUMNS if d and d.get('candidate') else COLUMNS
+
+
+def index_catalog(d=None):
+    return CANDIDATE_CATALOG if d and d.get('candidate') else INDEX_CATALOG

@@ -7,7 +7,9 @@ The fixture is invented: its contact layer carries SENTINEL_* names, addresses, 
 that none of them reaches scores.sqlite3. The loader runs in full (manifest hashes, W1 census with the shifted control,
 contribution sums, band rule, street mapping) and must fail closed on every tampered input.
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -26,6 +28,8 @@ from tools import glassbox
 from tools import make_scores_fixture as MF
 from tools import scores_schema as S
 from tools import build_scores_v3 as B
+from tools import scores_writer as W
+from tools import support as SUP
 
 
 class LoaderTests(unittest.TestCase):
@@ -309,6 +313,155 @@ class LoaderTests(unittest.TestCase):
         out = self.root / 'other_source.sqlite3'
         self.assertEqual(self.run_loader(out, self.root / 'other_source.json', contacts=contacts), 2)
         self.assertFalse(out.exists())
+
+
+class SupportLoaderTests(unittest.TestCase):
+    """Phase 4B: a candidate district's store gets the `support` table, the `ord_sup` list and the `support` metadata key, after the
+    loader has checked the frozen 4-term overall, the pin on cache/support.npz, the file against tools/support.py and every row's
+    overall. The invented district is Oregon's entry with the weights 40/0/35/25, because the fixture's overall is the 3-term one:
+    the sup term is read from the file like the real one, and the real 30/25/25/20 sum is checked on hand numbers below."""
+
+    DISTRICT = {**D.get('or-05'), 'score_weights': {'cua': 40, 'sup': 0, 'part': 35, 'soi': 25}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        cls.root = Path(cls.temporary.name)
+        cls._events = (glassbox.EVENT_DIR, glassbox.MIRROR)
+        glassbox.EVENT_DIR, glassbox.MIRROR = cls.root / 'events', cls.root / 'events.jsonl'
+        cls.fx = MF.make_store(cls.root / 'fx', parquet=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        glassbox.EVENT_DIR, glassbox.MIRROR = cls._events
+        cls.temporary.cleanup()
+
+    def plain(self, name):
+        """The fixture's P1 folder and cache as they are (no support columns, no overall block)."""
+        folder = self.root / name
+        shutil.copytree(self.fx.rowfw_dir, folder / 'rowfw')
+        shutil.copyfile(self.fx.cache_path, folder / 'inputs.parquet')
+        return folder
+
+    def world(self, name, flip=False, tweak=None, pin=True):
+        """The plain folder with the support inputs added to the cache, support.npz beside it, and a config that freezes the 4-term
+        overall and pins the file. `flip` turns the partisan score the wrong way; `tweak` edits the arrays before they are saved."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        fx, district, folder = self.fx, self.DISTRICT, self.plain(name)
+        rng = np.random.default_rng(11)
+        party = np.asarray(fx.data['party'])
+        lean = np.clip(50 + 30 * (party == 'D') - 30 * (party == 'R') + rng.normal(0, 8, fx.n), 1, 99)
+        ballot = [('D' if rng.random() < .6 else 'R') if p in ('D', 'R') and rng.random() < .3 else None for p in party.tolist()]
+        cache = pq.read_table(fx.cache_path)
+        for column, values in (('sai_partisan_score', 100 - lean if flip else lean), ('sai_harris_support_score', lean),
+                               ('sai_trump_support_score', 100 - lean)):
+            cache = cache.append_column(column, pa.array(values))
+        cache = cache.append_column('svi_vh_2024p_party', pa.array(ballot, type=pa.string()).dictionary_encode())
+        cache_path = folder / 'inputs.parquet'
+        pq.write_table(cache, cache_path, compression='zstd')
+        result = SUP.compute(district, B.support_columns(pq, cache_path, district))
+        arrays = {'model_source_row': np.arange(1, fx.n + 1), 'sup_score': result['sup_score'], 'sup_pct': result['sup_pct'],
+                  'in_universe': result['in_universe']}
+        if tweak:
+            tweak(arrays)
+        np.savez(folder / 'support.npz', **arrays)
+        sha = W.sha256_file(folder / 'support.npz')
+        key = 'W' + '_'.join(str(v) for v in district['score_weights'].values())
+        path = folder / 'rowfw' / 'framework_config.json'
+        config = json.loads(path.read_text(encoding='utf-8'))
+        config['overall'] = {'default': key, key: {
+            'weights': {g: {'value': v / 100.0} for g, v in district['score_weights'].items()},
+            'support': {'sha256': sha if pin else '0' * 64, 'candidate': district['candidate'], 'party': district['party'],
+                        'race_mode': district['race_mode'], 'signals': district['support']['signals']}}}
+        path.write_text(json.dumps(config), encoding='utf-8')
+        for stem in B.STEMS:
+            manifest_path = folder / 'rowfw' / ('%s_rowfw-1.0.0.manifest.json' % stem)
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['config_sha256'] = W.sha256_file(path)
+            manifest['inputs']['cache_sha256'] = W.sha256_file(cache_path)
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+        return folder
+
+    def run_loader(self, folder, name, district):
+        fx, out = self.fx, self.root / (name + '.sqlite3')
+        argv = ['--rowfw', str(folder / 'rowfw'), '--cache', str(folder / 'inputs.parquet'), '--contacts', str(fx.contacts_path),
+                '--street', str(fx.street_path), '--source-csv', str(fx.source_csv), '--salt-file', str(fx.directory / '.street-salt'),
+                '--w1', 'verify', '--out', str(out), '--receipt', str(self.root / (name + '.json')), '--low-memory']
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            code = B.main(argv, district=district)
+        return code, out, error.getvalue()
+
+    def test_a_candidate_store_holds_the_support_table_ord_sup_and_the_metadata_key(self):
+        folder = self.world('ok')
+        code, out, error = self.run_loader(folder, 'ok', self.DISTRICT)
+        self.assertEqual((code, error), (0, ''))
+        file = np.load(folder / 'support.npz')
+        db = sqlite3.connect('file:%s?mode=ro' % out.as_posix(), uri=True)
+        try:
+            self.assertEqual([r[1] for r in db.execute('PRAGMA table_info(support)')],
+                             ['pos', 'sup_score', 'sup_pct', 'sup_rank', 'sup_tie_n', 'in_universe'])
+            by_id = dict(zip(np.asarray(self.fx.data['person_id']).tolist(), file['sup_score'].tolist()))
+            rows = db.execute('SELECT p.person_id, s.sup_score, s.sup_rank, s.in_universe FROM person p JOIN support s ON s.pos = p.pos').fetchall()
+            self.assertEqual(len(rows), self.fx.n)
+            self.assertTrue(all(by_id[person] == score and universe == 1 for person, score, _, universe in rows))
+            self.assertEqual({rank for _, score, rank, _ in rows if score == max(by_id.values())}, {1})
+            meta = {k: json.loads(v) for k, v in db.execute('SELECT key, value FROM metadata')}
+            support = meta['support']
+            self.assertEqual((support['candidate'], support['party'], support['race_mode']), ('Janelle Bynum', 'D', 'general'))
+            self.assertEqual(support['sha256'], W.sha256_file(folder / 'support.npz'))
+            self.assertEqual(sorted(support['coverage']), sorted(SUP.SIGNALS))
+            self.assertEqual(support['coverage']['partisan'], self.fx.n)
+            self.assertTrue(0 < support['coverage']['primary_ballot'] < self.fx.n)
+            self.assertLessEqual(support['overall_max_abs_diff'], 1e-4)
+            self.assertEqual(meta['list_columns']['ord_sup']['n'], self.fx.n)
+            order = np.frombuffer(db.execute("SELECT data FROM list_column WHERE name='ord_sup'").fetchone()[0], dtype='<i4')
+            ranks = [db.execute('SELECT sup_rank FROM support WHERE pos = ?', (int(i) + 1,)).fetchone()[0] for i in order[:60]]
+            self.assertEqual((ranks[0], ranks), (1, sorted(ranks)))
+        finally:
+            db.close()
+
+    def test_a_district_without_a_candidate_writes_no_support_table_key_or_list(self):
+        code, out, error = self.run_loader(self.plain('plain'), 'plain', D.get('co-05'))
+        self.assertEqual((code, error), (0, ''))
+        db = sqlite3.connect('file:%s?mode=ro' % out.as_posix(), uri=True)
+        try:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'support'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM metadata WHERE key = 'support'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM list_column WHERE name = 'ord_sup'").fetchone()[0], 0)
+        finally:
+            db.close()
+
+    def stops(self, name, message, folder=None, district=None, **world):
+        code, out, error = self.run_loader(folder or self.world(name, **world), name, district or self.DISTRICT)
+        self.assertEqual(code, 2, (name, error))
+        self.assertIn(message, error, name)
+        self.assertFalse(out.exists(), name)
+
+    def test_the_loader_stops_on_every_broken_link_between_the_file_the_config_and_the_cache(self):
+        self.stops('unpinned', 'is not the file the frozen config pins', pin=False)
+        self.stops('shifted_rows', 'rows are not keys 1..N', tweak=lambda a: a.update(model_source_row=a['model_source_row'] + 1))
+        self.stops('other_score', 'differs from tools/support.py', tweak=lambda a: a['sup_score'].__setitem__(0, a['sup_score'][0] + 1))
+        self.stops('flipped', 'orientation', flip=True)
+        self.stops('primary', 'general mode only', folder=self.world('primary_w'), district={**self.DISTRICT, 'race_mode': 'primary'})
+        self.stops('other_weights', 'The frozen overall is W40_0_35_25, not W40_0_30_30', folder=self.world('weights_w'),
+                   district={**self.DISTRICT, 'score_weights': {'cua': 40, 'sup': 0, 'part': 30, 'soi': 30}})
+        self.stops('no_overall', 'rerun the row framework with candidate support', folder=self.plain('no_overall'))
+
+    def test_the_overall_must_recompute_from_the_standings_and_the_support_file(self):
+        w = {'cua': .30, 'sup': .25, 'part': .25, 'soi': .20}
+        # .30 x 80 + .25 x 60 + .20 x 40 + .25 x 50 = 24 + 15 + 8 + 12.5 = 59.5
+        self.assertLess(B.check_overall(w, [80, 20], [60, 20], [40, 20], [50, 20], [59.5, 20.0]), 1e-12)
+        self.assertLess(B.check_overall(w, [80], [60], [40], [50], [59.50005]), 1e-4)            # float32 noise passes
+        with self.assertRaises(B.BuildError):
+            B.check_overall(w, [80, 20], [60, 20], [40, 20], [50, 20], [59.5, 20.1])           # one row off by 0.1
+        with self.assertRaises(B.BuildError):
+            B.check_overall(w, [80], [60], [40], [50], [63.0])                                 # the 3-term .40/.35/.25 overall, 63.0
+
+    def test_support_rank_is_the_competition_rank_highest_first_with_the_tie_size(self):
+        rank, tie = W.support_rank([90.0, 70.0, 90.0000000001, 50.0, 70.0])
+        self.assertEqual((rank.tolist(), tie.tolist()), ([1, 3, 1, 5, 3], [2, 2, 2, 1, 2]))
 
 
 class DistrictInputTests(unittest.TestCase):

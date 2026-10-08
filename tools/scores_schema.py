@@ -55,6 +55,11 @@ STREET_COLUMNS = (('h_id', 'TEXT PRIMARY KEY'), ('hh', 'INTEGER NOT NULL'), ('n_
 def table_sql(name, columns, suffix=''):
     return 'CREATE TABLE %s (%s)%s' % (name, ', '.join('%s %s' % pair for pair in columns), suffix)
 
+# Candidate support (Phase 4B), keyed by person.pos. Written only for a candidate district, so it is not in TABLES.
+SUPPORT_TABLE = table_sql('support', (('pos', 'INTEGER PRIMARY KEY'), ('sup_score', 'REAL NOT NULL'), ('sup_pct', 'REAL NOT NULL'),
+                                      ('sup_rank', 'INTEGER NOT NULL'), ('sup_tie_n', 'INTEGER NOT NULL'),
+                                      ('in_universe', 'INTEGER NOT NULL')))
+
 
 TABLES = [
     'CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)',

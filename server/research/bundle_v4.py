@@ -20,6 +20,7 @@ ROW_BASE_KEYS = {'basis', 'level', 'id', 'label', 'parent_id', 'status', 'n_rows
 RF_KEYS = {'version', 'base_snapshot', 'area_table_sha256', 'suppressed_ids_sha256', 'framework_config_sha256',
            'plan_sha256', 'criteria_sha256', 'run_id', 'rulings', 'd1_audit', 'area_indices_sha256',
            'withheld_set_sha256', 'adjacency_sha256'}
+CANDIDATE_RF_KEYS = {'overall_weights', 'support_model'}       # a candidate district's manifest also records these two (Phase 4B)
 D1_AUDIT = {'exactly_disclosed': 0, 'symdiff_violations': 0, 'remainder_violations': 0}
 GEOMETRY_METHOD_KEYS = {'block', 'tract', 'precinct', 'zip', 'concordance'}
 CONCORDANCE_KEYS = {'precinct_person_share', 'zip_person_share', 'precincts_without_block_majority', 'zips_without_zcta',
@@ -139,7 +140,8 @@ def validate_area_indices(file, manifest):
     _keys(file, AREA_FILE_KEYS, 'area index file')
     if file['schema'] != AREA_SCHEMA or file['rowfw_version'] != AL.ROWFW_VERSION:
         _fail('Unsupported area index file')
-    if file['columns'] != {group: list(AL.COLUMNS[group]) for group in AL.GROUPS}:
+    groups, columns = AL.groups(settings.DISTRICT), AL.columns(settings.DISTRICT)
+    if file['columns'] != {group: list(columns[group]) for group in groups}:
         _fail('Unexpected area index columns')
     rows = file['rows']
     if not isinstance(rows, list) or not rows or len(rows) > 100000:
@@ -177,10 +179,9 @@ def validate_area_indices(file, manifest):
             _integer(row['n_households'], AL.MIN_HOUSEHOLDS)
             if row['n_households'] > row['n_rows']:
                 _fail('More households than people')
-            if not isinstance(row['groups'], dict) or set(row['groups']) != set(AL.GROUPS):
+            if not isinstance(row['groups'], dict) or set(row['groups']) != set(groups):
                 _fail('Invalid area groups')
-            row['_records'] = {group: _check_group_values(group, row['groups'][group], AL.COLUMNS[group])
-                               for group in AL.GROUPS}
+            row['_records'] = {group: _check_group_values(group, row['groups'][group], columns[group]) for group in groups}
             for key, value in relations.items():
                 if basis != 'registration':
                     if value is not None:
@@ -206,7 +207,7 @@ def validate_area_indices(file, manifest):
         published = [r for r in partition if r['status'] == 'ok']
         if not published:
             _fail('A partition has no published area')
-        for group in ('ovr', 'cua', 'part', 'soi'):
+        for group in (g for g in groups if g != 'lean'):
             for source, target in (('eb_mean', 'area_pct'), ('top10_share_eb', 'top10_area_pct')):
                 values = [r['_records'][group][source] for r in published]
                 stored = [r['_records'][group][target] for r in published]
@@ -268,9 +269,13 @@ def validate_adjacency(adjacency, by_partition, manifest):
 def validate_v4(payload, manifest):
     """Raise ValueError unless the v4 additions are consistent. Called by bundles.validate() for cu-summary-v4."""
     rf = manifest['row_framework']
-    _keys(rf, RF_KEYS, 'row framework')
+    district = settings.DISTRICT
+    _keys(rf, RF_KEYS | (CANDIDATE_RF_KEYS if district['candidate'] else set()), 'row framework')
     if rf['version'] != AL.ROWFW_VERSION:
         _fail('Unsupported row framework version')
+    if district['candidate'] and (rf['overall_weights'] != district['score_weights'] or rf['support_model'] != {
+            **{k: district[k] for k in ('candidate', 'party', 'race_mode')}, 'signals': district['support']['signals']}):
+        _fail('The bundle was not built for the support settings of this district')
     frozen = AL.FROZEN_SHA256_BY_DISTRICT.get(settings.DISTRICT['id'])
     if frozen is None:
         _fail('The row framework inputs of this district are not pinned yet')
@@ -293,7 +298,7 @@ def validate_v4(payload, manifest):
         _fail('Snapshot key does not follow from its inputs')
     if manifest['area_index_levels'] != {b: list(l) for b, l in AL.BASIS_LEVELS.items()}:
         _fail('Unexpected area index levels')
-    if manifest['area_index_catalog'] != {'groups': AL.INDEX_CATALOG, 'layers': AL.LAYERS}:
+    if manifest['area_index_catalog'] != {'groups': AL.index_catalog(district), 'layers': AL.LAYERS}:
         _fail('Unexpected area index catalog')
     if manifest['area_floors'] != {'min_n': AL.MIN_N, 'min_households': AL.MIN_HOUSEHOLDS}:
         _fail('Unexpected suppression floors')

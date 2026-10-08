@@ -18,7 +18,10 @@ What it checks before it writes (any failure stops the build and leaves the prev
   * the crosswalk W1: contacts.rowid == model_source_row and contacts.id == HMAC(salt, persist id of that row) on every
     row, with a shifted-by-one control that must match nothing; every street person id is in the crosswalk;
   * sum of the field contributions equals the index score (and the lean) on every row;
-  * balanced K_actual, grade counts, lean band counts and flag counts against the build's own summaries.
+  * balanced K_actual, grade counts, lean band counts and flag counts against the build's own summaries;
+  * a candidate district (Phase 4B) also: the frozen overall is the district's own 4-term one, pinned to cache/support.npz (sha256),
+    the file is what tools/support.py gives for the cache, its rows are 1..N, and every row's overall recomputes from the standings
+    and the file (1e-4); the store then gets the `support` table, the `ord_sup` list and the `support` metadata key.
 
 The store holds no name, address, email, phone, coordinate or source-row number. Counts only are printed.
 """
@@ -44,6 +47,7 @@ from tools import districts as D               # noqa: E402
 from tools import field_labels as FL           # noqa: E402
 from tools import scores_schema as S           # noqa: E402
 from tools import scores_writer as W           # noqa: E402
+from tools import support as SUP               # noqa: E402
 from tools.glassbox import GlassBox, new_run_id    # noqa: E402
 
 V3 = Path(__file__).resolve().parents[1]
@@ -150,6 +154,60 @@ def verify_config(rowfw, manifest, log):
     require(registration_groups_ok(config['standing']['within_registration']['groups']), 'Registration groups differ')
     log('config verified', actual[:12])
     return config, actual
+
+
+def check_overall(weights, cua, part, soi, sup, ovr, tolerance=1e-4):
+    """The overall of every row recomputed in the engine's order ((cua + part) + soi) + sup from the standings and the support file.
+    The parquet holds float32, whose step at 100 is 7.6e-6, hence the tolerance. Returns the largest absolute difference."""
+    again = (weights['cua'] * np.asarray(cua, dtype=np.float64) + weights['part'] * np.asarray(part, dtype=np.float64)
+             + weights['soi'] * np.asarray(soi, dtype=np.float64)) + weights['sup'] * np.asarray(sup, dtype=np.float64)
+    worst = float(np.abs(again - np.asarray(ovr, dtype=np.float64)).max())
+    require(worst <= tolerance, 'The overall does not recompute from the standings and the support file (max abs diff %.3g)' % worst)
+    return worst
+
+
+def support_columns(pq, cache_path, district):
+    """The cache columns tools/support.py reads, as numpy (dictionary columns decoded by cast, as rowfw.write_support does)."""
+    import pyarrow as pa
+    names = pq.read_schema(cache_path).names
+    want = [*SUP.INPUT_COLUMNS, *SUP.ballot_columns(names, district['support']['ballot_years'])]
+    tbl = pq.read_table(cache_path, columns=want)
+    cast = lambda col: col.cast(pa.string()) if pa.types.is_dictionary(col.type) else col      # noqa: E731
+    return {c: cast(tbl.column(c)).combine_chunks().to_numpy(zero_copy_only=False) for c in want}
+
+
+def verify_support(pq, district, config, cache_path, data, log):
+    """Candidate district (Phase 4B): the frozen overall is the district's own, pinned to cache/support.npz; the file is the one
+    tools/support.py gives for the cache; its rows are the parquet's; every overall recomputes from it. Returns data['support']."""
+    require(district['race_mode'] == 'general', 'Candidate support is built for general mode only (race_mode %r)' % district['race_mode'])
+    overall = config.get('overall', {})
+    block = overall.get(overall.get('default'), {})
+    wanted = district['score_weights']
+    key = 'W' + '_'.join(str(v) for v in wanted.values())
+    require(overall.get('default') == key, 'The frozen overall is %s, not %s: rerun the row framework with candidate support' % (overall.get('default'), key))
+    weights = {g: w['value'] for g, w in block['weights'].items()}
+    model = {k: district[k] for k in ('candidate', 'party', 'race_mode')} | {'signals': district['support']['signals']}
+    require({k: block['support'].get(k) for k in model} == model, 'The frozen support block differs from the district settings')
+    path = Path(cache_path).with_name('support.npz')
+    require(path.is_file(), 'cache/support.npz is missing')
+    sha = W.sha256_file(path)
+    require(block['support']['sha256'] == sha, 'support.npz is not the file the frozen config pins')
+    with np.load(path) as stored:
+        file = {k: stored[k] for k in ('model_source_row', 'sup_score', 'sup_pct', 'in_universe')}
+    n = len(data['person_id'])
+    require(np.array_equal(file['model_source_row'], np.arange(1, n + 1)), 'support.npz rows are not keys 1..N in order')
+    cols = support_columns(pq, cache_path, district)
+    try:
+        orientation = SUP.orientation(cols)
+    except ValueError as error:
+        raise BuildError('Support score orientation: %s' % error) from None
+    fresh = SUP.compute(district, cols)
+    require(all(np.allclose(fresh[k], file[k], rtol=0, atol=1e-9) for k in ('sup_score', 'sup_pct'))
+            and np.array_equal(fresh['in_universe'], file['in_universe']), 'support.npz differs from tools/support.py on the cache')
+    worst = check_overall(weights, data['cua_pct'], data['part_pct'], data['soi_pct'], file['sup_pct'], data['ovr_score'])
+    log('support verified', 'rows', n, 'overall max abs diff %.2g' % worst, 'coverage', fresh['coverage'])
+    return {k: file[k] for k in ('sup_score', 'sup_pct', 'in_universe')} | {'info': {
+        **model, 'coverage': fresh['coverage'], 'orientation': orientation, 'sha256': sha, 'overall_max_abs_diff': worst}}
 
 
 def check_area_table(rowfw, log):
@@ -358,7 +416,8 @@ def build(args, gb, log):
     require(counts == {'D': frozen['D'], 'R': frozen['R'], 'U': frozen['U'], 'O': frozen['other']},
             'Registration group counts differ from the frozen counts: %r' % counts)
     rollup = strings(cache_tbl, 'svi_party_registration_rollup')
-    check_rollup(D.get(args.district), rollup, reg_group_text)
+    district = D.get(args.district)
+    check_rollup(district, rollup, reg_group_text)
 
     lean = numeric(rows_tbl, 'lean').astype(np.float64)
     lean_band = numeric(rows_tbl, 'lean_band').astype(np.int64)
@@ -480,6 +539,9 @@ def build(args, gb, log):
     data['street_household'] = W.street_household_rows(pairs, data)
     require(len(data['street_household']) == n_households, 'Street household count differs after grouping')
     log('street households', len(data['street_household']), 'people with a location', int(located.sum()))
+
+    if district['candidate']:
+        data['support'] = verify_support(pq, district, config, cache_path, data, log)
 
     # ---- checks against the build's own summaries ------------------------------------------------------------------
     checks = check_summaries(rowfw, data, log)
@@ -603,7 +665,8 @@ def verify_written(out, n, receipt, rowfw, log):
     receipt['counts'] = got
 
 
-def main(argv=None):
+def main(argv=None, district=None):
+    """`district`: an entry of tools/districts.py (a modified copy in tests); default the --district id."""
     parser = argparse.ArgumentParser(description='Build V3/.local/scores.sqlite3 from the P1 files (fails closed).')
     parser.add_argument('--real', action='store_true', help='use the real P1 files, cache, contacts, street and source CSV')
     parser.add_argument('--rowfw')
@@ -620,7 +683,7 @@ def main(argv=None):
     parser.add_argument('--low-memory', action='store_true', help='skip the available-RAM floor')
     parser.add_argument('--run-id', default=None)
     args = parser.parse_args(argv)
-    district = D.get(args.district)
+    district = args.district = D.get(district if district is not None else args.district)
     home = D.data_dir(district)
     args.rowfw = args.rowfw or str(D.rowfw_build(district))
     args.cache = args.cache or str(D.rowfw_cache(district))
