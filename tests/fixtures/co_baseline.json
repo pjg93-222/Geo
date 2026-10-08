@@ -1,51 +1,51 @@
 {
  "endpoints": {
   "areas_registration_block": {
-   "bytes": 3529267,
+   "bytes": 4099801,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/areas/{snapshot}/registration/block.json",
-   "sha256": "ca6d90f9ef5c6dacf0b6834bb644dac98dc02fe57189cc497312c4d89ba61a19",
+   "sha256": "72677e29561d212c9d68fa32526411e6f1938d48806d6e7fb93f934285fa51e0",
    "status": 200
   },
   "areas_registration_precinct": {
-   "bytes": 165130,
+   "bytes": 166549,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/areas/{snapshot}/registration/precinct.json",
-   "sha256": "93478e8a1aefbdfbe0d6461b17fd82ac97171aea74c9ce1ddc1dd132fc5481c4",
+   "sha256": "c2f19d6877315d5f419adc3869db84c7f52e76aed8392ffa13af18ccd1ad11e6",
    "status": 200
   },
   "areas_registration_tract": {
-   "bytes": 84707,
+   "bytes": 88952,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/areas/{snapshot}/registration/tract.json",
-   "sha256": "4c0963c6d44337aaf7c737c06851b5a52715fe3b31f8165da2f48c91f8cfe0dc",
+   "sha256": "fae8d465f02a6342af1c3ec1300896f6048d560d12dbc8c66bb98475a8c6d9d8",
    "status": 200
   },
   "areas_registration_zip": {
-   "bytes": 20401,
+   "bytes": 21697,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/areas/{snapshot}/registration/zip.json",
-   "sha256": "845e26aabfab643bc07180411e7b91d1506e2dd784329edf47eb900a7c2a15d1",
+   "sha256": "186fa5912713d37946c36444e4ecb3a14dc7adad8b452fce892d3f638513aa1b",
    "status": 200
   },
   "areas_residence_tract": {
-   "bytes": 94187,
+   "bytes": 108848,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/areas/{snapshot}/residence/tract.json",
-   "sha256": "502cf9247823ef68aafd5653cc691162efc1b3ab6242d68e7781586dc148fdb7",
+   "sha256": "15a8d9547433d2aada0385f1d61e8f4fe6aaf5495d98d9f77d4791f91517bf14",
    "status": 200
   },
   "areas_residence_zip": {
-   "bytes": 36078,
+   "bytes": 45275,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/areas/{snapshot}/residence/zip.json",
-   "sha256": "0460c8dd0b8d40490de3747f42020fa621130dd0f26863bf296cca6d532fdd9b",
+   "sha256": "f89a144996004b4a08303a107f3420388e3be7b8826eba9e292dc1747f3b9698",
    "status": 200
   },
   "contacts_export_csv": {
@@ -173,7 +173,7 @@
    "content_type": "application/json",
    "method": "GET",
    "path": "/_terrier/health",
-   "sha256": "7a511898e802f4d8cb41f14954c770f9e2927596813d4cfc23d7947a7612dfc0",
+   "sha256": "96b46106cef61a0907f050acb14807dd3ded34690766650afe75ed5287d650b5",
    "status": 200
   },
   "household_popover": {
@@ -185,19 +185,19 @@
    "status": 200
   },
   "meta": {
-   "bytes": 3130,
+   "bytes": 3034,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/meta",
-   "sha256": "1e32ed47681e7cb4c2d3aac0653fdaa143d3b65a100e44d058b80a5f04d8897b",
+   "sha256": "bc906a05dd183c041a2abe52919c8ccc5db17a793a78fb4e085e8895b1a01569",
    "status": 200
   },
   "method_snapshots": {
-   "bytes": 77795,
+   "bytes": 117607,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/snapshots",
-   "sha256": "a78d16a2a0e1327a22afd1044c4114646f47fd2c630d06f8181e08dba0007e3a",
+   "sha256": "59a1ba2e9d614152cdc54ee67ce39e630111e80a28997c9fe1b3050659ccd0b1",
    "status": 200
   },
   "people_cursor_page": {
@@ -233,11 +233,11 @@
    "status": 200
   },
   "person_profile": {
-   "bytes": 8484,
+   "bytes": 8504,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/person?id={person_id}",
-   "sha256": "ee98d677c6687c7257b13d73e7096e28de0992c201c62f1b82e38ac809193824",
+   "sha256": "dff31dbf32bef27882f49b76248a27e3547e06cd3a4f649491cee74046773e66",
    "status": 200
   },
   "roads_view": {
@@ -257,19 +257,19 @@
    "status": 200
   },
   "summaries_count_json": {
-   "bytes": 13062,
+   "bytes": 12915,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/summaries?basis=registration&level=zcta&metric=count&scale=raw",
-   "sha256": "b0a22b8e5b3ec0a9c3b4c3090a8f769c6966644fcfe7d8cd86329fc586e364c7",
+   "sha256": "bb12a0af440231a8c8e408f6b0fad3472202abd92bdc00363a1e0f162bc6014b",
    "status": 200
   },
   "summaries_index_csv": {
-   "bytes": 7782,
+   "bytes": 7945,
    "content_type": "text/csv; charset=utf-8",
    "method": "GET",
    "path": "/api/summaries?basis=registration&level=zcta&metric=area_participation&scale=raw&format=csv",
-   "sha256": "321f60415bb94d74a337956fa5e95767fbaf463e8c10a17a1771a0820f04a13a",
+   "sha256": "991a6861d9b252e789eb31af57fe46947d6b64944e03b1477ad37d6f3ad3e0da",
    "status": 200
   },
   "walk_list_a": {
@@ -322,11 +322,11 @@
    "status": 200
   },
   "walk_overview_precinct": {
-   "bytes": 24103,
+   "bytes": 24470,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/walk/overview?precinct=5102221155",
-   "sha256": "7c80b7d1f58397e7f8be84ec17871f291abe326bb25b94542046ca8a57ca5e8f",
+   "sha256": "eca67550266d535def6db59c8f4ac4619d80b7446257dc388e74f3dae0050558",
    "status": 200
   },
   "walk_streets_precinct": {
@@ -346,11 +346,11 @@
    "status": 200
   },
   "workspace": {
-   "bytes": 7844,
+   "bytes": 7834,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/workspace",
-   "sha256": "e4d75d56a4f37e84b0da660b18d5690f74d6e51c93e54f4b8a21d117f29e154d",
+   "sha256": "b271d523c946b5a64d72a85187a0f60184d279fc8ada2d22e89266c054fcc0c1",
    "status": 200
   }
  },
@@ -368,7 +368,53 @@
    "row_scores_rowfw-1.0.0.parquet": "89f760eaf1c6dbd1f67d0ec903cc99271775b1a3c3db335174f168abfc820ced",
    "summaries/area_suppressed_ids.csv": "cf9217e948d4a4d79fc6f320439fde72cc441247e588e99cbac2313a2dad433e"
   },
+  "shown": {
+   "sha256": "a0e96d47c390b927033f5c994da249f7bfba629ac522f6283d3de97caaaebee0"
+  },
   "snapshots": {
+   "co-cd005-5fd70b1cb698": {
+    "core": {
+     "adjacency.json": "30bd2a0b69554ae42502a25648c820b3b9e9120f2a556d24cfa43eff1210c6f8",
+     "area_indices.json": "fb3af849d120faf47f57f40fb29db8bac8684226574cfd07b28d86d5e56ea9f6",
+     "district.geojson": "b96745b3d669190341b55d8735670ff8a10411d5d7466f2a7cffebf55f23db02",
+     "geometry.json": "e7616a05ff1114bf91f756b984f2b7c524f4623e637d2c1fbab10a66758b7f59",
+     "manifest.json": "c9578e5817521194a49c0473462d6a7ce6324ae249cdb4ef0f588c43d236b8d6",
+     "rows.json": "7e55b9e7cdc329ef21fabe731143463bb0de9858469748b87296631c03012be2",
+     "streets.geojson": "3860cb66fa99d67eafec30ef10e8aa50a5da1862bf0df49cf4c209f21d785fef"
+    },
+    "derived_cache": {
+     "derived/v3_areas_registration_block.json": "72677e29561d212c9d68fa32526411e6f1938d48806d6e7fb93f934285fa51e0",
+     "derived/v3_areas_registration_block.json.gz": "74062ff6a4b1ff351fbf06c62affba9316a2eeacbc86061127c47934b9a5c3cc",
+     "derived/v3_areas_registration_precinct.json": "c2f19d6877315d5f419adc3869db84c7f52e76aed8392ffa13af18ccd1ad11e6",
+     "derived/v3_areas_registration_precinct.json.gz": "095c2b61e0da5a06e00d3e49e7462d4268634a08c51e2b93a011d0d257d33c14",
+     "derived/v3_areas_registration_tract.json": "fae8d465f02a6342af1c3ec1300896f6048d560d12dbc8c66bb98475a8c6d9d8",
+     "derived/v3_areas_registration_tract.json.gz": "68c27830d3642aef200284a2f0d4e5e6c01bd0095f2d5ea4d7d21ddfd6b4b004",
+     "derived/v3_areas_registration_zip.json": "186fa5912713d37946c36444e4ecb3a14dc7adad8b452fce892d3f638513aa1b",
+     "derived/v3_areas_registration_zip.json.gz": "b57fb44db105bc3b0b25f55cf78d420bf4db4377f167b5b658f02dee29714d1c",
+     "derived/v3_areas_residence_tract.json": "15a8d9547433d2aada0385f1d61e8f4fe6aaf5495d98d9f77d4791f91517bf14",
+     "derived/v3_areas_residence_tract.json.gz": "b0fd1290b6a2ff429968a540ead15242cd499fd2a4cbfd4b55fcaeec41db3099",
+     "derived/v3_areas_residence_zip.json": "f89a144996004b4a08303a107f3420388e3be7b8826eba9e292dc1747f3b9698",
+     "derived/v3_areas_residence_zip.json.gz": "5e45b6f49033ce044b0dbb000a8b751d9e6a30bc3c42e0a93cc6355ecc4e2623",
+     "derived/v3_geometry_block_coarse.json": "7a232f36d52c620a942cc76759964ad18d190f2ab01d1d32754ef583e17f882f",
+     "derived/v3_geometry_block_coarse.json.gz": "887383594916f3d8875a1a8ad81931d2a792b02f121aca1bfb55233aae1efbe9",
+     "derived/v3_geometry_block_fine.json": "9cbbd5d34f226b4b3921791ce276c60ab9560a5b989409e133f4db3f8ea3e997",
+     "derived/v3_geometry_block_fine.json.gz": "248be03ea5cb10a7c7fa76b7fbf949ccc85e1eefc3d250529a4c2cd66a874798",
+     "derived/v3_geometry_precinct_coarse.json": "db37672ab5bdc55074758947bf2415f9e81588d20e470f25a32603529b53d76b",
+     "derived/v3_geometry_precinct_coarse.json.gz": "7b814fe33f2c2230a61eab8688b844d110c5acd2753849a63d95e845a30de9d6",
+     "derived/v3_geometry_precinct_fine.json": "bb28b467a629b3d1ea798a5c4d5482041421ffe1a6586cf3492acf4944b21312",
+     "derived/v3_geometry_precinct_fine.json.gz": "50669c234d6e167378dafbf32e0d9a74b0efd783e72f1c939d45821396d8b72f",
+     "derived/v3_geometry_tract_coarse.json": "8b1c01e3a04910d467b762f3a9d926855d8d770b5ea5b7c15e3f6cfb99c2e85a",
+     "derived/v3_geometry_tract_coarse.json.gz": "faf16afabd0085d86bbc6a42beea117e407f003894d415c676c42b6891a9fa0b",
+     "derived/v3_geometry_tract_fine.json": "d95f47805bc61f4fc7fb590b97fc27cd15800dc7b8577e7c199a74209b7b97d6",
+     "derived/v3_geometry_tract_fine.json.gz": "ee58c3c878c6d345a8006870ced1649921deda169fa372187af19391c4cdc298",
+     "derived/v3_geometry_zip_coarse.json": "4a31f272cd998e2fc2678dc6ddc404bc36790d47a1bb93a87f5200bbd09400bf",
+     "derived/v3_geometry_zip_coarse.json.gz": "e52c95ced4fc5909d1a1f38231a59df3e46464531ba7a7acd0a6c05b540b6b94",
+     "derived/v3_geometry_zip_fine.json": "bd46fe57c952c02828118aa64161a26583bf2add61d716281ac391f53e9e85ce",
+     "derived/v3_geometry_zip_fine.json.gz": "4ec307e23bc7b1f823d4d29839e882b7ad0632b1dda821130a83621c81f98325",
+     "derived/v3_meta.json": "ccb72c38bd666440954ae398b31e0a4761cb248acaa2a3101edd2023f7533ec5",
+     "derived/v3_meta.json.gz": "587ba27cb5c16b018f9157d9fc4ff246252489100821e2532ba2af44b1775f38"
+    }
+   },
    "co-cd005-6cf898496ca2": {
     "core": {
      "adjacency.json": "30bd2a0b69554ae42502a25648c820b3b9e9120f2a556d24cfa43eff1210c6f8",
@@ -438,22 +484,22 @@
   "Hashes, counts and templates only; raw bodies stay under .local/baseline-co/golden (gitignored).",
   "accounts.sqlite3 is read-write user state (saved walk lists, results): a legitimate edit shows as a diff.",
   "derived_cache files of a snapshot are rebuilt by the server on first use.",
-  "spare-server start retries: spare server start 1 of 3 failed: exited early with code 3221227274 (0xc000070a); see C:\\Users\\pgoff\\AppData\\Local\\Temp\\claude\\C--Users-pgoff-OneDrive-Desktop-Melange-Systems\\6a9a62a7-b92b-4112-9f5f-1785563e0cec\\scratchpad\\phase0\\server-8769-run1-pass1-try1.err.log",
+  "spare-server start retries: none needed",
   "The walk-list PDF is drawn in the browser (frontend/src/v3/lib/walkPdf.ts); the server has no PDF endpoint, so the walk_list_* bodies (its only input) are recorded, not PDF bytes."
  ],
- "recorded_utc": "2026-10-07T05:02:18+00:00",
- "repo_head": "8c7a8178fecf6b14be4b50c1f72cde49d3645fe3",
+ "recorded_utc": "2026-10-08T23:27:53+00:00",
+ "repo_head": "d95f9f404330246539feac267b47bcc805427586",
  "schema": "co-baseline-1",
- "snapshot": "co-cd005-6cf898496ca2",
+ "snapshot": "co-cd005-5fd70b1cb698",
  "spare_server": {
   "pids": [
    {
-    "launcher": 30276,
-    "serving": 65588
+    "launcher": 8036,
+    "serving": 64264
    },
    {
-    "launcher": 85304,
-    "serving": 43160
+    "launcher": 40448,
+    "serving": 48688
    }
   ],
   "port": 8769
@@ -520,8 +566,8 @@
     "research_auditevent": {
      "columns": 5,
      "order": "primary key",
-     "rows": 3,
-     "sha256": "4cd28da44e6eb35d9ac441d4a10e5ec9acb2df1daa07fd721451167fa60caa62"
+     "rows": 4,
+     "sha256": "ddc1e8e55b8de0888cbf393ae805a9dc7df5f68d92607aa0859708f6c995c034"
     },
     "research_disposition": {
      "columns": 7,
@@ -550,8 +596,8 @@
     "research_snapshot": {
      "columns": 5,
      "order": "primary key",
-     "rows": 2,
-     "sha256": "a1597d32b7b649e57b5b9c482ed70932facedc4704fd828911592d491dc4163d"
+     "rows": 3,
+     "sha256": "e625042d1d25a56d4c8f77bc001f7ef14684f83d603384050ee472c84b901673"
     },
     "research_walklist": {
      "columns": 9,
@@ -563,7 +609,7 @@
      "columns": 2,
      "order": "all columns",
      "rows": 8,
-     "sha256": "07b189e7b098f62b56e9e7d20e25d44bfaa1bbbdff998cb59dc086ce8424119d"
+     "sha256": "d7331fa5291a50a74e4ee8a11321247f3542b14e2763097397543de01610b15c"
     }
    },
    "user_version": 0
@@ -724,8 +770,8 @@
     "metadata": {
      "columns": 2,
      "order": "primary key",
-     "rows": 22,
-     "sha256": "2ae8287d101065d9ab072ea53c762ecbb6ef92c37b3eacf6967eaf07ab2a19da"
+     "rows": 21,
+     "sha256": "570416fede58541ff2a624e450ed4fd482061fc626bca0ff3bdbd8367d286f34"
     },
     "person": {
      "columns": 64,
@@ -737,7 +783,7 @@
      "columns": 3,
      "order": "all columns",
      "rows": 25,
-     "sha256": "38dc7996ee7c4c48ab444b133267b78e6804d73ac4aa7755942016f2b9379c01"
+     "sha256": "ae9abfb37cd91707831f8fedef8d4c24d16b1fba9224876c65399f0be0fc5f66"
     },
     "street_household": {
      "columns": 7,
