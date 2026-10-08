@@ -84,6 +84,7 @@ export interface WalkPlanSpan {
 export interface WalkPlan {
   schema: 'walk-plan-1'; preset: string; weights: Record<'value' | 'pop_density' | 'voter_density', number>; p: string;
   race_mode: 'general' | 'primary'; spans: WalkPlanSpan[]; not_ranked: { spans: number; people: number };
+  matched?: { people: number; scored: number };   // people in the area, and how many of them have a score
 }
 export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number }
 

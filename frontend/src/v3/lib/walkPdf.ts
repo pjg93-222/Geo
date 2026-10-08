@@ -3,13 +3,15 @@
 import type {jsPDF} from 'jspdf';
 import type {UserOptions} from 'jspdf-autotable';
 import type {WalkListPayload,WalkRun} from '../api/walkTypes';
-import {codeLegend,countText,doorAddress,fullDate,houseSpan,phoneText,regDate,sideLabel,tallyText,totalsLine,walkFileName,areaText} from './walk';
+import {codeLegend,countText,doorAddress,fullDate,houseSpan,phoneText,regDate,scoreCell,scoreColumns,sideLabel,tallyText,totalsLine,walkFileName,areaText} from './walk';
+import type {ScoreKey,WalkScoreMap} from './walk';
 import {DOOR_SCRIPT,choiceText} from './walkScript';
 import {box4,boxesHit,cleanLine,clipLine,doorPoints,fitFrame,growBounds,inArea,isListed,labelPoint,lineLength,listedPrecincts,offsetLine,pointAlong,
   ringsInBox,runLine,spotAlong,streetKey,thin,viewBounds} from './walkGeo';
 import type {Fit,Frame,XY} from './walkGeo';
 
-export interface WalkPdfOptions{area?:string;fileName?:string}
+/** `scores`: the Print scores toggle (off by default, which leaves the pages as they were): adds a SCORES group of Ovr, Sup (candidate districts) and Part columns. */
+export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap}
 
 type RGB=[number,number,number];
 type Box=Frame;
@@ -393,7 +395,7 @@ function yearSpan(list:string[]|undefined):string{
   return !ys.length?'':ys[0]===ys[ys.length-1]?String(ys[0]):`${ys[0]}–${ys[ys.length-1]}`;
 }
 
-function drawCover(doc:jsPDF,payload:WalkListPayload,area:string):WalkMapStats {
+function drawCover(doc:jsPDF,payload:WalkListPayload,area:string,scores?:WalkScoreMap):WalkMapStats {
   const pageW=doc.internal.pageSize.getWidth(),inner=pageW-2*MARGIN;
   doc.setTextColor(...INK);doc.setFont('helvetica','bold');doc.setFontSize(22);
   doc.text(fit(doc,payload.list?.title||'Walk list',inner),MARGIN,64);
@@ -406,6 +408,8 @@ function drawCover(doc:jsPDF,payload:WalkListPayload,area:string):WalkMapStats {
   doc.text(fit(doc,`Pri and Gen: elections voted out of elections eligible${years}. A lone slash means none were eligible.`,inner),MARGIN,124);
   doc.text(fit(doc,`${win?.abs_rule||ABS_LABEL}: ballots cast by mail or absentee, out of all eligible primaries and generals.`,inner),MARGIN,135);
   rich(doc,'≈ after an address: position estimated from nearby house numbers.',MARGIN,146);
+  const cols=scoreColumns(scores);
+  if(cols.length)doc.text(fit(doc,`Scores run 0 to 100, higher is more: ${cols.map(k=>SCORE_WORDS[k]).join(', ')}.`,inner-300),pageW-MARGIN,146,{align:'right'});
   const map:Box={x:MARGIN,y:158,w:410,h:388};
   const stats=drawMap(doc,payload,map);
   drawLegend(doc,MARGIN,map.y+map.h+14,stats);
@@ -418,6 +422,9 @@ function drawCover(doc:jsPDF,payload:WalkListPayload,area:string):WalkMapStats {
 // --- list pages --------------------------------------------------------------------------------------------------------
 const WIDTH={address:80,phone:74,pri:30,gen:30,abs:34,party:36,age:28,gender:44,reg:58,s:20,u:20,o:20,gap:14,nh:26,mv:26};
 const KEYS=['address','name','phone','pri','gen','abs','party','age','gender','reg','s','u','o','gap','nh','mv'] as const;
+const SCORE_AT=10,SCORE_WIDTH=24;   // the score columns (when printed) sit after Reg. Date, before the result boxes
+const SCORE_HEAD:Record<ScoreKey,string>={ovr:'Ovr',sup:'Sup',part:'Part'};
+const SCORE_WORDS:Record<ScoreKey,string>={ovr:'Ovr overall',sup:'Sup candidate support',part:'Part participation'};
 interface RowMeta{approx:boolean;cont:boolean}
 
 function drawRunTitle(doc:jsPDF,run:WalkRun,total:number,cont:boolean):void {
@@ -434,8 +441,8 @@ function drawRunTitle(doc:jsPDF,run:WalkRun,total:number,cont:boolean):void {
   if(cont){doc.setFont('helvetica','normal');doc.text('(cont.)',after,y);}
 }
 
-function runRows(run:WalkRun):{rows:string[][];meta:RowMeta[]} {
-  const rows:string[][]=[],meta:RowMeta[]=[];
+function runRows(run:WalkRun,scores?:WalkScoreMap):{rows:string[][];meta:RowMeta[]} {
+  const rows:string[][]=[],meta:RowMeta[]=[],cols=scoreColumns(scores);
   for(const door of run.doors){
     for(let at=0;at<door.voters.length;at+=CHUNK){
       const vs=door.voters.slice(at,at+CHUNK),lines=(f:(i:number)=>string):string=>vs.map((_,i)=>safe(f(i))).join('\n');
@@ -443,6 +450,7 @@ function runRows(run:WalkRun):{rows:string[][];meta:RowMeta[]} {
         lines(i=>i===0?doorAddress(door):''),lines(i=>vs[i].name),lines(i=>phoneText(vs[i].phone)),
         lines(i=>tallyText(vs[i].pri)),lines(i=>tallyText(vs[i].gen)),lines(i=>tallyText(vs[i].abs)),
         lines(i=>vs[i].party),lines(i=>vs[i].age==null?'':String(vs[i].age)),lines(i=>vs[i].gender),lines(i=>regDate(vs[i].reg_date)),
+        ...cols.map(k=>lines(i=>scoreCell(scores,vs[i].person_id,k))),
         lines(()=>'S'),lines(()=>'U'),lines(()=>'O'),lines(()=>''),lines(()=>'NH'),lines(()=>'MV'),
       ]);
       meta.push({approx:door.placed_by==='interpolated'&&at===0,cont:at>0});
@@ -451,12 +459,13 @@ function runRows(run:WalkRun):{rows:string[][];meta:RowMeta[]} {
   return {rows,meta};
 }
 
-function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,total:number):void {
-  const {rows,meta}=runRows(run);
+function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,total:number,scores?:WalkScoreMap):void {
+  const {rows,meta}=runRows(run,scores);
   if(!rows.length)return;
+  const cols=scoreColumns(scores),keys:string[]=[...KEYS.slice(0,SCORE_AT),...cols,...KEYS.slice(SCORE_AT)];
   const pageW=doc.internal.pageSize.getWidth(),tableW=pageW-2*MARGIN;
-  const fixed=Object.values(WIDTH).reduce((s,w)=>s+w,0);
-  const widths=KEYS.map(k=>k==='name'?tableW-fixed:WIDTH[k]);
+  const fixed=Object.values(WIDTH).reduce((s,w)=>s+w,0)+SCORE_WIDTH*cols.length;
+  const widths=keys.map(k=>k==='name'?tableW-fixed:(WIDTH as Record<string,number>)[k]??SCORE_WIDTH);
   const group=(content:string,colSpan:number)=>({content,colSpan,styles:{fontStyle:'bold' as const,fontSize:7.5,cellPadding:{top:0,right:0,bottom:1.5,left:0}}});
   const label=(content:string)=>({content,styles:{cellPadding:{top:0,right:3,bottom:3,left:0}}});
   doc.addPage();
@@ -466,10 +475,10 @@ function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,t
     styles:{font:'helvetica',fontSize:9,textColor:INK,cellPadding:{top:3,right:5,bottom:9,left:0},lineWidth:0,overflow:'ellipsize',valign:'top',halign:'left'},
     headStyles:{fontStyle:'normal',fontSize:8.5,textColor:INK,cellPadding:{top:1,right:3,bottom:4,left:0}},
     columnStyles:Object.fromEntries(widths.map((w,i)=>[i,{cellWidth:w}])),
-    columns:KEYS.map((_,i)=>i),
+    columns:keys.map((_,i)=>i),
     head:[
-      [group('',3),group('VOTER HISTORY',3),group('VOTER INFORMATION',4),group('',6)],
-      [label('Address'),label('Name'),label('Phone'),label('Pri'),label('Gen'),label('Abs'),label('Party'),label('Age'),label('Gender'),label('Reg. Date'),group('',6)],
+      [group('',3),group('VOTER HISTORY',3),group('VOTER INFORMATION',4),...cols.length?[group('SCORES',cols.length)]:[],group('',6)],
+      [label('Address'),label('Name'),label('Phone'),label('Pri'),label('Gen'),label('Abs'),label('Party'),label('Age'),label('Gender'),label('Reg. Date'),...cols.map(k=>label(SCORE_HEAD[k])),group('',6)],
     ],
     body:rows,
     willDrawPage:d=>drawRunTitle(doc,run,total,d.pageNumber>1),
@@ -498,8 +507,8 @@ export async function buildWalkPdf(payload:WalkListPayload,opts:WalkPdfOptions={
   const runs=(payload.runs??[]).filter(r=>r.doors.length);
   doc.setLineHeightFactor(1.34);
   doc.setProperties({title:safe(`${payload.list?.title||'Walk list'}${area?` - ${area}`:''}`),subject:'Walk list',creator:'Terrier'});
-  const map=drawCover(doc,payload,area);
-  for(const run of runs)drawRun(doc,autoTable,run,payload.totals?.stops||runs.length);
+  const map=drawCover(doc,payload,area,opts.scores);
+  for(const run of runs)drawRun(doc,autoTable,run,payload.totals?.stops||runs.length,opts.scores);
   // date top left and footer on every page
   const pageW=doc.internal.pageSize.getWidth(),pageH=doc.internal.pageSize.getHeight(),pages=doc.getNumberOfPages();
   const footer=`${codeLegend()} · ${payload.window?.abs_rule||ABS_LABEL}`;

@@ -5,7 +5,7 @@ import type {WalkDoor, WalkListPayload, WalkRun, WalkVoter} from '../../src/v3/a
 import * as walkLib from '../../src/v3/lib/walk.ts';
 import {
   CODE_LABEL, CSV_COLUMNS, MAX_UPLOAD_ROWS, WALK_CODES, areaText, buildWalkCsv, codeLegend, countText, csvValue, distanceText, doorAddress,
-  fullDate, houseSpan, isWalkCode, parseWalkCsv, phoneText, regDate, runHeader, sideFromText, sideLabel, splitCsv, tallyText,
+  fullDate, houseSpan, isWalkCode, parseWalkCsv, phoneText, regDate, runHeader, scoreColumns, sideFromText, sideLabel, splitCsv, tallyText,
   totalsLine, unitText, walkCsvRows, walkFileName
 } from '../../src/v3/lib/walk.ts';
 import {DOOR_SCRIPT, choiceText, fillScript, stepById, stepNumber} from '../../src/v3/lib/walkScript.ts';
@@ -1096,7 +1096,7 @@ test('walk screen wiring (refusals): narrow classification, marks kept and flagg
   assert.ok(!/takeBack|refusedStatus\(e\.status\)/.test(src), 'nothing takes a mark off the screen');
   assert.ok(/refuse:\(refused,why\)=>refuse\(entry,refused,why\)/.test(src) && /setUnsaved\(u=>new Set\(\[\.\.\.u,\.\.\.refused\.keys\(\)\]\)\)/.test(src), 'a refused mark on screen is flagged, not removed');
   assert.ok(/marksWithRefused\(p,refusals\.marks,listIdentity\(p\.list\?\.key,p\.query\?\?\{\}\)\)/.test(src), 'a list opened again shows its refused marks, flagged');
-  assert.ok(/buildWalkCsv\(p,results,history,unsaved\)/.test(src), 'the CSV carries the flag');
+  assert.ok(/buildWalkCsv\(p,resultsRef\.current,historyRef\.current,unsavedRef\.current,scores\)/.test(src), 'the CSV carries the flag, read when the file is made (scores may have been asked for first)');
   assert.ok(/refusals\.clear\(identities\(entry\),batch\.keys\(\)\)/.test(src), 'marked again and saved: the flag goes');
   assert.ok(/^const refusals=refusedStore\(\);/m.test(src) && /useState<RefusalNote\|null>\(\(\)=>refusals\.note\)/.test(src), 'marks and note outlive the screen, and a reload (restored when the module loads)');
   assert.ok(/onClick=\{\(\)=>\{refusals\.dismiss\(\);showRefusal\(null\);\}\}>Dismiss</.test(src) && /return refusals\.hold\(identities\(entry\)\[0\],/.test(src), 'dismissing and refusing go through the store, which writes them through');
@@ -1271,4 +1271,74 @@ test('refusal bar on phones: a count that matches the note, a labelled region th
   const phone = css.slice(css.lastIndexOf('@media(max-width:640px)'));
   assert.ok(/\.walk-refused-bar\{position:fixed;[^}]*bottom:0;[^}]*display:flex[^}]*env\(safe-area-inset-bottom\)/.test(phone) && /\.walk-refused-bar button\{[^}]*min-height:44px/.test(phone), 'phone: fixed to the bottom, 44 px button, safe area kept');
   assert.ok(/\.walk-screen\.has-refusal\{padding-bottom:calc\(\d+px \+ env\(safe-area-inset-bottom\)\)\}/.test(phone), 'room under the last card');
+});
+
+// --- Phase 4 WU: printed scores (default OFF = raw) and planned streets ----------------------------------------------------------
+import {createHash} from 'node:crypto';
+
+const pdfStreams = (doc: PdfDoc): string => (doc as unknown as {internal: {pages: (string[] | undefined)[]}}).internal.pages.slice(1).map(x => (x ?? []).join('\n')).join('\n--page--\n');
+const scoredList = () => payload([run({doors: manyDoors(12)}), run({stop: 2, street_id: 9, street: 'Short St', doors: [door(50, '5', [voter({person_id: 'p2'})])]})]);
+
+test('PDF: with no scores the pages are exactly what they were before the Print scores toggle existed (hash recorded before the change)', async () => {
+  const {doc} = await buildWalkPdf(scoredList());
+  assert.equal(createHash('sha256').update(pdfStreams(doc)).digest('hex'), '47eb65c3e20067e9ac8a5c34439334b8b794ebbe439a78ea07186f429c7fb7d9');
+});
+
+const SCORED = {'a0-0': {ovr: 71, sup: 40, part: 88}, 'a1-0': {ovr: 5, sup: 0, part: 100}, p2: {ovr: 12, part: 5}};   // p2 has no support score; every other voter has no score row
+
+test('PDF with scores: a SCORES group with Ovr, Sup and Part after Reg. Date, a line on the cover that says what they are, the numbers on the list pages', async () => {
+  const {doc} = await buildWalkPdf(scoredList(), {scores: SCORED});
+  const pages = pdfPages(doc);
+  assert.ok(pages[0].some(t => t === 'Scores run 0 to 100, higher is more: Ovr overall, Sup candidate support, Part participation.'), 'the cover names the columns');
+  for (const t of pages.slice(1)) for (const h of ['SCORES', 'Ovr', 'Sup', 'Part', 'Reg. Date', 'VOTER INFORMATION', 'Address', 'Name']) assert.ok(t.includes(h), h);
+  assert.ok(['71', '40', '88', '100'].every(n => pages[1].includes(n)), 'the first run shows its scores');
+  assert.ok(pages[pages.length - 1].includes('12') && pages[pages.length - 1].includes('5'), 'a person without a support score still shows the others');
+  assert.ok(pages.slice(1).flat().every(t => !/\babout\b/i.test(t)) && !pages[0].some(t => /Scores run.*\babout\b/i.test(t)), 'no estimate wording in what the scores add (the door script on the cover is exempt)');
+  const {doc: plain} = await buildWalkPdf(scoredList());
+  assert.notEqual(pdfStreams(doc), pdfStreams(plain));
+  assert.ok(pdfPages(plain).flat().every(t => !['SCORES', 'Ovr', 'Sup', 'Part'].includes(t)), 'with no scores there is no such column');
+});
+
+test('PDF with scores in a district without a candidate (no support numbers): Ovr and Part only', async () => {
+  const {doc} = await buildWalkPdf(scoredList(), {scores: {'a0-0': {ovr: 71, part: 88}}});
+  const pages = pdfPages(doc);
+  assert.ok(pages[0].includes('Scores run 0 to 100, higher is more: Ovr overall, Part participation.'));
+  assert.ok(pages[1].includes('Ovr') && pages[1].includes('Part') && !pages[1].includes('Sup'));
+  assert.equal((await buildWalkPdf(scoredList(), {scores: {}})).doc.getNumberOfPages(), doc.getNumberOfPages(), 'an empty answer still prints the columns, blank');
+});
+
+test('CSV with scores: Overall, Candidate support and Participation after Result; two columns without support; the default file is unchanged', () => {
+  const p = payload([run({doors: [door(1, '4102', [voter({person_id: 'a'}), voter({person_id: 'b'}), voter({person_id: 'c'})])]})]);
+  const lines = (c: string) => c.slice(1).split('\r\n').filter(Boolean);
+  const plain = lines(buildWalkCsv(p));
+  assert.equal(buildWalkCsv(p, {}, {}, undefined, undefined), buildWalkCsv(p, {}, {}), 'no scores: the file is the one it always was');
+  assert.equal(plain[0].split('","').length, CSV_COLUMNS.length);
+  const withSup = lines(buildWalkCsv(p, undefined, undefined, undefined, {a: {ovr: 71, sup: 40, part: 88}, b: {ovr: 12, part: 5}}));
+  assert.ok(withSup[0].endsWith('"Result","Overall","Candidate support","Participation"'));
+  assert.deepEqual(withSup.map((l, i) => l.startsWith(plain[i].slice(0, -1)) || l.startsWith(plain[i])), [true, true, true, true], 'every default column is where it was');
+  assert.ok(withSup[1].endsWith('"","71","40","88"') && withSup[2].endsWith('"","12","","5"') && withSup[3].endsWith('"","","",""'), 'a person with no score row has blank cells');
+  const colorado = lines(buildWalkCsv(p, undefined, undefined, undefined, {a: {ovr: 71, part: 88}}));
+  assert.ok(colorado[0].endsWith('"Result","Overall","Participation"') && colorado[1].endsWith('"","71","88"'));
+  assert.deepEqual(walkCsvRows(p, undefined, undefined, undefined, {a: {ovr: 1, part: 2}})[0].slice(-3), ['', '1', '2']);
+  assert.equal(scoreColumns(undefined).length, 0); assert.deepEqual(scoreColumns({}), ['ovr', 'part']);
+});
+
+test('page address: planned streets ride along, are enough to rebuild a list, and come back from a saved list', () => {
+  const read = (qs: string) => readWalkAddress(new URLSearchParams(qs));
+  assert.deepEqual(read('precinct=02012&spans=15,12,15,x,99999999999').spans, [12, 15], 'sorted, once each, junk skipped');
+  assert.ok(!('spans' in read('precinct=02012')), 'no planned streets: the address is read as it always was');
+  assert.equal(startPlan(read('spans=12,15')), 'build'); assert.equal(startPlan(read('spans=x')), 'none'); assert.equal(startPlan(read('spans=12&list=k1')), 'saved');
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', spans: '12,15'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '', spans: '12,15'});
+  assert.deepEqual(pickerOf(listOf({}, {spans: '12'})), {area: {ss: '', sh: '', precinct: ''}, streets: '', spans: '12'}, 'planned streets alone are a picker setting');
+  assert.equal(pickerOf(listOf({kind: 'reknock'}, {from: 'abc', spans: '12'})), null, 'a re-knock list does not restore the picker');
+});
+
+test('walk screen wiring: the street plan shows only with features.roi, builds with spans, and the print toggle asks for scores only while on', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  assert.ok(/features\?\.roi&&<StreetPlan /.test(src), 'no street plan without features.roi (Colorado)');
+  assert.ok(/getWalkList\(streets,where,sig,planned\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
+  assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
+  assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
+  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
+  assert.ok(/for\(const chunk of idChunks\(ids\)\)/.test(src), 'a list longer than one request is asked for in pieces');
 });

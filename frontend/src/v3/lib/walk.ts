@@ -1,7 +1,8 @@
 // Walk list text rules: tallies, dates, phones, run headers, totals, result codes and the CSV in and out.
 // Pure, so node --test can load it directly: value imports name the .ts file, types come in with `import type`.
-import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
+import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkScores,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
 import {csvValue} from './csv.ts';
+import {parseSpansParam} from './plan.ts';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -92,6 +93,18 @@ export function walkFileName(area:string,isoDate:string,ext:'pdf'|'csv'):string{
 
 // --- CSV out ---------------------------------------------------------------------------------------------------------
 export const CSV_COLUMNS=['Stop','Precinct','Street','Side','Address','Unit','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Reg. Date','Result'] as const;
+
+// Printed scores (the Print scores toggle, off by default): whole numbers from 0 to 100 from POST /api/v3/walk/scores, by person id.
+export type WalkScoreMap=WalkScores['scores'];
+export const SCORE_NAMES={ovr:'Overall',sup:'Candidate support',part:'Participation'} as const;
+export type ScoreKey=keyof typeof SCORE_NAMES;
+/** The score columns of a printed list: overall and participation, and candidate support when anyone listed has a support score (Colorado has none). None without scores. */
+export const scoreColumns=(scores?:WalkScoreMap):ScoreKey[]=>!scores?[]:Object.values(scores).some(s=>s.sup!=null)?['ovr','sup','part']:['ovr','part'];
+/** One person's score as text; blank when the person has none. */
+export function scoreCell(scores:WalkScoreMap|undefined,id:string,key:ScoreKey):string{
+  const v=scores&&Object.hasOwn(scores,id)?scores[id][key]:undefined;
+  return v==null?'':String(v);
+}
 
 export {csvValue};
 const csvField=(value:unknown):string=>`"${csvValue(value).replace(/[\r\n]+/g,' ').replace(/"/g,'""')}"`;
@@ -497,18 +510,20 @@ const resultCode=(v:WalkVoter,results?:WalkResults,history?:WalkHistory,unsaved?
 
 /** One row per voter in walking order. Result holds the mark in `results` when the walker has set one, flagged when it is in `unsaved`, else the latest
  *  result on file (`history` is a fresher look at what is on file than the list itself). */
-export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>):string[][]{
-  const rows:string[][]=[];
+export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap):string[][]{
+  const rows:string[][]=[],cols=scoreColumns(scores);
   for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)rows.push([
     String(run.stop),run.precinct,run.street,sideLabel(run.side),door.house,door.unit,v.name,phoneText(v.phone),
     csvTally(v.pri),csvTally(v.gen),csvTally(v.abs),v.party,v.age==null?'':String(v.age),v.gender,v.reg_date,resultCode(v,results,history,unsaved),
+    ...cols.map(k=>scoreCell(scores,v.person_id,k)),   // after Result, so no column of the default file moves
   ]);
   return rows;
 }
 const BOM=String.fromCharCode(0xfeff);
 /** UTF-8 BOM, CRLF rows, every field quoted. */
-export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>):string{
-  const lines=[[...CSV_COLUMNS] as string[],...walkCsvRows(payload,results,history,unsaved)].map(r=>r.map(csvField).join(',')+'\r\n');
+export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap):string{
+  const head=[...CSV_COLUMNS,...scoreColumns(scores).map(k=>SCORE_NAMES[k])] as string[];
+  const lines=[head,...walkCsvRows(payload,results,history,unsaved,scores)].map(r=>r.map(csvField).join(',')+'\r\n');
   return BOM+lines.join('');
 }
 
@@ -551,20 +566,21 @@ export function parseStreetsParam(text:string|null|undefined):PickKey[]{
 }
 
 const addressText=(v:string|null):string=>(v??'').trim().slice(0,40);
-export interface WalkAddress{area:Required<WalkArea>;picks:WalkPick[];list:string}
-/** The picker settings and the saved list key the page address carries (ss, sh, precinct, streets, list). */
+export interface WalkAddress{area:Required<WalkArea>;picks:WalkPick[];list:string;spans?:number[]}
+/** The picker settings and the saved list key the page address carries (ss, sh, precinct, streets, spans, list). `spans` (planned streets) is there only when the address has some. */
 export function readWalkAddress(q:URLSearchParams):WalkAddress{
-  const list=(q.get('list')??'').trim();
+  const list=(q.get('list')??'').trim(),spans=parseSpansParam(q.get('spans'));
   return {
     area:{ss:addressText(q.get('ss')),sh:addressText(q.get('sh')),precinct:addressText(q.get('precinct'))},
     picks:parseStreetsParam(q.get('streets')).map((p):WalkPick=>({...p,label:'',city:''})),
     list:/^[\w-]{1,64}$/.test(list)?list:'',
+    ...spans.length?{spans}:{},
   };
 }
-/** What a page that has just opened builds: the saved list its address names, else a list from the streets and area in the address (an area alone is enough, the server builds a list from one), else nothing. */
-export function startPlan(a:Pick<WalkAddress,'area'|'picks'|'list'>):'saved'|'build'|'none'{
+/** What a page that has just opened builds: the saved list its address names, else a list from the streets, planned streets and area in the address (an area alone is enough, the server builds a list from one), else nothing. */
+export function startPlan(a:Pick<WalkAddress,'area'|'picks'|'list'|'spans'>):'saved'|'build'|'none'{
   if(a.list)return 'saved';
-  return a.picks.length>0||!!(a.area.ss||a.area.sh||a.area.precinct)?'build':'none';
+  return a.picks.length>0||!!a.spans?.length||!!(a.area.ss||a.area.sh||a.area.precinct)?'build':'none';
 }
 
 /** Words that name a list in titles and file names: the area, else its first streets ("Cedar Heights Dr, Oak St and 2 more"). */
@@ -585,12 +601,12 @@ const queryText=(p:Pick<WalkListPayload,'query'>,key:string):string=>{const v=(p
 export const reknockParent=(p:Pick<WalkListPayload,'query'>):string=>queryText(p,'from');
 /** A re-knock list: its kind says so, or its query names the list it came from. */
 export const isReknock=(p:ListKey):boolean=>p.list?.kind==='reknock'||reknockParent(p)!=='';
-export interface PickerState{area:Required<WalkArea>;streets:string}
-/** The area and streets a list was built from, to put back in the picker. Null when it carries none, and always for a re-knock list: its doors come from another list, whatever its query holds. */
+export interface PickerState{area:Required<WalkArea>;streets:string;spans?:string}
+/** The area, streets and planned streets (`spans`, only when the list has some) a list was built from, to put back in the picker. Null when it carries none, and always for a re-knock list: its doors come from another list, whatever its query holds. */
 export function pickerOf(p:ListKey):PickerState|null{
   const q=p.query??{};
-  if(isReknock(p)||!['ss','sh','precinct','streets'].some(k=>Object.hasOwn(q,k)))return null;
-  return {area:{ss:queryText(p,'ss'),sh:queryText(p,'sh'),precinct:queryText(p,'precinct')},streets:queryText(p,'streets')};
+  if(isReknock(p)||!['ss','sh','precinct','streets','spans'].some(k=>Object.hasOwn(q,k)))return null;
+  return {area:{ss:queryText(p,'ss'),sh:queryText(p,'sh'),precinct:queryText(p,'precinct')},streets:queryText(p,'streets'),...queryText(p,'spans')?{spans:queryText(p,'spans')}:{}};
 }
 /**
  * The line above a saved list: "Saved list · Saturday · 10/2/2026". A re-knock list names the list it came from, by title

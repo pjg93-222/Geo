@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test:e2e": "playwright test",
-    "test:unit": "node --test tests/v3/format.test.ts tests/v3/copy.test.ts tests/v3/opinions.test.ts tests/v3/savedViews.test.ts tests/v3/liveClient.test.ts tests/v3/walk.test.ts tests/v3/walkRefused.test.ts tests/v3/csv.test.ts tests/v3/overlay.test.ts"
+    "test:unit": "node --test tests/v3/format.test.ts tests/v3/copy.test.ts tests/v3/opinions.test.ts tests/v3/savedViews.test.ts tests/v3/liveClient.test.ts tests/v3/walk.test.ts tests/v3/walkRefused.test.ts tests/v3/csv.test.ts tests/v3/overlay.test.ts tests/v3/plan.test.ts"
   },
   "dependencies": {
     "jspdf": "4.2.1",
