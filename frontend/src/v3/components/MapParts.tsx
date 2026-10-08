@@ -4,8 +4,9 @@ import {useEffect,useRef,useState} from 'react';
 import {Minus,Plus} from 'lucide-react';
 import {GradeBox,Sk,Switch,ValueBar,cx} from './ui';
 import {Link,INDEX_NAME} from './Header';
-import type {Group,HouseholdPopover,StreetPayload,Meta} from '../types';
+import type {HouseholdPopover,StreetPayload,Meta,OverlayLayer} from '../types';
 import {ENDASH,MIDDOT,householdLabel,int,round,seconds} from '../lib/format';
+import {LAYER_NAME,luminance,type Mode,type Overlay,type OverlayLegend} from '../lib/overlay';
 import {useTiming} from '../lib/timing';
 import {uPx} from '../lib/units';
 
@@ -15,22 +16,62 @@ const LEAN_LABELS=['Dem.','Rep.','Unaff.','Other','Mixed'];
 const HH_LABELS=[`0${ENDASH}20`,`20${ENDASH}40`,`40${ENDASH}60`,`60${ENDASH}80`,`80${ENDASH}100`];
 const RAMP=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)'];
 const LEAN_RAMP=['var(--reg-d)','var(--reg-r)','var(--reg-u)','var(--reg-o)','var(--centre)'];
-const TOP_NAME:Record<Exclude<Group,'lean'>,string>={ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence'};
+const TOP_NAME:Partial<Record<OverlayLayer,string>>={ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',sup:'Candidate support'};
 
-export function Legend(p:{group:Group;measured:boolean;onMeasured:(v:boolean)=>void;loading:boolean;floors?:Meta['floors']}){
+/** `overlay` is the legend of a density, blend or two-layer map; without it this is the legend of an index layer (share, lean or % measured). */
+export function Legend(p:{group:OverlayLayer;measured:boolean;onMeasured:(v:boolean)=>void;loading:boolean;floors?:Meta['floors'];overlay?:OverlayLegend|null}){
   let title:string,sub:string,labels:string[],ramp:string[];
-  if(p.measured){title='% measured';sub='Area mean of % measured';labels=MEASURED_LABELS;ramp=RAMP;}
+  if(p.overlay){({title,sub,labels,ramp}=p.overlay);}
+  else if(p.measured){title='% measured';sub='Area mean of % measured';labels=MEASURED_LABELS;ramp=RAMP;}
   else if(p.group==='lean'){title='Registration';sub='Largest registration group; Mixed means a tie';labels=LEAN_LABELS;ramp=LEAN_RAMP;}
   else{title=INDEX_NAME[p.group];sub=`Share of people in the ${TOP_NAME[p.group]} top 10%`;labels=SHARE_LABELS;ramp=RAMP;}
+  const axes=p.overlay?.axes;
   return <section className="legend" aria-label="Legend">
     {p.loading?<><Sk w={240} h={20}/><div style={{marginTop:'calc(12 * var(--u))'}}><Sk w={420} h={15}/></div></>
       :<><h3 className="legend-title">{title}</h3><p className="legend-sub">{sub}</p></>}
-    <ul className="legend-swatches">
+    {axes&&!p.loading?<div className="legend-bi">
+      <p className="bi-axis">Across: {axes[0]}, low to high</p>
+      <div className="bi-grid" role="img" aria-label={`3 by 3 grid. Across, ${axes[0]} from low to high third, lighter to darker teal. Down, ${axes[1]} from low to high third, lighter to darker purple.`}>
+        {[0,1,2].flatMap(row=>[0,1,2].map(col=><i key={3*row+col} style={{background:ramp[3*col+row]}}/>))}
+      </div>
+      <p className="bi-axis">Down: {axes[1]}, low to high</p>
+    </div>
+    :<ul className="legend-swatches">
       {ramp.map((c,i)=><li key={i}><i style={p.loading?undefined:{background:c}} className={cx(p.loading&&'sk')}/><span>{p.loading?'':labels[i]}</span></li>)}
-    </ul>
+    </ul>}
     <p className="legend-note"><i className="hatch" aria-hidden="true" style={{display:'inline-block',width:14,height:14,marginRight:7,verticalAlign:'middle'}}/>Withheld · under {p.floors?.min_n??20} people or {p.floors?.min_households??10} households</p>
-    <Switch className="legend-switch" checked={p.measured} onChange={p.onMeasured} label="% measured" labelClass="legend-note"/>
+    {!p.overlay&&<Switch className="legend-switch" checked={p.measured} onChange={p.onMeasured} label="% measured" labelClass="legend-note"/>}
   </section>;
+}
+
+const MODES:{id:Mode;label:string}[]=[{id:'single',label:'One layer'},{id:'blend',label:'Blend'},{id:'bi',label:'Two layers'}];
+/** The "Layers" panel: one layer (chosen with the Index buttons), a weighted blend of layers, or two layers on a 3 x 3 grid. */
+export function LayersPanel(p:{o:Overlay;layers:OverlayLayer[];onChange:(o:Overlay)=>void;hidden:boolean}){
+  const {o}=p;
+  const layers=Object.keys(o.blend).length;
+  const setWeight=(l:OverlayLayer,w:number|null)=>{const blend={...o.blend};if(w===null)delete blend[l];else blend[l]=w;p.onChange({...o,blend});};
+  const pick=(i:0|1,l:OverlayLayer)=>p.onChange({...o,pair:i===0?[l,o.pair[1]]:[o.pair[0],l]});
+  return <details className="overlay-panel" hidden={p.hidden}>
+    <summary>Layers{o.mode==='single'?'':` ${MIDDOT} ${MODES.find(m=>m.id===o.mode)!.label}`}</summary>
+    <div className="op-body">
+      <div className="op-modes" role="radiogroup" aria-label="Layer mode">
+        {MODES.map(m=><label key={m.id}><input type="radio" name="overlay-mode" checked={o.mode===m.id} onChange={()=>p.onChange({...o,mode:m.id})}/>{m.label}</label>)}
+      </div>
+      {o.mode==='single'&&<p className="op-note">Choose the layer with the Index buttons above the map.</p>}
+      {o.mode==='blend'&&<ul className="op-blend" aria-label="Layers in the blend">
+        {p.layers.map(l=>{const w=o.blend[l];return <li key={l}>
+          <label><input type="checkbox" checked={w!==undefined} disabled={w!==undefined&&layers===1} onChange={e=>setWeight(l,e.target.checked?50:null)}/>{LAYER_NAME[l]}</label>
+          {w!==undefined&&<input type="number" aria-label={`${LAYER_NAME[l]} weight`} min={1} max={100} step={5} value={w}
+            onChange={e=>{const n=Number(e.target.value);if(n>0)setWeight(l,n);}}/>}
+        </li>;})}
+      </ul>}
+      {o.mode==='bi'&&<div className="op-pair">
+        {(['Across','Down'] as const).map((side,i)=><label key={side}><span>{side}</span>
+          <select aria-label={`${side} layer`} value={o.pair[i]} onChange={e=>pick(i as 0|1,e.target.value as OverlayLayer)}>
+            {p.layers.map(l=><option key={l} value={l}>{LAYER_NAME[l]}</option>)}</select></label>)}
+      </div>}
+    </div>
+  </details>;
 }
 
 export function HouseholdLegend(){
@@ -60,12 +101,6 @@ export function Readout(){
 // --- area ids drawn on the map (render 04: "212", "213" ...) -----------------------------------------------------------
 // Glyph PBFs are not available offline, so these are DOM labels at each polygon's label point: Geist Mono, at most 60 in
 // view, and only where the polygon is wide enough on screen to hold the text.
-/** Relative luminance of a #RRGGBB color (0 dark .. 1 light); unknown colors read as light. */
-function luminance(hex:string|undefined):number{
-  const m=hex?/^#([0-9a-f]{6})$/i.exec(hex):null;if(!m)return 1;
-  const v=parseInt(m[1],16);const c=[(v>>16)&255,(v>>8)&255,v&255].map(x=>{const f=x/255;return f<=0.03928?f/12.92:Math.pow((f+0.055)/1.055,2.4);});
-  return 0.2126*c[0]+0.7152*c[1]+0.0722*c[2];
-}
 export interface MapLabel{id:string;text:string;lon:number;lat:number;widthDeg:number;bin:number}
 export function AreaLabels(p:{items:MapLabel[];palette:string[];selectedId:string|null;project:(lon:number,lat:number)=>{x:number;y:number}|null;zoom:number;width:number;height:number}){
   const pxPerDeg=512*Math.pow(2,p.zoom)/360;

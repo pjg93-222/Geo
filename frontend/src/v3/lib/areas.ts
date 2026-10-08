@@ -1,24 +1,24 @@
 // Derivations over the columnar area payload: color bins for the map and the numbers of the area rails.
-import type {AreasPayload,Group,Meta} from '../types';
+import type {AreasPayload,Group,IndexLayer,Meta} from '../types';
 import {binOf,leanBand,likelyRange,likelyShare,round,type Level} from './format';
 import {registrationBin} from './opinions';
 
-export const BIN_WITHHELD=5;
-export const BIN_PENDING=6;
+// The sentinels sit above every class index, so a palette of up to 250 colors fits (the bivariate map has nine).
+export const BIN_WITHHELD=250;
+export const BIN_PENDING=251;
 export type Layer='share'|'measured';
 
 /** Per-area color bin (index = position in payload.ids; the last element is the sentinel for features without an area). */
-export function binsFor(p:AreasPayload,group:Group,layer:Layer,meta:Meta):Uint8Array{
+export function binsFor(p:AreasPayload,group:IndexLayer,layer:Layer,meta:Meta):Uint8Array{
   const n=p.ids.length;const out=new Uint8Array(n+1);out[n]=BIN_PENDING;
-  const g=p.groups[group];
   for(let i=0;i<n;i++){
     if(p.status[i]!=='ok'){out[i]=BIN_WITHHELD;continue;}
-    if(layer==='measured'){const m=g.measured[i];out[i]=m==null?BIN_WITHHELD:binOf(m,meta.measured_breaks);continue;}
+    if(layer==='measured'){const m=p.groups[group]?.measured[i];out[i]=m==null?BIN_WITHHELD:binOf(m,meta.measured_breaks);continue;}
     if(group==='lean'){
       const c=p.groups.lean,d=c.share_d[i],r=c.share_r[i],u=c.share_u[i];
       out[i]=d==null||r==null||u==null?BIN_WITHHELD:registrationBin({d,r,u,o:Math.max(0,1-d-r-u)});continue;
     }
-    const t=p.groups[group].top10[i];
+    const t=p.groups[group]?.top10[i];
     out[i]=t==null?BIN_WITHHELD:binOf(t,meta.share_breaks);
   }
   return out;

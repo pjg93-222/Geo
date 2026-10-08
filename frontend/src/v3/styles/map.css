@@ -155,3 +155,34 @@
 .pop-link{font-size:20u;font-weight:500;letter-spacing:-.01em;color:var(--accent-text);white-space:nowrap;text-align:right}
 .pop-link:hover{text-decoration:underline}
 .pop-skeleton{padding:4u 0 8u}
+
+/* ---- overlay modes (Phase 4D) ----------------------------------------------------------------------------------------------
+   The "Layers" panel opens beside the zoom control (full width above the legend on a phone); sizes are px like the legend text. */
+.overlay-panel{position:absolute;left:68px;top:12px;z-index:3;max-width:calc(100% - 92px);background:var(--surface);border-radius:8px;box-shadow:var(--shadow-overlay);font-size:13px;color:var(--ink)}
+.overlay-panel summary{display:flex;align-items:center;min-height:40px;padding:0 14px;cursor:pointer;list-style:none;font-weight:500}
+.overlay-panel summary::-webkit-details-marker{display:none}
+.overlay-panel summary::after{content:"";width:6px;height:6px;margin:-3px 0 0 10px;border:solid var(--plum);border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.overlay-panel[open] summary::after{margin-top:3px;transform:rotate(-135deg)}
+.overlay-panel summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+.op-body{width:300px;max-width:100%;max-height:min(46vh,380px);overflow:auto;padding:0 14px 14px;border-top:1px solid var(--line)}
+.op-modes{display:flex;flex-wrap:wrap;gap:4px 14px;padding:10px 0 6px}
+.op-modes label,.op-blend label{display:flex;align-items:center;gap:7px;min-height:30px}
+.op-note{margin-top:4px;color:var(--muted);line-height:1.4}
+.op-blend{display:grid;gap:2px;margin-top:4px}
+.op-blend li{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.op-blend input[type=number],.op-pair select{height:32px;min-width:0;padding:0 8px;border:1px solid var(--control-line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit}
+.op-blend input[type=number]{width:68px}
+.op-pair{display:grid;gap:8px;margin-top:6px}
+.op-pair label{display:grid;grid-template-columns:58px minmax(0,1fr);align-items:center;gap:8px}
+.legend-bi{margin-top:12px}
+.bi-axis{font-size:13px;line-height:1.3;color:var(--muted)}
+.bi-grid{display:grid;grid-template-columns:repeat(3,54px);gap:3px;margin:8px 0}
+.bi-grid i{display:block;height:28px;border-radius:4px}
+.race-badge{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border:1px solid var(--control-line);border-left:3px solid var(--accent);border-radius:10px;background:var(--surface);color:var(--plum);font-size:12px;line-height:1.3}
+@media(max-width:700px){
+  .race-badge{flex:1 1 100%;white-space:normal}
+  .map-screen .overlay-panel{position:static;max-width:none;border-top:1px solid var(--line);border-radius:0;background:var(--canvas);box-shadow:none}
+  .map-screen .overlay-panel summary{min-height:44px;padding:0 18px}
+  .map-screen .op-body{width:auto;max-height:none;padding:0 18px 16px}
+  .map-screen .bi-grid{grid-template-columns:repeat(3,minmax(0,1fr));max-width:240px}
+}

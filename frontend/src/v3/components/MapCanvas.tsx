@@ -43,7 +43,7 @@ export interface MapCanvasProps{
 
 function colorExpr(arr:number[],palette:string[]):maplibregl.ExpressionSpecification{
   return ['match',['at',['get','i'],['literal',arr]],
-    0,palette[0],1,palette[1],2,palette[2],3,palette[3],4,palette[4],BIN_WITHHELD,HATCH_BASE,BIN_PENDING,SKELETON,SKELETON] as unknown as maplibregl.ExpressionSpecification;
+    ...palette.flatMap((c,i)=>[i,c]),BIN_WITHHELD,HATCH_BASE,BIN_PENDING,SKELETON,SKELETON] as unknown as maplibregl.ExpressionSpecification;
 }
 function hatchOpacityExpr(arr:number[]):maplibregl.ExpressionSpecification{
   return ['case',['==',['at',['get','i'],['literal',arr]],BIN_WITHHELD],1,0] as unknown as maplibregl.ExpressionSpecification;

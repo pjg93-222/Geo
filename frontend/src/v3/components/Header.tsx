@@ -5,15 +5,15 @@ import {TerrierMark} from './TerrierMark';
 import {Segmented,cx} from './ui';
 import {navigate,withKept,LOCATION_EVENT,type RouteName} from '../lib/router';
 import {int,countLabel,areaLabel,districtHref,districtOptions,LEVELS,LEVEL_LABEL,type DistrictList,type Level} from '../lib/format';
-import {getAreas,localJson,searchPeople} from '../api/client';
-import type {Group,Meta} from '../types';
+import {getAreas,getFeatures,localJson,searchPeople} from '../api/client';
+import {ALL_LAYERS,LAYER_NAME,industryChoices,raceBadge} from '../lib/overlay';
+import type {Features,Group,Meta,OverlayLayer} from '../types';
 
-export const INDEX_ITEMS:{id:Group;label:string}[]=[
-  {id:'ovr',label:'Overall'},{id:'cua',label:'Credit Union Alignment'},{id:'part',label:'Participation'},
-  {id:'soi',label:'Sphere of Influence'},{id:'lean',label:'Registration'},
-];
-export const INDEX_NAME:Record<Group,string>={
+/** Every layer the Index control can show; the district's /api/v3/features lists the ones it offers. */
+export const INDEX_ITEMS:{id:OverlayLayer;label:string}[]=ALL_LAYERS.map(id=>({id,label:id==='lean'?'Registration':LAYER_NAME[id]}));
+export const INDEX_NAME:Record<OverlayLayer,string>={
   ovr:'Overall standing',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',lean:'Registration',
+  sup:'Candidate support',pop_density:'Population density',voter_density:'Voter density',
 };
 export const INDEX_TOP10_NAME:Record<Exclude<Group,'lean'>,string>={
   ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',
@@ -47,6 +47,24 @@ function DistrictSelect(){
     const d=list.districts.find(x=>x.id===e.target.value);
     if(d&&d.id!==list.current)location.assign(districtHref(d,location));
   }}>{districtOptions(list.districts,list.current).map(o=><option key={o.id} value={o.id} disabled={o.disabled}>{o.label}</option>)}</select>;
+}
+
+// This district's settings, read once per page load; a failed read leaves the Colorado-style defaults.
+let featuresCall:Promise<Features|null>|null=null;
+export function useFeatures():Features|null{
+  const [f,setF]=useState<Features|null>(null);
+  useEffect(()=>{
+    let live=true;
+    featuresCall??=getFeatures().catch(()=>null);
+    featuresCall.then(x=>{if(live)setF(x);});
+    return ()=>{live=false;};
+  },[]);
+  return f;
+}
+/** The race this district is built for ("Bynum (D) · General election"); shown on every screen of a candidate district. */
+function RaceBadge(){
+  const text=raceBadge(useFeatures()?.candidate);
+  return text?<span className="race-badge">{text}</span>:null;
 }
 
 interface Hit{kind:'area'|'person';key:string;label:string;sub:string;go:()=>void}
@@ -119,12 +137,19 @@ function SearchBox({meta}:{meta:Meta|null}){
   </div>;
 }
 
-export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:Group;level:Level;onIndex:(g:Group)=>void;onLevel:(l:Level)=>void}){
+/** `index` is the single layer on show, or null while a blend or two-layer map is; `layers` are the ones this district offers. */
+export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:OverlayLayer|null;level:Level;onIndex:(g:OverlayLayer)=>void;onLevel:(l:Level)=>void;
+  features:Features|null;layers:OverlayLayer[];industry:string;onIndustry:(id:string)=>void}){
+  const industries=industryChoices(p.features);
+  const industryLabel=p.features?.industries.find(i=>i.id===p.industry)?.label;
+  const items=INDEX_ITEMS.filter(i=>p.layers.includes(i.id)).map(i=>i.id==='cua'&&industryLabel?{...i,label:industryLabel}:i);
   return <header className="topbar map">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><RaceBadge/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active="map"/>
     <div className="map-toolbar">
-      <div className="seg-slot index"><Segmented variant="index" label="Index" items={INDEX_ITEMS} value={p.index} onChange={p.onIndex}/></div>
+      <div className="seg-slot index"><Segmented<OverlayLayer|''> variant="index" label="Index" items={items} value={p.index??''} onChange={v=>{if(v)p.onIndex(v);}}/></div>
+      {industries&&<select className="district-select" aria-label="Industry" value={p.industry} onChange={e=>p.onIndustry(e.target.value)}>
+        {industries.map(i=><option key={i.id} value={i.id}>{i.label}</option>)}</select>}
       <div className="seg-slot level"><Segmented variant="level" label="Level" items={LEVELS.map(l=>({id:l,label:LEVEL_LABEL[l]}))} value={p.level} onChange={p.onLevel}/></div>
       <div className="counts">{p.meta
         ?<><Link to="/people">{countLabel(p.meta.people,'person','people')}</Link> {'·'} {countLabel(p.meta.households,'household')}</>
@@ -162,7 +187,7 @@ function SectionNav({active}:{active:Section}){
 }
 export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:Section}){
   return <header className="topbar page">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><RaceBadge/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active={p.active}/>
   </header>;
 }

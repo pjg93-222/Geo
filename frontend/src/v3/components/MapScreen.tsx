@@ -1,27 +1,25 @@
 // Map screen: renders 01 (Block overview), 04 (Precinct / Tract / ZIP detail) and 05 (street-level households).
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {MapHeader} from './Header';
+import {MapHeader,useFeatures} from './Header';
 import {LoadingTerrier} from './TerrierMark';
 import {MapCanvas,STREET_ZOOM,type HouseholdSel,type MapHandle,type MapView} from './MapCanvas';
 import {AreaRail,type Neighbour} from './AreaRail';
-import {AreaLabels,HouseholdLegend,Legend,Popover,Readout,StreetRail,ZoomControl,type MapLabel} from './MapParts';
-import type {Group,HouseholdPopover,Meta,StreetPayload} from '../types';
-import {BIN_PENDING,areaView,binsFor,districtSummary,type Layer} from '../lib/areas';
+import {AreaLabels,HouseholdLegend,Legend,LayersPanel,Popover,Readout,StreetRail,ZoomControl,type MapLabel} from './MapParts';
+import type {Density,Group,HouseholdPopover,Meta,OverlayLayer,StreetPayload} from '../types';
+import {BIN_PENDING,areaView,districtSummary} from '../lib/areas';
+import {SHARE_RAMP,industryChoices,isGroup,offeredLayers,overlayBins,overlayQuery,readOverlay,usable,type Overlay} from '../lib/overlay';
 import {binsInGeometryOrder,featureBounds,useLevelData} from '../lib/useLevelData';
 import {LEVELS,precinctShort,tractShort,zipLabel,type Level} from '../lib/format';
 import {replaceQuery,type Route} from '../lib/router';
 import {begin,end} from '../lib/timing';
-import {getDistrict,getHousehold,getStreet} from '../api/client';
+import {getDensity,getDistrict,getHousehold,getStreet} from '../api/client';
 
-const SHARE_RAMP=['#E6F1EC','#C2E0DB','#8BC2BC','#54979B','#286D73'];
-const LEAN_RAMP=['#95ADCE','#E7A490','#C6C2D3','#F5F1E9','#E5DFDA'];
-const GROUPS:Group[]=['ovr','cua','part','soi','lean'];
-
-function readGroup(q:URLSearchParams):Group{const v=q.get('index');return GROUPS.includes(v as Group)?(v as Group):'ovr';}
 function readLevel(q:URLSearchParams):Level{const v=q.get('level');return LEVELS.includes(v as Level)?(v as Level):'block';}
 
 export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
-  const [group,setGroup]=useState<Group>(()=>readGroup(route.search));
+  const [o,setO]=useState<Overlay>(()=>readOverlay(route.search));
+  const [industry,setIndustry]=useState(()=>route.search.get('industry')??'');
+  const [density,setDensity]=useState<Density|null>(null);
   const [level,setLevel]=useState<Level>(()=>readLevel(route.search));
   const [selected,setSelected]=useState<string|null>(()=>route.search.get('sel'));
   const [measured,setMeasured]=useState(false);
@@ -44,34 +42,43 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const loadedLevel=state?.level??level;
   dataReady.current=!!areas&&!loadingLevel;
 
+  // ---- this district's layers (GET /api/v3/features, density once it is listed) -----------------------------------------------
+  const features=useFeatures();
+  useEffect(()=>{if(features?.overlay.density)getDensity().then(setDensity).catch(()=>{});},[features]);
+  const layers=useMemo(()=>offeredLayers(features,!!density),[features,density]);
+  const ov=useMemo(()=>usable(o,layers),[o,layers]);
+  const single=ov.mode==='single';
+  const industryId=features?.industries.some(i=>i.id===industry)?industry:features?.industry??'';
+  const industryParam=industryChoices(features)&&industryId!==features?.industry?industryId:null;
+
   // ---- URL <-> state ------------------------------------------------------------------------------------------------
   useEffect(()=>{
-    replaceQuery({index:group==='ovr'?null:group,level:level==='block'?null:level,sel:selected});
-  },[group,level,selected]);
+    replaceQuery({...overlayQuery(o),level:level==='block'?null:level,sel:selected,industry:industryParam});
+  },[o,level,selected,industryParam]);
   // Only navigation changes the route snapshot; replaceQuery does not emit it.
   // Restore state on Back/Forward as well as searches without undoing local controls.
   useEffect(()=>{
     const fKey=route.search.get('f');
     const l=readLevel(route.search);const sel=route.search.get('sel');
-    const g=fKey&&!route.search.has('index')?group:readGroup(route.search);
-    setGroup(g);
+    const keep=!!fKey&&!route.search.has('index')&&!route.search.has('mode');
+    const next=keep?o:readOverlay(route.search);
+    setO(next);if(!keep)setIndustry(route.search.get('industry')??'');
     setLevel(l);setSelected(sel);setSelHousehold(null);setPop(null);begin('map');
     householdRequest.current++;
     pendingFocus.current=sel?{id:sel,nonce:Number(fKey)||Date.now()}:null;
     if(!sel&&meta)setFocus({bounds:meta.bbox,nonce:Date.now()});
     // Normalize even when a repeated search leaves every state value unchanged.
-    replaceQuery({f:null,index:g==='ovr'?null:g,level:l==='block'?null:l,sel});
+    replaceQuery({f:null,...overlayQuery(next),level:l==='block'?null:l,sel});
   },[route]);                                                           // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{getDistrict().then(setDistrict).catch(()=>{});},[]);
 
   // ---- derived map data --------------------------------------------------------------------------------------------------
-  const layer:Layer=measured?'measured':'share';
-  const palette=!measured&&group==='lean'?LEAN_RAMP:SHARE_RAMP;
-  const bins=useMemo(()=>{
-    if(!areas||!geo||!meta)return null;
-    return binsInGeometryOrder(binsFor(areas,group,layer,meta),areas,geo,BIN_PENDING);
-  },[areas,geo,group,layer,meta]);
+  const result=useMemo(()=>areas&&meta?overlayBins(ov,areas,density,meta,measured):null,[areas,meta,ov,density,measured]);
+  const palette=result?.palette??SHARE_RAMP;
+  const bins=useMemo(()=>result&&areas&&geo?binsInGeometryOrder(result.bins,areas,geo,BIN_PENDING):null,[result,areas,geo]);
+  // the rail reads the five Colorado groups; any other layer or mode leaves it on the overall standing
+  const group:Group=single&&isGroup(ov.layer)?ov.layer:'ovr';
 
   const idIndex=useMemo(()=>new Map((areas?.ids??[]).map((id,i)=>[id,i])),[areas]);
   const selIndex=selected?idIndex.get(selected):undefined;
@@ -145,7 +152,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   },[]);
 
   // ---- handlers ---------------------------------------------------------------------------------------------------------
-  const onGroup=(g:Group)=>{if(g===group)return;begin('map');setGroup(g);};
+  const onGroup=(g:OverlayLayer)=>{if(single&&g===ov.layer)return;begin('map');setO({...o,mode:'single',layer:g});};
   const onLevel=(l:Level)=>{if(l===level)return;begin('map');setLevel(l);setSelected(null);setSelHousehold(null);setPop(null);};
   const onSelectArea=useCallback((id:string|null)=>{begin('map');setSelected(id);setSelHousehold(null);setPop(null);},[]);
   const onIdle=useCallback(()=>{if(dataReady.current)end('map');},[]);
@@ -161,7 +168,8 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const pane=paneRef.current;
 
   return <div className="screen map-screen" data-street={streetActive?'1':'0'}>
-    <MapHeader meta={meta} busy={!error&&(!areas||!!loadingLevel)} index={group} level={level} onIndex={onGroup} onLevel={onLevel}/>
+    <MapHeader meta={meta} busy={!error&&(!areas||!!loadingLevel)} index={single?ov.layer:null} level={level} onIndex={onGroup} onLevel={onLevel}
+      features={features} layers={layers} industry={industryId} onIndustry={setIndustry}/>
     <div className="map-body">
       <div className="map-pane" ref={paneRef}>
         {!areas&&!error&&<LoadingTerrier label="Loading map…"/>}
@@ -173,7 +181,8 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
         {labels.length>0&&pane&&!streetActive&&<AreaLabels items={labels} palette={palette} selectedId={selected} project={(lo,la)=>mapRef.current?.project(lo,la)??null}
           zoom={mapRef.current?.view()?.zoom??0} width={pane.clientWidth} height={pane.clientHeight}/>}
         <ZoomControl onZoom={d=>mapRef.current?.zoomBy(d)}/>
-        {streetActive?<HouseholdLegend/>:<Legend group={group} measured={measured} onMeasured={v=>{begin('map');setMeasured(v);}} loading={!areas} floors={meta?.floors}/>}
+        <LayersPanel o={ov} layers={layers} hidden={streetActive} onChange={next=>{begin('map');setO(next);}}/>
+        {streetActive?<HouseholdLegend/>:<Legend group={ov.layer} measured={measured} onMeasured={v=>{begin('map');setMeasured(v);}} loading={!areas} floors={meta?.floors} overlay={result?.legend}/>}
         <Readout/>
         {selHousehold&&popPos&&pane&&<Popover data={pop} x={popPos.x} y={popPos.y} paneW={pane.clientWidth} paneH={pane.clientHeight}
           onClose={()=>{setSelHousehold(null);setPop(null);}}/>}
