@@ -918,7 +918,8 @@ def unmask_rules(ctx):
 def unmask_unexplained(lines, ctx):
     """The generic difference lines (snapshot, files, stores) that the unmask does not explain."""
     allowed = {('DIFFERENT', '.snapshot'), ('NEW', 'files.shown'), ('NEW', 'files.snapshots.' + ctx.new_key)}
-    allowed |= {('DIFFERENT', 'stores.scores.tables.metadata.' + k) for k in ('rows', 'sha256')}
+    # sqlite_stat1 is SQLite's own query-planner statistics, regenerated whenever the score store is rebuilt; not data.
+    allowed |= {('DIFFERENT', 'stores.scores.tables.%s.%s' % (t, k)) for t in ('metadata', 'sqlite_stat1') for k in ('rows', 'sha256')}
     allowed |= {('DIFFERENT', 'stores.accounts.tables.%s.%s' % (t, k)) for t in ACCOUNT_TABLES for k in ('rows', 'sha256')}
     return [line for line in lines if tuple(line.split(':')[0].split()[:2]) not in allowed]
 

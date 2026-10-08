@@ -637,6 +637,17 @@ class UnmaskGateTests(unittest.TestCase):
                        'DIFFERENT endpoints.people_first_page: sha256 aaa -> bbb']
         self.assertEqual(B.unmask_unexplained(explained + unexplained, self.ctx), unexplained)
 
+    def test_a_changed_sqlite_stat1_passes_but_only_in_the_score_store_and_no_real_table_does(self):
+        stats = ['DIFFERENT stores.scores.tables.sqlite_stat1.sha256: recorded a, now b',
+                 'DIFFERENT stores.scores.tables.sqlite_stat1.rows: recorded 30, now 31']
+        real = ['DIFFERENT stores.scores.tables.person.sha256: recorded a, now b',
+                'DIFFERENT stores.scores.tables.person_score.rows: recorded 10, now 9',
+                'DIFFERENT stores.street.tables.sqlite_stat1.sha256: recorded a, now b',
+                'NEW       stores.scores.tables.sqlite_stat1',
+                'MISSING   stores.scores.tables.sqlite_stat1']
+        self.assertEqual(B.unmask_unexplained(stats, self.ctx), [])
+        self.assertEqual(B.unmask_unexplained(stats + real, self.ctx), real)
+
     def endpoint_entry(self, sha):
         return {'status': 200, 'content_type': 'application/json', 'bytes': 10, 'sha256': sha * 64}
 

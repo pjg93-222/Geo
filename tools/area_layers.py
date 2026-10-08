@@ -20,14 +20,14 @@ FROZEN_SHA256 = {
 FROZEN_SHA256_BY_DISTRICT = {
     'co-05': FROZEN_SHA256,
     'or-05': {
-        'framework_config_sha256': 'e8499d0a9a371adc6871eda658089ddf6f109067721f4a7110c0b13adfb12540',
+        'framework_config_sha256': '6879bca9a482b106c5ca3379224611e7c9d7f2acb12705cda234ed9ee8f775f4',
         'plan_sha256': '7645762d4e17aa2a023b780e64a63aa8459c124e4c6ff5d439fb96f0b1fd856a',
-        'criteria_sha256': '55ffd72049c3fb7416576441da6406d854c6198f38143ed9d948aaa6cc6b1dd4',
+        'criteria_sha256': 'd1ba4ff5c81d6226eb5d5fd88c6179a5b7234ae2f8585f15e9773852fefc9c6c',
     },
     'ct-01': {
-        'framework_config_sha256': '0df70c9d47df8ce87d43ae6a022c292a242d2facecac046d0d3bfb15a138d33c',
+        'framework_config_sha256': 'b866a12f67eb1ade0f6b4b0abb782b0b8e1cc9b859997a88712e1a5005d04cfc',
         'plan_sha256': '81249df41506a6c836fffb3fa9c620e4b4d2cebfd9ad3a188a4e4c1266e63530',
-        'criteria_sha256': '579f6a53787b3d747f2507b5ce7eea73737c78cc4e10e362492d4755e6d03fd3',
+        'criteria_sha256': '963a26d5123fc05963822ea0dee3339ad5d2c33e516b1317390587b9f507850f',
     },
 }
 GROUPS = ('ovr', 'cua', 'part', 'soi', 'lean')

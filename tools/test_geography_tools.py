@@ -399,6 +399,17 @@ class SnapshotKeyTests(unittest.TestCase):
             self.assertNotEqual(pin, AL.FROZEN_SHA256)
         self.assertNotEqual(AL.FROZEN_SHA256_BY_DISTRICT['or-05'], AL.FROZEN_SHA256_BY_DISTRICT['ct-01'])
 
+    def test_district_pins_hold_the_four_term_freeze(self):
+        """The 30/25/25/20 frameworks of Oregon and Connecticut (their rowfw-pin receipts, 2026-10-08); the plan file is unchanged."""
+        self.assertEqual(AL.FROZEN_SHA256_BY_DISTRICT['or-05'], {
+            'framework_config_sha256': '6879bca9a482b106c5ca3379224611e7c9d7f2acb12705cda234ed9ee8f775f4',
+            'plan_sha256': '7645762d4e17aa2a023b780e64a63aa8459c124e4c6ff5d439fb96f0b1fd856a',
+            'criteria_sha256': 'd1ba4ff5c81d6226eb5d5fd88c6179a5b7234ae2f8585f15e9773852fefc9c6c'})
+        self.assertEqual(AL.FROZEN_SHA256_BY_DISTRICT['ct-01'], {
+            'framework_config_sha256': 'b866a12f67eb1ade0f6b4b0abb782b0b8e1cc9b859997a88712e1a5005d04cfc',
+            'plan_sha256': '81249df41506a6c836fffb3fa9c620e4b4d2cebfd9ad3a188a4e4c1266e63530',
+            'criteria_sha256': '963a26d5123fc05963822ea0dee3339ad5d2c33e516b1317390587b9f507850f'})
+
 
 class ZctaCleanTests(unittest.TestCase):
     """Test (d): invalid ZCTAs are made valid and keep their polygonal parts; valid ones are the same objects."""
