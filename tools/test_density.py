@@ -1,0 +1,137 @@
+"""Synthetic checks for tools/build_density.py: 4 blocks (one with no land), 7 people, 2 precincts. No real data, no Django.
+
+    <venv python> -m unittest tools.test_density          (from the V3 folder)
+"""
+import csv
+import hashlib
+import io
+import json
+import sqlite3
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+import pandas as pd
+
+from tools import build_density as BD
+from tools import districts as D
+from tools import glassbox
+
+# B1 1 km2, B2 0.5 km2 (shared by P1 and P2), B3 no land, B4 2 km2
+BLOCKS = pd.DataFrame({'GEOID20': ['B1', 'B2', 'B3', 'B4'], 'POP20': [100, 50, 30, 400],
+                       'ALAND20': [1_000_000, 500_000, 0, 2_000_000]})
+# (block, precinct, tract, zip): the last person has no block id
+PEOPLE = pd.DataFrame([('B1', 'P1', 'T1', 'Z1'), ('B1', 'P1', 'T1', 'Z1'), ('B2', 'P1', 'T1', 'Z1'), ('B2', 'P2', 'T1', 'Z2'),
+                       ('B4', 'P2', 'T2', 'Z2'), ('B3', 'P2', 'T2', 'Z2'), ('', 'P2', 'T2', 'Z2')],
+                      columns=['reg_block', 'reg_precinct', 'reg_tract', 'reg_zip'])
+PUBLISHED = {'block': {'B1', 'B2', 'B4'}, 'precinct': {'P1'}, 'tract': {'T1', 'T2'}, 'zip': {'Z1', 'Z9'}}   # P2, Z2: withheld
+
+
+class ComputeTests(unittest.TestCase):
+    def setUp(self):
+        self.levels, self.counts, self.join = BD.compute(PEOPLE, BLOCKS, PUBLISHED, {})
+
+    def test_population_density_skips_blocks_without_land(self):
+        block = self.levels['block']
+        self.assertEqual(block['ids'], ['B1', 'B2', 'B3', 'B4'])
+        self.assertEqual(block['pop_density'], [100.0, 100.0, None, 200.0])
+        self.assertEqual(block['land_km2'], [1.0, 0.5, None, 2.0])
+
+    def test_an_area_counts_a_shared_block_in_each_and_leaves_out_land_free_blocks(self):
+        precinct, tract, zipcode = (self.levels[k] for k in ('precinct', 'tract', 'zip'))
+        self.assertEqual(precinct['pop_density'], [100.0, 180.0])           # P1: B1+B2 150 / 1.5; P2: B2+B4 450 / 2.5 (B3 out)
+        self.assertEqual(precinct['land_km2'], [1.5, 2.5])
+        self.assertEqual(tract['pop_density'], [100.0, 200.0])
+        self.assertEqual(zipcode['pop_density'], [100.0, 180.0])
+
+    def test_voter_density_counts_people_in_the_land_blocks_of_published_areas(self):
+        self.assertEqual(self.levels['block']['voter_density'], [2.0, 4.0, None, 0.5])
+        self.assertEqual(self.levels['precinct']['voter_density'], [2.0, None])        # P2 is withheld
+        self.assertEqual(self.levels['tract']['voter_density'], [round(4 / 1.5, 3), 0.5])
+        self.assertEqual(self.levels['zip']['voter_density'], [2.0, None])             # Z2 is withheld
+
+    def test_counts_and_join_receipt(self):
+        self.assertEqual(self.join, {'people': 7, 'with_block': 6, 'joined': 6, 'rate': 1.0, 'blocks_in_file': 4,
+                                     'land_zero_blocks': 1, 'land_zero_people': 1})
+        self.assertEqual(self.counts['precinct'], {'areas': 2, 'published': 1, 'published_without_people': 0,
+                                                   'pop_density': 2, 'voter_density': 1})
+        self.assertEqual(self.counts['zip']['published_without_people'], 1)         # Z9 is published but holds nobody
+        self.assertEqual(self.counts['block']['pop_density'], 3)
+
+    def test_a_connecticut_alias_joins_the_old_county_id(self):
+        old = BLOCKS.assign(GEOID20=['090010000001', 'B2', 'B3', 'B4'])
+        levels, counts, join = BD.compute(PEOPLE, old, PUBLISHED, {'090010000001': 'B1'})
+        self.assertEqual((levels, counts, join), (self.levels, self.counts, self.join))
+        self.assertEqual(BD.compute(PEOPLE, old, PUBLISHED, {})[2]['joined'], 4)       # without it the two B1 people fall out
+
+    def test_no_published_ids_gives_no_voter_density(self):
+        levels = BD.compute(PEOPLE, BLOCKS, {}, {})[0]
+        self.assertTrue(all(v is None for level in levels.values() for v in level['voter_density']))
+
+
+class MainTests(unittest.TestCase):
+    """main() on small real files: a person table, an area table and a dummy blocks.zip (the block read is patched)."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        root = self.root = Path(self.temporary.name)
+        (root / 'geo').mkdir()
+        (root / 'geo' / 'blocks.zip').write_bytes(b'not a real zip')
+        (root / 'geo' / 'block_aliases.json').write_text(json.dumps({'old-B1': 'B1'}))
+        area = root / 'rf' / 'build' / 'rowfw-1.0.0'
+        area.mkdir(parents=True)
+        with open(area / 'area_scores_rowfw-1.0.0.csv', 'w', newline='') as stream:
+            writer = csv.writer(stream)
+            writer.writerow(['basis', 'level', 'area_id', 'group', 'suppressed'])
+            for level, ids in PUBLISHED.items():
+                for ident in sorted(ids):
+                    writer.writerow(['registration', level, ident, 'ovr', 0])
+                    writer.writerow(['registration', level, ident, 'cua', 0])
+            writer.writerow(['residence', 'zip', 'Z2', 'ovr', 0])                       # another basis: ignored
+        self.home = root / 'home'
+        self.home.mkdir()
+        self.write_people(PEOPLE)
+        self.district = {**D.DISTRICTS['or-05'], 'geography': root / 'geo', 'rowfw_root': root / 'rf'}
+        self.patches = [mock.patch.dict(D.DISTRICTS, {'or-05': self.district}), mock.patch.object(D, 'data_dir', return_value=self.home),
+                        mock.patch.object(glassbox, 'EVENT_DIR', root / 'events'), mock.patch.object(glassbox, 'MIRROR', root / 'events.jsonl')]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self):
+        for patch in self.patches:
+            patch.stop()
+        self.temporary.cleanup()
+
+    def write_people(self, frame):
+        (self.home / 'scores.sqlite3').unlink(missing_ok=True)
+        with sqlite3.connect(self.home / 'scores.sqlite3') as db:
+            frame.to_sql('person', db, index=False)
+
+    def run_main(self, blocks=BLOCKS):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(BD.pyogrio, 'read_dataframe', return_value=blocks), redirect_stdout(out), redirect_stderr(err):
+            return BD.main(['--district', 'or-05']), err.getvalue()
+
+    def test_writes_density_json_beside_the_stores(self):
+        old = BLOCKS.assign(GEOID20=['old-B1', 'B2', 'B3', 'B4'])
+        code, _ = self.run_main(old)
+        document = json.loads((self.home / 'density.json').read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual((document['schema'], document['district']), ('density-1', 'or-05'))
+        self.assertEqual(document['blocks_source'], {'file': 'blocks.zip', 'sha256': hashlib.sha256(b'not a real zip').hexdigest()})
+        self.assertEqual(document['join']['rate'], 1.0)
+        self.assertEqual(document['levels']['precinct'], {'ids': ['P1', 'P2'], 'pop_density': [100.0, 180.0],
+                                                          'voter_density': [2.0, None], 'land_km2': [1.5, 2.5]})
+        self.assertFalse(list(self.home.glob('*.tmp')))
+
+    def test_a_join_rate_under_99_percent_exits_2_and_writes_nothing(self):
+        code, err = self.run_main(BLOCKS.iloc[[0, 1, 2]])                               # B4's person falls out: 5 of 6 join
+        self.assertEqual(code, 2)
+        self.assertIn('join rate', err)
+        self.assertFalse((self.home / 'density.json').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()
