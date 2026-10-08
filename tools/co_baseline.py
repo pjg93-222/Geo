@@ -2,6 +2,9 @@
 
     <python> tools/co_baseline.py record [--port 8769] [--runs 2]    write tests/fixtures/co_baseline.json
     <python> tools/co_baseline.py check  [--port 8769]               recompute everything, diff against the fixture
+    <python> tools/co_baseline.py capture-pre                        keep the score store's metadata before the unmask swap
+    <python> tools/co_baseline.py make-stage --stage-dir D --scores S    verified copy of .local with the new score store S
+    <python> tools/co_baseline.py check --intended unmask [--stage-dir D]    accept exactly "no area withheld" (below)
 
 What it records (stdlib only; the server it starts needs the repo's own Python, see --python):
 
@@ -26,11 +29,25 @@ folder on first use and the accounts store is a read-write Django database. The 
 Volatile fields (dates, ids that differ per request) are normalised, and ONLY those, through NORMALISE below; each is
 written to the fixture's "normalised" list. `record` runs the endpoint pass twice, each against a freshly started server
 process, and refuses to write the fixture when the two passes differ.
+
+`check --intended unmask` (Paul 2026-10-08: "nothing should ever be withheld") passes only for that change: areas that were
+withheld now carry the values of the shown-areas table (.local/area_scores_shown.csv, written by tools/shown_areas.py);
+every standing is re-ranked over all areas and equals that table; every other field of an area that was already shown is
+unchanged; the rest of the endpoints are byte-identical once the old and new snapshot keys and area-table shas are replaced
+by placeholders; of the stores only the score metadata and the import rows differ, of the files only the new snapshot
+folder. Anything else fails, named by JSON path or table, never by value. With --stage-dir the stores and files are read
+from that copy (made by make-stage, then imported into), so the check can run before the live server is stopped.
 """
 import argparse
+import bisect
+import collections
+import copy
+import csv
 import datetime
 import hashlib
+import io
 import json
+import math
 import os
 import re
 import shutil
@@ -43,11 +60,14 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[1]
 LOCAL = REPO / '.local'
 FIXTURE = REPO / 'tests' / 'fixtures' / 'co_baseline.json'
 BODY_DIR = LOCAL / 'baseline-co' / 'golden'
+SHOWN = LOCAL / 'area_scores_shown.csv'                                      # tools/shown_areas.py --district co-05
+PRE_FILE = LOCAL / 'baseline-co' / 'pre-unmask' / 'scores_metadata.json'     # capture-pre
 ROWFW = REPO.parent / 'cu-geography' / '.local' / 'row-framework-20260930' / 'build' / 'rowfw-1.0.0'
 SCHEMA = 'co-baseline-1'
 LIVE_PORT = 8767
@@ -245,9 +265,11 @@ def tree_hashes(root):
             for path in sorted(p for p in root.rglob('*') if p.is_file())}
 
 
-def file_hashes(data_dir, rowfw=ROWFW):
+def file_hashes(data_dir, rowfw=ROWFW, shown=SHOWN):
     data_dir = Path(data_dir)
     result = {'walk_salt': {'sha256': sha256_file(data_dir / '.walk-salt')}, 'snapshots': {}, 'rowfw': {}}
+    if Path(shown).exists():             # the shown-areas table is a pinned input from the unmask on; absent before it
+        result['shown'] = {'sha256': sha256_file(shown)}
     snapshots = data_dir / 'snapshots'
     for folder in sorted(p for p in snapshots.iterdir() if p.is_dir() and SNAPSHOT_DIR.fullmatch(p.name)):
         files = tree_hashes(folder)
@@ -374,20 +396,22 @@ def server_python(requested):
     return str(venv) if venv.exists() else sys.executable
 
 
-def make_copy(work_dir):
-    """A verified copy of the files the server reads: .local without backups, walk-backups, pycache and server.pid."""
-    folder = Path(tempfile.mkdtemp(prefix='co-baseline-', dir=str(work_dir)))
+def make_copy(work_dir, source_dir=LOCAL, folder=None):
+    """A verified copy of the files the server reads: .local without backups, walk-backups, pycache and server.pid.
+    `folder` names the target (default: a new temp folder under work_dir)."""
+    folder = Path(folder) if folder else Path(tempfile.mkdtemp(prefix='co-baseline-', dir=str(work_dir)))
+    folder.mkdir(parents=True, exist_ok=True)
     started = time.time()
     for name in COPIED_FILES:
-        source = LOCAL / name
+        source = source_dir / name
         if source.exists():
             shutil.copyfile(source, folder / name)
-    shutil.copytree(LOCAL / 'snapshots', folder / 'snapshots')
+    shutil.copytree(source_dir / 'snapshots', folder / 'snapshots', dirs_exist_ok=True)
     for name in COPIED_FILES:
-        source = LOCAL / name
+        source = source_dir / name
         if source.exists() and sha256_file(source) != sha256_file(folder / name):
             raise SystemExit('The copy of %s differs from the original (changed while copying?). Run again.' % name)
-    log('copied .local to %s in %.0fs, files verified byte for byte' % (folder, time.time() - started))
+    log('copied %s to %s in %.0fs, files verified byte for byte' % (source_dir, folder, time.time() - started))
     return folder
 
 
@@ -575,7 +599,7 @@ def short(value):
     return text if len(text) <= 24 else text[:12] + '...' + text[-6:]
 
 
-def compare_endpoints(expected, actual, bodies_now, golden_dir, out):
+def compare_endpoints(expected, actual, bodies_now, golden_dir, out, intended=INTENDED):
     for endpoint_id in sorted(set(expected) | set(actual)):
         before, now = expected.get(endpoint_id), actual.get(endpoint_id)
         if before is None or now is None:
@@ -589,8 +613,8 @@ def compare_endpoints(expected, actual, bodies_now, golden_dir, out):
             continue
         golden = golden_dir / (endpoint_id + '.body')
         ruled = []
-        if endpoint_id in INTENDED and all(before.get(k) == now.get(k) for k in ('status', 'content_type', 'skipped')):
-            ruling, verify = INTENDED[endpoint_id]
+        if endpoint_id in intended and all(before.get(k) == now.get(k) for k in ('status', 'content_type', 'skipped')):
+            ruling, verify = intended[endpoint_id]
             if endpoint_id not in bodies_now or not golden.exists():
                 ruled = ['cannot verify a ruled difference without the golden body']
             else:
@@ -616,6 +640,392 @@ def git_head():
     return result.stdout.strip()
 
 
+# ---- the unmask check (Paul 2026-10-08: nothing is withheld) -------------------------------------------------------------
+# A verifier takes (golden bytes, new bytes, ctx) and returns problems as JSON paths, never values. `ctx` holds the old and
+# new snapshot keys and area-table shas, the shown-areas table (the oracle) and counters.
+
+AREA_CELLS = {'mean': 'eb_mean', 'se': 'eb_se', 'measured': 'measured_pct_mean', 'pct': 'area_pct', 'top10': 'top10_share_eb',
+              'top10_se': 'top10_eb_se', 'top10_pct': 'top10_area_pct'}
+LEAN_CELLS = {'mean': 'eb_mean', 'se': 'eb_se', 'measured': 'measured_pct_mean', 'share_d': 'share_reg_D',
+              'share_r': 'share_reg_R', 'share_u': 'share_reg_U'}
+STANDINGS = ('pct', 'top10_pct')               # the only cells of a shown area that may move: they are re-ranked over all areas
+AREA_TOLERANCE = 1e-8                          # the wire rounds to 8 decimals (v3_cache._r)
+META_MAY_CHANGE = ('area_table_sha256', 'suppressed_ids_sha256', 'area_table', 'built_utc', 'build_code_sha256')
+ACCOUNT_TABLES = ('research_snapshot', 'research_auditevent', 'sqlite_sequence')      # what import_summary writes
+MANIFEST_MASKED = (('snapshot',), ('created_at',), ('row_framework', 'area_table_sha256'), ('row_framework', 'area_indices_sha256'),
+                   ('row_framework', 'base_snapshot'), ('threshold',), ('privacy',), ('measure_methodology',))
+SUMMARY_RANKED = ('value', 'index', 'component_coverage', 'components_used', 'components_total')
+SUMMARY_META = ('snapshot', 'threshold', 'coverage', 'measure_methodology')
+
+
+class Found(list):
+    """Problems as JSON paths, at most a dozen."""
+
+    def add(self, path):
+        if len(self) < 12 and path not in self:
+            self.append(path)
+
+
+def near(a, b, tolerance=AREA_TOLERANCE):
+    return (a is None and b is None) or (a is not None and b is not None and abs(a - b) <= tolerance)
+
+
+def read_shown(path):
+    """{(basis, level, area_id): {group: {column: float or None}}} of the shown-areas table; ids stay text ('nan' is an id)."""
+    shown = {}
+    with open(path, newline='', encoding='utf-8') as stream:
+        for row in csv.DictReader(stream):
+            cells = {c: (float(v) if v else None) for c, v in row.items() if c not in ('basis', 'level', 'area_id', 'group', 'parent_id')}
+            shown.setdefault((row['basis'], row['level'], row['area_id']), {})[row['group']] = cells
+    return shown
+
+
+def normalised(body, ctx):
+    """The body as text with the old and new snapshot keys and area-table shas replaced by placeholders."""
+    text = body.decode('utf-8', 'replace')
+    for key in (ctx.old_key, ctx.new_key):
+        text = text.replace(key, '@SNAPSHOT@')
+    for sha in (ctx.old_sha, ctx.shown_sha):
+        text = text.replace(sha, '@AREA_TABLE@')
+    return text.encode('utf-8')
+
+
+def verify_keys_only(golden, now, ctx):
+    """Every endpoint the unmask does not touch: byte-identical once the keys and shas are replaced."""
+    a, b = normalised(golden, ctx), normalised(now, ctx)
+    return [] if a == b else json_paths_differing(a, b) or ['$ (only the bytes differ)']
+
+
+def verify_areas(golden, now, ctx):
+    """areas_*: an area that was shown keeps every cell but its two standings; a withheld area now carries the shown table's
+    values (`ok`) or, with no registered people, is `empty` with n 0 and no values; every standing equals the shown table."""
+    old, new, found = json.loads(golden), json.loads(now), Found()
+    basis, level, ids = old['basis'], old['level'], old['ids']
+    if set(old) != set(new) or set(old['groups']) != set(new['groups']):
+        return ['$']
+    if new['snapshot'] != ctx.new_key:
+        found.add('$.snapshot')
+    for key in ('schema', 'basis', 'level', 'ids', 'labels', 'parent', 'neighbours'):
+        if old.get(key) != new.get(key):
+            found.add('$.' + key)
+    series = {k: new[k] for k in ('status', 'n', 'households', 'precinct', 'tract', 'blocks')}
+    series.update({'groups.%s.%s' % (g, c): v for g, cells in new['groups'].items() for c, v in cells.items()})
+    for name, values in series.items():
+        if len(values) != len(ids):
+            found.add('$.%s[len]' % name)
+    if found:
+        return list(found)
+    for i, ident in enumerate(ids):
+        was, state, shown = old['status'][i], new['status'][i], ctx.shown.get((basis, level, ident))
+        cells = [(g, name, column, new['groups'][g][name][i], old['groups'][g][name][i])
+                 for g in new['groups'] for name, column in (LEAN_CELLS if g == 'lean' else AREA_CELLS).items()]
+        if state == 'ok' and shown is not None and 'ovr' in shown and was in ('ok', 'withheld'):
+            if was == 'withheld':
+                ctx.stats['newly_shown'] += 1
+            ovr = shown['ovr']
+            for key, column in (('n', 'n_rows'), ('households', 'n_households')):
+                if new[key][i] is None or float(new[key][i]) != ovr[column] or (was == 'ok' and new[key][i] != old[key][i]):
+                    found.add('$.%s[%d]' % (key, i))
+            for key in ('precinct', 'tract', 'blocks'):
+                if (new[key][i] != old[key][i]) if was == 'ok' else not isinstance(new[key][i], (str, int, type(None))):
+                    found.add('$.%s[%d]' % (key, i))
+            for g, name, column, value, before in cells:
+                if shown.get(g) is None or not near(value, shown[g].get(column)):
+                    found.add('$.groups.%s.%s[%d]' % (g, name, i))
+                elif was == 'ok' and value != before:
+                    if name in STANDINGS:
+                        ctx.stats['moved'] += 1
+                    else:
+                        found.add('$.groups.%s.%s[%d]' % (g, name, i))
+        elif state == 'empty' and was == 'withheld' and shown is None:
+            ctx.stats['empty'] += 1
+            if (new['n'][i], new['households'][i]) != (0, 0) or any(new[k][i] is not None for k in ('precinct', 'tract', 'blocks')) \
+                    or any(value is not None for _g, _n, _c, value, _b in cells):
+                found.add('$.status[%d]' % i)
+        else:
+            found.add('$.status[%d]' % i)
+    present = set(ids)
+    if any(b == basis and lv == level and a not in present and a.isdigit() for (b, lv, a) in ctx.shown):
+        found.add('$.ids')                      # an area of the shown table (not the id-less pseudo-area) has no row
+    return list(found)
+
+
+def verify_meta(golden, now, ctx):
+    """meta: `floors` is now `small_area` (same 20 and 10), the suppressed-id sha is gone, the area-table sha is the shown
+    table's, the concordance count is `without_polygon`; nothing else."""
+    old, new = json.loads(golden), json.loads(now)
+    old['small_area'] = old.pop('floors', None)
+    old['row_framework'].pop('suppressed_ids_sha256', None)
+    old['row_framework']['area_table_sha256'] = ctx.shown_sha
+    concordance = old['geometry_method']['concordance']
+    concordance['without_polygon'] = concordance.pop('withheld_without_polygon', None)
+    old['snapshot'] = ctx.new_key
+    return json_paths_differing(canonical(old), canonical(new))
+
+
+def verify_profile(golden, now, ctx):
+    """person_profile: the block and precinct rows lose `withheld` and gain n and households; pct is the shown table's top-10
+    standing, top10 stays when the area was shown and is the shown table's when it was not; the rest is untouched."""
+    old, new = json.loads(golden), json.loads(now)
+    context_old, context_new = old.pop('area_context'), new.pop('area_context')
+    found = Found(json_paths_differing(canonical(old), canonical(new)))
+    if set(context_old) != set(context_new):
+        found.add('$.area_context')
+    for level in sorted(set(context_old) & set(context_new)):
+        was, ref, path = context_old[level], context_new[level], '$.area_context.' + level
+        shown = ctx.shown.get(('registration', level, was['id']), {}).get('ovr')
+        if set(ref) != {'level', 'id', 'label', 'pct', 'top10', 'n', 'households'} or any(ref[k] != was[k] for k in ('level', 'id', 'label')):
+            found.add(path)
+        elif was['id'] == '':
+            if (ref['pct'], ref['top10']) != (None, None):
+                found.add(path + '.pct')
+        elif shown is None:
+            found.add(path + '.id')
+        else:
+            for key, value in (('pct', shown['top10_area_pct']), ('top10', shown['top10_share_eb'])):
+                if key == 'top10' and not was['withheld']:
+                    value = was['top10']                     # a shown area keeps its share
+                if ref[key] is None or value is None or not math.isclose(ref[key], value, rel_tol=1e-7, abs_tol=1e-9):
+                    found.add('%s.%s' % (path, key))
+            if (ref['n'], ref['households']) != (shown['n_rows'], shown['n_households']):
+                found.add(path + '.n')
+    return list(found)
+
+
+def verify_workspace(golden, now, ctx):
+    """workspace: the snapshot key, the store's build time and the areas ledger text (which no longer mentions withholding)."""
+    old, new, found = json.loads(golden), json.loads(now), Found()
+    ledger = next((x for x in new.get('layers', []) if x.get('key') == 'areas'), {})
+    if new.get('snapshot') != ctx.new_key:
+        found.add('$.snapshot')
+    if ctx.new_built is not None and new.get('builtAt') != ctx.new_built:
+        found.add('$.builtAt')
+    if not isinstance(ledger.get('detail'), str) or 'ithheld' in ledger['detail']:
+        found.add('$.layers[areas].detail')
+    for body in (old, new):
+        body.pop('snapshot', None)
+        body.pop('builtAt', None)
+        for item in body.get('layers', []):
+            if item.get('key') == 'areas':
+                item.pop('detail', None)
+    return list(found) + json_paths_differing(canonical(old), canonical(new))
+
+
+def mask_manifest(manifest):
+    for path in MANIFEST_MASKED:
+        node = manifest
+        for part in path[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            node[path[-1]] = '@'
+    return manifest
+
+
+def verify_snapshots(golden, now, ctx):
+    """method_snapshots: old entries unchanged apart from `active`; one new active entry whose manifest is the old active one's
+    without the withheld-area keys (and with the shown table's sha), nothing else beyond the masked build fields."""
+    old, new, found = json.loads(golden)['snapshots'], json.loads(now)['snapshots'], Found()
+    by_old, by_new = {s['key']: s for s in old}, {s['key']: s for s in new}
+    if ctx.new_key in by_old or set(by_new) != set(by_old) | {ctx.new_key}:
+        return ['$.snapshots']
+    if [k for k, s in by_new.items() if s['active']] != [ctx.new_key]:
+        found.add('$.snapshots[active]')
+    for index, (key, was) in enumerate(by_old.items()):
+        if canonical({**was, 'active': None}) != canonical({**by_new[key], 'active': None}):
+            found.add('$.snapshots[%d]' % index)
+    want = copy.deepcopy(next(s for s in old if s['active'])['manifest'])
+    got = copy.deepcopy(by_new[ctx.new_key]['manifest'])
+    want.pop('area_floors', None)
+    for key in ('suppressed_ids_sha256', 'withheld_set_sha256', 'd1_audit'):
+        want['row_framework'].pop(key, None)
+    concordance = want['geometry_method']['concordance']
+    concordance['without_polygon'] = concordance.pop('withheld_without_polygon', None)
+    framework = got.get('row_framework', {})
+    if (got.get('snapshot') != ctx.new_key or framework.get('area_table_sha256') != ctx.shown_sha
+            or not str(got.get('created_at', '')).startswith('Built from the score store written ')
+            or not re.fullmatch(r'[0-9a-f]{64}', str(framework.get('area_indices_sha256')))):
+        found.add('$.snapshots[new].manifest')
+    return list(found) + json_paths_differing(canonical(mask_manifest(want)), canonical(mask_manifest(got)))
+
+
+def summary_rows(body):
+    text = body.decode('utf-8')
+    if text.lstrip().startswith('{'):
+        data = json.loads(text)
+        return data['meta'], data['rows']
+    return None, list(csv.DictReader(io.StringIO(text)))
+
+
+def verify_summaries(golden, now, ctx):
+    """summaries_* (the old summary layer; its small-count suppression is gone too): same rows in the same order; a row that
+    was ok keeps everything but its rank-derived columns; a suppressed row is now ok with a count; nothing is suppressed."""
+    (old_meta, old_rows), (new_meta, new_rows), found = summary_rows(golden), summary_rows(now), Found()
+    ident = lambda r: r.get('id', r.get('geographic_id'))
+    if [ident(r) for r in old_rows] != [ident(r) for r in new_rows]:
+        return ['$.rows']
+    if old_meta is not None:
+        for key in set(old_meta) | set(new_meta):
+            if key not in SUMMARY_META and old_meta.get(key) != new_meta.get(key):
+                found.add('$.meta.' + key)
+        if new_meta.get('snapshot') != ctx.new_key:
+            found.add('$.meta.snapshot')
+    for i, (before, row) in enumerate(zip(old_rows, new_rows)):
+        if row.get('status') != 'ok' or row.get('measure_status', 'ok') != 'ok':
+            found.add('$.rows[%d].status' % i)
+        elif before.get('status') == 'ok':
+            if any(before.get(k) != row.get(k) for k in set(before) | set(row) if k not in SUMMARY_RANKED + ('snapshot',)):
+                found.add('$.rows[%d]' % i)
+            if 'snapshot' in row and row['snapshot'] != ctx.new_key:
+                found.add('$.rows[%d].snapshot' % i)
+        elif row.get('count') in (None, ''):
+            found.add('$.rows[%d].count' % i)
+        else:
+            ctx.stats['summary_rows'] += 1
+    if new_meta is not None and new_meta.get('metric') == 'count' and not found:
+        values = sorted(r['value'] for r in new_rows)
+        for i, row in enumerate(new_rows):
+            lo, hi = bisect.bisect_left(values, row['value']), bisect.bisect_right(values, row['value'])
+            if row['value'] != row['count'] or not math.isclose(row['index'], 100 * (lo + (hi - lo) / 2) / len(values), rel_tol=1e-9, abs_tol=1e-9):
+                found.add('$.rows[%d].index' % i)
+    return list(found)
+
+
+def guarded(verify, ctx):
+    def run_one(golden, now):
+        try:
+            return verify(golden, now, ctx)
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError, StopIteration) as problem:
+            return ['$ (unexpected shape: %s)' % type(problem).__name__]
+    return run_one
+
+
+def unmask_rules(ctx):
+    """{endpoint id: (ruling, verifier)} for every endpoint: the special ones, else byte-identical after the keys are replaced."""
+    special = {'meta': verify_meta, 'person_profile': verify_profile, 'workspace': verify_workspace, 'method_snapshots': verify_snapshots}
+    rules = {}
+    for endpoint_id, _template in ENDPOINTS:
+        verify = special.get(endpoint_id) or (verify_areas if endpoint_id.startswith('areas_') else
+                                             verify_summaries if endpoint_id.startswith('summaries_') else verify_keys_only)
+        rules[endpoint_id] = ('nothing withheld, Paul 2026-10-08', guarded(verify, ctx))
+    return rules
+
+
+def unmask_unexplained(lines, ctx):
+    """The generic difference lines (snapshot, files, stores) that the unmask does not explain."""
+    allowed = {('DIFFERENT', '.snapshot'), ('NEW', 'files.shown'), ('NEW', 'files.snapshots.' + ctx.new_key)}
+    allowed |= {('DIFFERENT', 'stores.scores.tables.metadata.' + k) for k in ('rows', 'sha256')}
+    allowed |= {('DIFFERENT', 'stores.accounts.tables.%s.%s' % (t, k)) for t in ACCOUNT_TABLES for k in ('rows', 'sha256')}
+    return [line for line in lines if tuple(line.split(':')[0].split()[:2]) not in allowed]
+
+
+def rows_digest(rows):
+    """table_digest's hash for a small table already in primary-key order (one batch)."""
+    return hashlib.sha256(('\n'.join(repr(tuple(r)) for r in rows) + '\n').encode('utf-8', 'surrogatepass')).hexdigest()
+
+
+def capture_pre():
+    """Keep the live score store's metadata before the swap; refuses unless it is exactly the recorded state."""
+    fixture = json.loads(FIXTURE.read_text(encoding='utf-8'))
+    connection = open_readonly(LOCAL / 'scores.sqlite3')
+    try:
+        digest = table_digest(connection, 'metadata')
+        rows = [list(r) for r in connection.execute('SELECT key, value FROM metadata ORDER BY key')]
+    finally:
+        connection.close()
+    if digest != fixture['stores']['scores']['tables']['metadata']:
+        raise SystemExit('The live score store is not the recorded one; nothing kept.')
+    if not can_keep_bodies(PRE_FILE.parent):
+        raise SystemExit('%s is not gitignored; nothing kept.' % PRE_FILE.parent)
+    PRE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PRE_FILE.write_text(json.dumps({'schema': 'pre-unmask-1', 'digest': digest, 'rows': rows}), encoding='utf-8')
+    log('kept %d metadata rows of the live score store in %s' % (len(rows), PRE_FILE))
+
+
+def old_metadata(fixture):
+    """{key: value} of the score store's metadata as recorded: from the capture-pre dump, else the live store while it is
+    still the recorded one. Fails when neither is."""
+    wanted = fixture['stores']['scores']['tables']['metadata']
+    if PRE_FILE.exists():
+        dump = json.loads(PRE_FILE.read_text(encoding='utf-8'))
+        if dump['digest'] != wanted or rows_digest(dump['rows']) != wanted['sha256']:
+            raise SystemExit('The pre-unmask metadata dump is not the recorded state.')
+        return {k: v for k, v in dump['rows']}
+    connection = open_readonly(LOCAL / 'scores.sqlite3')
+    try:
+        if table_digest(connection, 'metadata') != wanted:
+            raise SystemExit('No pre-unmask metadata: run capture-pre while the live score store is still the recorded one.')
+        return dict(connection.execute('SELECT key, value FROM metadata').fetchall())
+    finally:
+        connection.close()
+
+
+def metadata_problems(old, new, ctx):
+    """Score metadata: only the area-table keys, the build time and code sha change; `w1` keeps all but its timing."""
+    def untimed(value):
+        parsed = json.loads(value)
+        parsed.pop('seconds', None)
+        return parsed
+    found = ['scores.metadata.%s changed' % k for k in sorted(set(old) | set(new)) if k not in META_MAY_CHANGE and
+             (untimed(old[k]) != untimed(new[k]) if k == 'w1' and k in old and k in new else old.get(k) != new.get(k))]
+    if 'suppressed_ids_sha256' in new:
+        found.append('scores.metadata.suppressed_ids_sha256 is still there')
+    table = json.loads(new.get('area_table', 'null')) or {}
+    if json.loads(new.get('area_table_sha256', 'null')) != ctx.shown_sha or table.get('area_table_sha256') != ctx.shown_sha:
+        found.append('scores.metadata.area_table_sha256 is not the shown table')
+    if {k: v.get('areas') for k, v in table.get('levels', {}).items()} != ctx.level_areas:
+        found.append('scores.metadata.area_table.levels differ from the shown table')
+    manifest = SHOWN.with_suffix('.manifest.json')
+    if manifest.exists() and table.get('manifest_sha256') != sha256_file(manifest):
+        found.append('scores.metadata.area_table.manifest_sha256 is not the shown table\'s manifest')
+    return found
+
+
+def unmask_context(fixture, current, bodies, data_dir, golden_dir=BODY_DIR, shown_path=SHOWN):
+    """Everything the unmask verifiers need; facts that already fail are collected in ctx.problems."""
+    if not Path(shown_path).exists():
+        raise SystemExit('%s is missing: run tools/shown_areas.py --district co-05 first.' % shown_path)
+    ctx = SimpleNamespace(old_key=fixture['snapshot'], new_key=current['snapshot'], shown_sha=sha256_file(shown_path),
+                          old_sha=fixture['files']['rowfw']['area_scores_rowfw-1.0.0.csv'], shown=read_shown(shown_path),
+                          stats=collections.Counter(), problems=[], new_built=None)
+    ctx.level_areas = dict(collections.Counter('%s/%s' % k[:2] for k, groups in ctx.shown.items() if 'ovr' in groups))
+    if ctx.new_key == ctx.old_key:
+        ctx.problems.append('the snapshot key did not change')
+    if json.loads(bodies['meta'])['row_framework']['area_table_sha256'] != ctx.shown_sha:
+        ctx.problems.append('the new meta does not name the shown table')
+    for endpoint_id, entry in fixture['endpoints'].items():       # a stale golden body would make every verdict meaningless
+        path = Path(golden_dir) / (endpoint_id + '.body')
+        if path.exists() and 'sha256' in entry and body_digest(endpoint_id, path.read_bytes(), entry['content_type'])[0] != entry['sha256']:
+            ctx.problems.append('golden body %s is not the recorded state' % endpoint_id)
+    new = store_metadata(Path(data_dir) / 'scores.sqlite3')
+    ctx.new_built = json.loads(new['built_utc'])
+    ctx.problems += metadata_problems(old_metadata(fixture), new, ctx)
+    return ctx
+
+
+def store_metadata(path):
+    connection = open_readonly(path)
+    try:
+        return dict(connection.execute('SELECT key, value FROM metadata').fetchall())
+    finally:
+        connection.close()
+
+
+def unmask_final(ctx):
+    print('INTENDED unmask: %d areas newly shown, %d without registered people (empty), %d standings moved in shown areas, '
+          '%d summary rows shown' % (ctx.stats['newly_shown'], ctx.stats['empty'], ctx.stats['moved'], ctx.stats['summary_rows']))
+    return ctx.problems + ([] if ctx.stats['newly_shown'] else ['no previously withheld area carries a value'])
+
+
+def make_stage(args):
+    """A verified copy of the live .local with the new score store in place of the old one (import_summary comes next)."""
+    stage = Path(args.stage_dir).resolve()
+    if not args.scores or (stage.exists() and any(stage.iterdir())):
+        raise SystemExit('make-stage needs --scores and an empty or new --stage-dir')
+    make_copy(stage.parent, LOCAL, stage)
+    shutil.copyfile(args.scores, stage / 'scores.sqlite3')
+    print('staged %s; scores.sqlite3 sha256 %s' % (stage, sha256_file(stage / 'scores.sqlite3')))
+
+
 # ---- main flow -----------------------------------------------------------------------------------------------------
 
 def run(mode, args):
@@ -623,6 +1033,9 @@ def run(mode, args):
     if any(p not in PARTS for p in parts):
         raise SystemExit('--parts takes a comma list of %s' % ', '.join(PARTS))
     runs = args.runs if mode == 'record' else 1
+    if (args.intended or args.stage_dir) and (mode != 'check' or not args.intended or set(parts) != set(PARTS)):
+        raise SystemExit('--intended and --stage-dir go together, with check and all parts')
+    data = Path(args.stage_dir).resolve() if args.stage_dir else LOCAL      # the stores, files and server data to check
     work_dir = Path(args.work_dir or tempfile.gettempdir()).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     live_before = listener_pid(LIVE_PORT)
@@ -631,10 +1044,10 @@ def run(mode, args):
 
     if 'stores' in parts:
         log('hashing the stores (before)')
-        current['stores'] = store_hashes(LOCAL)
+        current['stores'] = store_hashes(data)
     if 'files' in parts:
         log('hashing files')
-        current['files'] = file_hashes(LOCAL)
+        current['files'] = file_hashes(data)
         problems += frozen_check(current['files']['rowfw'])
 
     bodies = {}
@@ -643,7 +1056,7 @@ def run(mode, args):
         spare = choose_port(args.port)
         python = server_python(args.python)
         log('server python: %s; spare port: %d' % (python, spare))
-        data_dir = Path(args.data_dir) if args.data_dir else make_copy(work_dir)
+        data_dir = Path(args.data_dir) if args.data_dir else make_copy(work_dir, data)
         passes = []
         try:
             for number in range(1, runs + 1):
@@ -685,7 +1098,7 @@ def run(mode, args):
 
     if 'stores' in parts:
         log('hashing the stores (after)')
-        after = store_hashes(LOCAL)
+        after = store_hashes(data)
         changed = []
         compare(current['stores'], after, 'stores', changed)
         if changed:
@@ -721,17 +1134,24 @@ def run(mode, args):
         return 0
 
     expected = json.loads(FIXTURE.read_text(encoding='utf-8'))
+    ctx, rules, lines = None, INTENDED, []
+    if args.intended:
+        ctx = unmask_context(expected, current, bodies, data)
+        rules = {**unmask_rules(ctx), **INTENDED}              # O-10 keeps its own verifier
     for part, key in (('stores', 'stores'), ('files', 'files')):
         if part in parts:
-            compare(expected.get(key), current.get(key), key, problems)
+            compare(expected.get(key), current.get(key), key, lines)
     if 'api' in parts:
-        compare({'snapshot': expected.get('snapshot')}, {'snapshot': current.get('snapshot')}, '', problems)
-        compare_endpoints(expected.get('endpoints', {}), current['endpoints'], bodies, BODY_DIR, problems)
+        compare({'snapshot': expected.get('snapshot')}, {'snapshot': current.get('snapshot')}, '', lines)
+        compare_endpoints(expected.get('endpoints', {}), current['endpoints'], bodies, BODY_DIR, lines, rules)
+    if ctx:
+        lines = unmask_unexplained(lines, ctx) + unmask_final(ctx)
+    problems += lines
     if problems:
         report(problems, 'CHECK FAILED')
         return 1
     summarise(current)
-    print('CHECK PASSED: %s identical to %s' % (', '.join(parts), FIXTURE.name))
+    print('CHECK PASSED: %s %s %s' % (', '.join(parts), 'as ruled (nothing withheld) against' if ctx else 'identical to', FIXTURE.name))
     return 0
 
 
@@ -761,7 +1181,7 @@ def summarise(data):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('mode', choices=('record', 'check'))
+    parser.add_argument('mode', choices=('record', 'check', 'capture-pre', 'make-stage'))
     parser.add_argument('--port', type=int, default=0, help='spare port (default: 8769, else 8771); never 8767')
     parser.add_argument('--runs', type=int, default=2, help='record: endpoint passes, each on a fresh server (default 2)')
     parser.add_argument('--parts', default=','.join(PARTS), help='comma list of stores,files,api (check only; record needs all)')
@@ -771,7 +1191,14 @@ def main(argv=None):
     parser.add_argument('--keep-copy', action='store_true', help='do not delete the copy of .local afterwards')
     parser.add_argument('--out', help='record: write the result here instead of tests/fixtures/co_baseline.json '
                                       '(allows a partial --parts record; never the committed fixture)')
+    parser.add_argument('--intended', choices=('unmask',), help='check: accept exactly the ruled change "no area withheld"')
+    parser.add_argument('--stage-dir', help='check --intended / make-stage: the copy of .local to check (stores, files, server data)')
+    parser.add_argument('--scores', help='make-stage: the new score store to put into the stage')
     args = parser.parse_args(argv)
+    if args.mode == 'capture-pre':
+        return capture_pre()
+    if args.mode == 'make-stage':
+        return make_stage(args)
     return run(args.mode, args)
 
 
