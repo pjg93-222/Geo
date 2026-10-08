@@ -8,9 +8,11 @@ folder; the copy never runs `close` (it would summarise tests that did not run).
 Phase 4B: a candidate district's copy takes candidate support as a fourth term of the overall (patch kind e; `rowfw-support` writes
 cache/support.npz, `rowfw-reset` clears a finished run so the copy can be redone).
 """
+import ast
 import difflib
 import json
 import os
+import re
 import subprocess
 import time
 from fractions import Fraction as F
@@ -313,6 +315,13 @@ class RowfwStep(Step):
 WMI_OFF = "import platform,runpy,sys; platform._wmi_query=lambda *a,**k:(_ for _ in ()).throw(OSError('wmi disabled')); "
 
 
+def preflight_ram_short(text):
+    """The stage preflight dict when a rowfw_build.py child refused to start for RAM (its own per-stage floor, e.g. 3.5 GB for draws), else None."""
+    m = re.search(r"preflight failed for stage \w+: (\{[^}\n]*\})", text)
+    pf = ast.literal_eval(m.group(1)) if m else None
+    return pf if pf and pf['ram_available_gb'] < pf['min_ram_gb'] else None
+
+
 def run_code(st, code, cwd, pythonpath=None, out=None):
     """PY312 child (WMI query off); output to logs/<step>.log, or stdout to `out`; one rerun after a native crash (0xC000070A)."""
     env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8', 'PYTHONNOUSERSITE': '1',
@@ -322,6 +331,7 @@ def run_code(st, code, cwd, pythonpath=None, out=None):
         env['PYTHONPATH'] = str(pythonpath)
     logfile = st.D / 'logs' / f'{st.name}.log'
     for attempt in (1, 2):
+        mark = logfile.stat().st_size if logfile.exists() else 0
         with open(logfile, 'ab') as lf, (open(out, 'wb') if out else lf) as sink:
             lf.write(f'\n=== {utc_now()} attempt {attempt}\n'.encode())
             lf.flush()
@@ -332,6 +342,12 @@ def run_code(st, code, cwd, pythonpath=None, out=None):
             break
         time.sleep(5)
     if rc != 0:
+        with open(logfile, 'rb') as lf:
+            lf.seek(mark)
+            pf = preflight_ram_short(lf.read().decode('utf-8', 'replace'))
+        if pf:      # RAM dipped between two children: a pause (exit 3, the runner waits for RAM and reruns), not a failure
+            st._finish('paused_low_ram', f"child preflight: RAM {pf['ram_available_gb']} GB under its {pf['min_ram_gb']} GB stage floor")
+            raise SystemExit(3)
         raise RuntimeError(f'child exited {rc:#x} (see logs/{st.name}.log)')
 
 

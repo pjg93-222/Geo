@@ -425,5 +425,28 @@ class ResetTests(unittest.TestCase):
             self.assertEqual(rowfw.move_outputs(B, Path(tmp) / 'again'), [])                       # nothing left: a second reset moves nothing
 
 
+class PreflightPauseTests(unittest.TestCase):
+    RAM = "preflight failed for stage draws: {'ram_available_gb': 2.89, 'c_free_gb': 51.5, 'min_ram_gb': 3.5, 'min_free_gb': 5.0, 'pass': False}"
+
+    def test_only_a_ram_shortfall_in_the_child_preflight_counts(self):
+        self.assertEqual(rowfw.preflight_ram_short('x\n' + self.RAM + '\ny')['ram_available_gb'], 2.89)
+        self.assertIsNone(rowfw.preflight_ram_short(self.RAM.replace('2.89', '6.0').replace('51.5', '1.0')))     # disk short, RAM fine
+        self.assertIsNone(rowfw.preflight_ram_short('Traceback (most recent call last): RuntimeError'))
+
+    @unittest.skipUnless(rowfw.PY312.exists(), 'system Python 3.12 is not on this machine')
+    def test_a_child_that_dies_on_its_ram_preflight_pauses_with_exit_3_and_any_other_death_fails(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            (Path(tmp) / 'logs').mkdir()
+            st = types.SimpleNamespace(D=Path(tmp), name='rowfw-draws', children=[], _finish=mock.Mock())
+            with self.assertRaises(SystemExit) as stopped:
+                rowfw.run_code(st, f'sys.exit({self.RAM!r})', tmp)
+            self.assertEqual(stopped.exception.code, 3)
+            self.assertEqual(st._finish.call_args[0][0], 'paused_low_ram')
+            st._finish.reset_mock()
+            with self.assertRaises(RuntimeError):                    # the earlier attempt's line is still in the log and must not count
+                rowfw.run_code(st, "sys.exit('boom')", tmp)
+            st._finish.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
