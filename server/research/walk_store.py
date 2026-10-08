@@ -11,7 +11,10 @@ crosswalk ('fixture', as scoresdb accepts) passes too.
 
 A store built from the source CSV (meta person_fields = csv, the OR and CT districts, which have no score store yet)
 is checked against the contact and street stores only: it has no scores.sqlite3 to attach.
+
+attach_scores() attaches scores.sqlite3 for the street plan and the printed scores, and checks its source file too.
 """
+import json
 import re
 import sqlite3
 import threading
@@ -295,6 +298,13 @@ def _area(area, alias=''):
     return ''.join(' AND %s%s=?' % (prefix, column) for column in given), [area[column] for column in given]
 
 
+def _picked(picks):
+    """(' AND NOT (...)', args) leaving out the people the street picks already hold, so a span pick adds only new people."""
+    if not picks:
+        return '', []
+    return ' AND NOT (%s)' % ' OR '.join('(p.street_id=?%s)' % PARITY[side] for _, side in picks), [street for street, _ in picks]
+
+
 VOTER_SQL = ('SELECT p.person_id, p.stop_id, p.unit, p.precinct, p.party, p.age, p.gender, p.reg_date, p.pri_voted, '
              'p.pri_elig, p.gen_voted, p.gen_elig, p.abs_voted, p.abs_elig, p.voter_key, p.street_id, s.house, '
              's.house_int, s.parity, s.span_id, s.pos_m, s.side_lr, s.placed_by, s.lon, s.lat '
@@ -305,6 +315,7 @@ PARITY = {'even': ' AND s.parity=0', 'odd': ' AND s.parity=1', 'both': ''}
 class Store:
     def __init__(self, connection, info):
         self.conn, self.info = connection, info
+        self.support = False                    # set by attach_scores()
 
     def directory(self):
         global _directory
@@ -353,11 +364,11 @@ class Store:
                     count['odd'] += doors
         return out
 
-    def voters(self, picks, area, limit):
-        """Rows of the people at the picked street sides ([(street id, 'even'|'odd'|'both')]) or, with no picks, of
-        everyone in `area` who has a stop: at most `limit`."""
+    def voters(self, picks, area, limit, spans=None):
+        """Rows of the people at the picked street sides ([(street id, 'even'|'odd'|'both')]) and on the picked road
+        spans (ids from the street plan) or, with neither, of everyone in `area` who has a stop: at most `limit`."""
         clause, args = _area(area, 'p')
-        if not picks:
+        if not picks and not spans:
             return self.conn.execute(VOTER_SQL + ' WHERE 1=1' + clause + ' LIMIT ?', [*args, limit]).fetchall()
         rows = []
         for street, side in picks:
@@ -365,16 +376,27 @@ class Store:
                                           [street, *args, limit - len(rows)]))
             if len(rows) >= limit:
                 break
+        if spans:
+            skip, skip_args = _picked(picks)
+            rows.extend(self.conn.execute(
+                VOTER_SQL + ' WHERE s.span_id IN (%s)%s%s LIMIT ?' % (','.join('?' * len(spans)), clause, skip),
+                [*spans, *args, *skip_args, max(limit - len(rows), 0)]))
         return rows
 
-    def count_voters(self, picks, area):
+    def count_voters(self, picks, area, spans=None):
         clause, args = _area(area, 'p')
-        if not picks:
+        if not picks and not spans:
             plain, plain_args = _area(area)
             return self.conn.execute('SELECT COALESCE(SUM(people), 0) FROM combo WHERE 1=1' + plain, plain_args).fetchone()[0]
-        return sum(self.conn.execute(
+        total = sum(self.conn.execute(
             'SELECT COUNT(*) FROM person p JOIN stop s ON s.id = p.stop_id WHERE p.street_id=?' + PARITY[side] + clause,
             [street, *args]).fetchone()[0] for street, side in picks)
+        if spans:
+            skip, skip_args = _picked(picks)
+            total += self.conn.execute(
+                'SELECT COUNT(*) FROM person p JOIN stop s ON s.id = p.stop_id WHERE s.span_id IN (%s)%s%s'
+                % (','.join('?' * len(spans)), clause, skip), [*spans, *args, *skip_args]).fetchone()[0]
+        return total
 
     def voters_by_key(self, keys):
         """Rows of the people with these voter keys (.walk-salt HMACs, the same across rebuilds; person ids need not be)."""
@@ -415,4 +437,55 @@ class Store:
         out = {}
         for chunk in _chunks(sorted(set(ids))):
             out.update(self.conn.execute('SELECT id, coords FROM road_span WHERE id IN (%s)' % ','.join('?' * len(chunk)), chunk))
+        return out
+
+    def attach_scores(self):
+        """Attach scores.sqlite3 read-only as `scores`, once per store: False when it is not built; else True, and
+        `support` tells whether it holds the candidate-support table. 409 when it was built from another source file
+        than the walk store."""
+        path = self.info.path.parent / 'scores.sqlite3'
+        if not path.is_file():
+            return False
+        self.conn.execute('ATTACH DATABASE ? AS scores', (_uri(path),))
+        row = self.conn.execute("SELECT value FROM scores.metadata WHERE key = 'contacts_source_sha256'").fetchone()
+        if row is None or json.loads(row[0]) != self.info.source_sha256:
+            raise SourceStoreError('The score store was built from a different source file than the walk list data.', 409)
+        self.support = self.conn.execute("SELECT 1 FROM scores.sqlite_master WHERE type = 'table' AND name = 'support'").fetchone() is not None
+        return True
+
+    def span_plan(self, area):
+        """(rows, blocks) for the street plan of `area` (attach_scores first, and the support table must be there). rows:
+        one per (placed block, street) with people in `area`: span_id, street_id, len_m, doors, people, scored (people
+        with a score row), the sums of the three presets (mixed, turnout, identify) and of s and p with their counts
+        (s_sum, s_n, p_sum, p_n); s = sup_score / 100 and p = part_pct / 100. A person with no score row or no support
+        counts in `identify` and in nothing else. blocks: {span id: its commonest census block}."""
+        clause, args = _area(area, 'p')
+        rows = self.conn.execute(
+            "SELECT s.span_id, p.street_id, r.len_m, COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) AS doors, "
+            "COUNT(*) AS people, COUNT(sc.person_id) AS scored, "
+            "SUM((1 - ABS(2 * sp.sup_score / 100.0 - 1)) * sc.part_pct / 100.0) AS mixed, "
+            "SUM(sp.sup_score / 100.0 * (1 - sc.part_pct / 100.0)) AS turnout, "
+            "SUM(sp.sup_score IS NULL OR sp.sup_score BETWEEN 100 / 3.0 AND 200 / 3.0) AS identify, "
+            "SUM(sp.sup_score) AS s_sum, COUNT(sp.sup_score) AS s_n, SUM(sc.part_pct) AS p_sum, COUNT(sc.part_pct) AS p_n "
+            "FROM person p JOIN stop s ON s.id = p.stop_id JOIN road_span r ON r.id = s.span_id "
+            "LEFT JOIN scores.person sc ON sc.person_id = p.person_id LEFT JOIN scores.support sp ON sp.pos = sc.pos "
+            "WHERE s.span_id IS NOT NULL%s GROUP BY s.span_id, p.street_id" % clause, args).fetchall()
+        blocks = {}
+        for span_id, block in self.conn.execute(      # most people first, then the lower id: one block per span
+                "SELECT s.span_id, sc.reg_block FROM person p JOIN stop s ON s.id = p.stop_id "
+                "JOIN scores.person sc ON sc.person_id = p.person_id WHERE s.span_id IS NOT NULL "
+                "AND sc.reg_block IS NOT NULL AND sc.reg_block <> ''%s GROUP BY s.span_id, sc.reg_block "
+                "ORDER BY s.span_id, COUNT(*) DESC, sc.reg_block" % clause, args):
+            blocks.setdefault(span_id, block)
+        return rows, blocks
+
+    def scores(self, ids):
+        """{person id: (ovr_pct, part_pct, sup_pct or None)} of the listed people the score store holds (attach_scores
+        first); sup_pct is None for everyone when the store has no support table."""
+        join, column = (' LEFT JOIN scores.support sp ON sp.pos = sc.pos', 'sp.sup_pct') if self.support else ('', 'NULL')
+        out = {}
+        for chunk in _chunks(sorted(set(ids))):
+            for row in self.conn.execute('SELECT sc.person_id, sc.ovr_pct, sc.part_pct, %s FROM scores.person sc%s '
+                                         'WHERE sc.person_id IN (%s)' % (column, join, ','.join('?' * len(chunk))), chunk):
+                out[row[0]] = (row[1], row[2], row[3])
         return out

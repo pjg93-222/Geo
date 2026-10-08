@@ -25,7 +25,8 @@ v3_routes = [
     path('api/v3/street', v3p.street), path('api/v3/search', v3p.search),
     path('api/v3/walk/options', walk_views.options), path('api/v3/walk/streets', walk_views.streets),
     path('api/v3/walk/match', walk_views.match), path('api/v3/walk/list', walk_views.walk_list),
-    path('api/v3/walk/overview', walk_views.overview), path('api/v3/walk/lists', walk_views.lists),
+    path('api/v3/walk/overview', walk_views.overview), path('api/v3/walk/plan', walk_views.plan),
+    path('api/v3/walk/scores', walk_views.voter_scores), path('api/v3/walk/lists', walk_views.lists),
     path('api/v3/walk/lists/<slug:key>', walk_views.saved_list), path('api/v3/walk/dispositions', walk_views.dispositions),
     re_path(r'^api/v3/.*$', lambda request: v3_error('Unknown v3 endpoint.', 404)),   # JSON, never the page shell
 ]
