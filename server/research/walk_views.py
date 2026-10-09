@@ -5,7 +5,10 @@
   POST /api/v3/walk/match        an uploaded street list (at most 500 rows) matched against the streets
   GET  /api/v3/walk/list         a walk list built now: runs in walking order, doors, voters (at most 40 streets, 200 planned
                                  streets from the street plan as spans=12,15, 1,500 voters); fresh=1 leaves out the people at
-                                 doors that already have a recorded result
+                                 doors that already have a recorded result; with spans, fresh=1 and one precinct, doors=N
+                                 (and wp, wi) read the spans in the order given and keep N doors of them, the last block cut
+                                 to the doors with the most untapped potential, as the turf of GET /walk/plan is (street
+                                 picks are added whole on top)
   GET  /api/v3/walk/overview     the blocks of an area with door and party counts, for map shading
   GET  /api/v3/walk/plan         street plan (candidate districts): the blocks of an area ranked by a preset's value per 100 m,
                                  doors with a recorded result left out; with doors=N, for one precinct, also the turf of
@@ -65,6 +68,7 @@ MAX_ROWS = 500              # rows of an uploaded street list
 MAX_ENTRIES = 200           # results in one POST
 MAX_BODY = 256 * 1024       # bytes of a POST body
 MAX_SPANS = 8000            # blocks in one overview
+MIN_DOORS, MAX_DOORS = 10, 500   # doors asked for a one-click turf, or to cut a list to
 MAX_TEXT = 60               # characters of street search text
 FOUND_WITH_TEXT, FOUND_WITHOUT_TEXT = 20, 100
 MAX_SEGMENTS = 1200         # distinct (street, parity, precinct, block) in one list; plan_route's cost table grows with runs squared
@@ -78,8 +82,9 @@ LISTS_SHOWN = 50
 CODES = ('S', 'U', 'O', 'NH', 'MV')
 # an area id as the store holds it: at most 24 characters, but a CT precinct key is the code and the name (build_walk caps it at 64)
 AREA = r'[0-9A-Za-z._-]{1,%d}' % (64 if settings.DISTRICT['precinct_key'] == 'code-name' else 24)
-QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh'}
+QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi'}
 NO_CANDIDATE = 'No candidate is set for this district.'
+TRIM_NEEDS_BLOCKS = 'Trim needs planned blocks.'
 SUPPORT_NOT_BUILT = 'Support is not built yet.'
 SCORES_NOT_BUILT = 'Scores are not built yet.'
 WEIGHT = r'\d{1,6}(\.\d{1,6})?'
@@ -171,30 +176,50 @@ def parse_picks(text):
     return list(sides.items())
 
 
-def parse_spans(text):
-    """The road-span ids of "12,15" (planned streets from the street plan): sorted, each once."""
+def parse_spans(text, ordered=False):
+    """The road-span ids of "12,15" (planned streets from the street plan): sorted, each once; `ordered` keeps the order
+    given (the turf's pick order), each at its first place."""
     parts = clean(text, r'[0-9,]{1,2000}').split(',')
     if not all(re.fullmatch(r'\d{1,9}', part) for part in parts):
         raise BadRequest('Invalid span pick')
-    spans = sorted({int(part) for part in parts})
+    spans = list(dict.fromkeys(int(part) for part in parts)) if ordered else sorted({int(part) for part in parts})
     if len(spans) > MAX_PICK_SPANS:
         raise Refused('A walk list holds up to %d planned streets.' % MAX_PICK_SPANS)
     return spans
 
 
+def trim_query(values, area, plain):
+    """{'doors', 'wp', 'wi'} of a list cut to a door count (doors and the weights written plainly, the weights only if sent), {}
+    for any other list. Only the planned blocks of one precinct, with fresh=1 and doors=N (10 to 500) take it: the weights mean
+    nothing without doors. `plain`: spans and fresh are given (street picks may come with them). Colorado has no street plan
+    to trim by."""
+    if not {'doors', 'wp', 'wi'} & set(values):
+        return {}
+    if settings.DISTRICT['roi'] is None:
+        raise Refused(NO_CANDIDATE, 404)
+    if 'doors' not in values or not plain:
+        raise Refused(TRIM_NEEDS_BLOCKS)
+    wp, wi = U.parse_weights(values)
+    return {'doors': str(parse_doors(clean(values['doors'], r'\d{1,3}'), area)),
+            **{name: format(weight, 'g') for name, weight in (('wp', wp), ('wi', wi)) if name in values}}
+
+
 def list_query(values):
     """(picks, spans, area, normalised query) of a list request: the GET parameters, or the query of a list to save.
-    fresh=1 (the only value) leaves out the people at doors that already have a recorded result."""
+    fresh=1 (the only value) leaves out the people at doors that already have a recorded result. doors=N (with spans, fresh=1
+    and a precinct) keeps N doors of the spans, which are then read in the order given and kept in that order in the query;
+    wp and wi are the weights of the untapped potential that picks the doors (trim_query)."""
     area = area_of(values)
     picks = parse_picks(values['streets']) if 'streets' in values else []
-    spans = parse_spans(values['spans']) if 'spans' in values else []
+    spans = parse_spans(values['spans'], 'doors' in values) if 'spans' in values else []
     fresh = clean(values['fresh'], '1') if 'fresh' in values else None
+    trim = trim_query(values, area, bool(spans and fresh))
     if not picks and not spans and not area:
         raise Refused('Pick an area or add a street first.')
     query = {'streets': ','.join('%d:%s' % pick for pick in picks)} if picks else {}
     if spans:
         query['spans'] = ','.join(map(str, spans))
-    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {})}
+    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {}), **trim}
 
 
 CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
@@ -468,15 +493,36 @@ def fingerprint(payload, keys):
     return hashlib.sha256(json.dumps([shown, keys], sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
+def left_out_to_fit(store, spans, area, query, knocked):
+    """The doors of the planned blocks `spans` that a list of query['doors'] doors leaves out besides the knocked ones: the
+    blocks are read in the order given and taken whole while they fit; the first that would pass the count keeps its doors
+    with the most untapped potential at the weights wp, wi of the query (walk_turf.best_doors, as the turf of the plan does
+    with its last block), and the blocks after it are left out. The doors are those of fold_plan, the plan's own. The count
+    is of the planned blocks alone: the streets of the same list are no part of it."""
+    asked, (wp, wi) = int(query['doors']), U.parse_weights(query)
+    if not (store.attach_scores() and store.support):
+        raise Refused(SUPPORT_NOT_BUILT, 503)
+    folded, _ = fold_plan(store, store.span_people(area, spans), {}, U.terms(), knocked, wp, wi, by_door=True)
+    out, held = set(), 0
+    for span in spans:
+        parts = folded[span]['parts'] if span in folded else {}
+        keep = set(parts) if held + len(parts) <= asked else set(walk_turf.best_doors(parts, asked - held))
+        out |= set(parts) - keep
+        held += len(keep)
+    return out
+
+
 def standard_payload(store, picks, spans, area, query):
     directory = store.directory()
     if any(street not in directory.by_id for street, _ in picks):
         raise Refused('One of those streets is not in the walk list data. Search for it again.')
-    skip = U.knocked().doors if 'fresh' in query else None          # the doors with a recorded result, for a fresh list
-    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip)
+    knocked = U.knocked() if 'fresh' in query else None
+    skip = knocked.doors if knocked else None                       # the doors with a recorded result, for a fresh list
+    cut = left_out_to_fit(store, spans, area, query, knocked) if 'doors' in query else None      # more doors the blocks do not add
+    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut)
     if len(rows) > MAX_VOTERS:
         raise Refused('That is %s voters, and a walk list holds up to %s. Choose a smaller area or fewer streets.'
-                      % ('{:,}'.format(store.count_voters(picks, area, spans, skip)), '{:,}'.format(MAX_VOTERS)))
+                      % ('{:,}'.format(store.count_voters(picks, area, spans, skip, cut)), '{:,}'.format(MAX_VOTERS)))
     if not rows:
         if skip and store.voters(picks, area, 1, spans):
             raise Refused('Everyone on those blocks already has a recorded result.')
@@ -585,14 +631,15 @@ def percentile(values):
             for key, v in values.items() if v is not None}
 
 
-def fold_plan(store, rows, blocks, terms, knocked, wp, wi):
+def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
     """({span id: sums over its people, a, b, len_m, street label, commonest block}, {'people', 'doors'} left out) from the
     Store.span_plan rows, with the untapped terms (untapped.terms()) and the doors that have a recorded result (untapped.
     knocked()). Those doors are left out of every sum and counted in the second answer. A person with a score row adds to
     all the presets (push at weights wp, wi: untapped potential; mixed and turnout: the two terms, undecided (1 - |2s - 1|) t
     and supporter s (1 - t), unweighted; identify: s in the middle third, no support counting as 0.5) and to the means of s
     and t; one without adds to identify alone. The label is the street with most doors on the block, then the first by name
-    (as the overview), counting every door, so a block keeps its name as results come in."""
+    (as the overview), counting every door, so a block keeps its name as results come in. With `by_door` a block also holds
+    'parts', {door: [people, undecided, supporter]} over its doors that are not left out (walk_turf.best_doors cuts by them)."""
     names = store.directory().by_id
     pos = np.array([row['pos'] or 0 for row in rows], dtype=np.int64)
     at = np.maximum(pos - 1, 0)
@@ -607,7 +654,7 @@ def fold_plan(store, rows, blocks, terms, knocked, wp, wi):
         span = spans.get(row['span_id'])
         if span is None:
             span = spans[row['span_id']] = {**dict.fromkeys(SUMS, 0), 'len_m': row['len_m'], 'a': row['a'], 'b': row['b'],
-                                            'block': blocks.get(row['span_id'])}
+                                            'block': blocks.get(row['span_id']), 'parts': {}}
             doors[row['span_id']] = set()
         streets.setdefault((row['span_id'], row['street_id']), set()).add(door)
         if door in knocked.doors:
@@ -616,12 +663,18 @@ def fold_plan(store, rows, blocks, terms, knocked, wp, wi):
             continue
         span['people'] += 1
         doors[row['span_id']].add(door)
+        if by_door:
+            part = span['parts'].setdefault(door, [0, 0.0, 0.0])
+            part[0] += 1
         if not scored[k]:
             span['identify'] += 1
             continue
         span['scored'] += 1
         span['undecided'] += undecided[k]
         span['supporter'] += supporter[k]
+        if by_door:
+            part[1] += undecided[k]
+            part[2] += supporter[k]
         span['push'] += undecided[k] + supporter[k]
         span['mixed'] += mixed[k]
         span['turnout'] += turnout[k]
@@ -679,8 +732,8 @@ def parse_doors(text, area):
     if 'precinct' not in area:
         raise Refused('Plan a walk list from one precinct.')
     asked = int(clean(text, r'\d{1,3}'))
-    if not 10 <= asked <= 500:
-        raise Refused('Ask for 10 to 500 doors.')
+    if not MIN_DOORS <= asked <= MAX_DOORS:
+        raise Refused('Ask for %d to %d doors.' % (MIN_DOORS, MAX_DOORS))
     return asked
 
 
@@ -714,7 +767,7 @@ def plan(request):
         if not (store.attach_scores() and store.support):
             raise Refused(SUPPORT_NOT_BUILT, 503)
         rows, blocks = store.span_plan(area)
-        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi)
+        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi, by_door=bool(asked))
         if len(spans) > MAX_SPANS:
             raise Refused('That area has %s blocks; choose a house district or a precinct to rank them.' % '{:,}'.format(len(spans)))
         xy = store.node_xy({node for s in spans.values() for node in (s['a'], s['b'])}) if asked else None
@@ -725,7 +778,7 @@ def plan(request):
             'matched': {'people': sum(s['people'] for s in spans.values()), 'scored': sum(s['scored'] for s in spans.values())}}
     if asked:           # a turf is worth the untapped potential at wp, wi, whatever the preset that ranks the blocks
         pool = {span_id: {'a': s['a'], 'b': s['b'], 'doors': s['doors'], 'people': s['people'], 'value': s['push'],
-                          'undecided': s['undecided'], 'supporter': s['supporter']} for span_id, s in spans.items()}
+                          'undecided': s['undecided'], 'supporter': s['supporter'], 'parts': s['parts']} for span_id, s in spans.items()}
         body['turf'] = walk_turf.turf(pool, xy, asked, roi['turf']['jump_m'], MAX_VOTERS, MAX_PICK_SPANS)
     return response(body)
 

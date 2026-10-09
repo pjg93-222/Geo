@@ -7,6 +7,11 @@ left touches the turf, take the block with the most potential among those whose 
 blocks: {span id: {'a', 'b' (end nodes), 'doors', 'people', 'value', 'undecided', 'supporter'}}, after the doors with a
 recorded result are left out; xy: {node id: (x, y)} in metres. The block with the larger total goes first (not the larger
 total per door), ties to the lower span id, so the same input always gives the same turf.
+
+A block may also carry 'parts', {door: (people, undecided, supporter)} over its doors (a door is any ordered key, in the app
+(stop id, unit)); a door is worth undecided + supporter. A turf whose last block would pass the asked-for doors then keeps
+only that block's doors worth most (trim_doors), so it holds exactly the asked-for doors. The walk list does the same with
+the same function (walk_views), so the list built from a turf has the turf's doors.
 """
 from math import hypot
 
@@ -17,23 +22,47 @@ def gap(xy, ends, nodes):
     return min(lines) if lines else None
 
 
+def trim_doors(doors, keep):
+    """The keys of the `keep` doors of most value, most valuable first. doors: [(key, value)]; equal values go to the lower key."""
+    return [key for key, _ in sorted(doors, key=lambda door: (-door[1], door[0]))[:keep]]
+
+
+def best_doors(parts, keep):
+    """The `keep` doors of most value among parts, {door: (people, undecided, supporter)}: a door is worth undecided + supporter."""
+    return trim_doors([(door, undecided + supporter) for door, (_, undecided, supporter) in parts.items()], keep)
+
+
+def shrink(block, keep):
+    """The block with only its `keep` doors of most value (from its 'parts'); the sums are those of the doors kept."""
+    parts = block['parts']
+    kept = best_doors(parts, keep)
+    people, undecided, supporter = (sum(parts[door][i] for door in kept) for i in range(3))
+    return {**block, 'doors': len(kept), 'people': people, 'undecided': undecided, 'supporter': supporter,
+            'value': undecided + supporter, 'parts': {door: parts[door] for door in kept}}
+
+
 def turf(blocks, xy, asked, jump_m=400.0, max_people=1500, max_spans=200):
     """{'asked', 'spans' (pick order), 'doors', 'people', 'value', 'undecided', 'supporter', 'jumps' ([{'span', 'metres'}], the
-    blocks reached across a gap), 'stopped'}; the sums are rounded to 4 digits. 'stopped' says why the turf ends: 'full' it
+    blocks reached across a gap), 'stopped', 'trim'}; the sums are rounded to 4 digits. 'stopped' says why the turf ends: 'full' it
     holds the asked-for doors, 'exhausted' no block with people and potential is left, 'far' none left is within jump_m, 'cap'
-    the next block would take it past max_people or max_spans (the first block is always taken). The turf has at most
-    1 + len(jumps) connected pieces, and overshoots the asked-for doors by less than its last block's doors."""
+    the next block would take it past max_people or max_spans (the first block is always taken). 'trim' is {'span', 'kept',
+    'of'} when the last block was cut to its `kept` doors of most value out of `of` (blocks with 'parts'), else None. The turf has
+    at most 1 + len(jumps) connected pieces; with no 'parts' it overshoots the asked-for doors by less than its last block's doors."""
     pool = {k: b for k, b in blocks.items() if b['doors'] >= 1 and b['value'] > 0}
     order = lambda k: (-pool[k]['value'], k)
-    picked, jumps, nodes = [], [], set()
+    picked, jumps, nodes, trim = [], [], set(), None
     total = dict.fromkeys(('doors', 'people', 'value', 'undecided', 'supporter'), 0)
     stopped, nxt, jump = 'exhausted', (min(pool, key=order) if pool else None), None
     while nxt is not None:
-        block = pool.pop(nxt)
+        block, cut = pool.pop(nxt), None
+        if block.get('parts') and total['doors'] + block['doors'] > asked:      # the last block: only the doors that fit
+            keep = asked - total['doors']
+            cut, block = {'span': nxt, 'kept': keep, 'of': block['doors']}, shrink(block, keep)
         if picked and (total['people'] + block['people'] > max_people or len(picked) >= max_spans):
             stopped = 'cap'
             break
         picked.append(nxt)
+        trim = cut
         nodes.update((block['a'], block['b']))
         for name in total:
             total[name] += block[name]
@@ -55,4 +84,4 @@ def turf(blocks, xy, asked, jump_m=400.0, max_people=1500, max_spans=200):
             nxt, stopped = None, 'far' if pool else 'exhausted'
     return {'asked': asked, 'spans': picked, 'doors': total['doors'], 'people': total['people'],
             'value': round(total['value'], 4), 'undecided': round(total['undecided'], 4),
-            'supporter': round(total['supporter'], 4), 'jumps': jumps, 'stopped': stopped}
+            'supporter': round(total['supporter'], 4), 'jumps': jumps, 'stopped': stopped, 'trim': trim}

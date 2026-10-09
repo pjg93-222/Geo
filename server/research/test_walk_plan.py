@@ -1,6 +1,6 @@
-"""Street plan (GET /api/v3/walk/plan), the one-click turf (doors=), the road-span pick of the walk list (spans=, fresh=1) and the
-printed scores (POST /api/v3/walk/scores): hand-computed presets, the 5-door and 50 m rules, the weights, doors with a recorded
-result, refusals, and the pick feeding a walk list. The world is walk_testkit's invented neighbourhood with invented scores and a
+"""Street plan (GET /api/v3/walk/plan), the one-click turf (doors=), the road-span pick of the walk list (spans=, fresh=1, and doors=
+to keep a door count) and the printed scores (POST /api/v3/walk/scores): hand-computed presets, the 5-door and 50 m rules, the
+weights, doors with a recorded result, refusals, and the pick feeding a walk list. The world is walk_testkit's invented neighbourhood with invented scores and a
 support table added to its score store. WalkPlanTests set the untapped terms (untapped.terms) and the doors with a result
 (untapped.knocked) themselves, so its sums do not depend on how those are read; RealUntappedTests run the same tests with
 them read as the app reads them: the five turnout literals and the sphere of influence standing in the score store, the
@@ -83,6 +83,16 @@ OVR = {'p01': 71.5, 'p02': 40.4}          # overall standings that exercise the 
 SUP_PCT = {'p01': 62.5}                   # a support standing that is not the support score
 PRECINCT_W = '5200021301'
 PRECINCT_F = '5200021417'                 # Fountain's Pine St alone, 3 km from everything else
+GOLDEN = {'spans': '00b37cdfa741464ccca1a18a20468bc7639c7561671d2c927952db50940d9ae4',      # digests of lists without doors=, taken before it existed
+          'fresh': '57f8b608de7f77051538b845ec759a8acda9f8483a02dbe8497469ca0f7f0d60',
+          'streets': 'c9a3e7e3e702dfca1109a4f9bdcb37d4e57670b3fd9ecd293412def1cef11971',
+          'area': '6f82e41b75bf77c53f33029dabe933c4ee81ef0053d993bc9c63e80c2156de30'}
+
+
+def digest(payload):
+    """The sha256 of a walk list as sent, all but the day it was built and its fingerprint (which holds the voter keys, salted per build)."""
+    shown = {key: value for key, value in payload.items() if key not in ('generated_on', 'fingerprint')}
+    return hashlib.sha256(json.dumps(shown, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
 def lowered(**roi):
@@ -221,6 +231,37 @@ class WalkPlanTests(TestCase):
                                                                   'fingerprint': shown['fingerprint']}, 201)['list']['key']
             entries = [{'person_id': person, 'code': 'S'} for person in self.ids(*keys) if self.expected['people'][person]['ss'] == ss]
             self.post('/api/v3/walk/dispositions', {'list': self.lists[ss], 'on': date.today().isoformat(), 'entries': entries})
+
+    def door_values(self, block, precinct=PRECINCT_W, wp=0.5, wi=0.5):
+        """{(stop id, unit): potential} of the doors of `block` in `precinct` with no recorded result, summed person by person from the
+        invented terms (FL.potential), apart from the code under test."""
+        at = {self.expected['keys'][key]: pos - 1 for key, pos in self.positions.items()}
+        values, left_out = {}, V.U.knocked().doors
+        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+            for person in self.people_in(block, precinct=precinct):
+                door = tuple(db.execute("SELECT stop_id, IFNULL(unit, '') FROM person WHERE person_id = ?", (person,)).fetchone())
+                if door not in left_out:
+                    k = at[person]
+                    values[door] = values.get(door, 0.0) + float(FL.potential(self.terms.s[k], self.terms.t[k], self.terms.i[k], wp, wi))
+        return values
+
+    def best_doors(self, block, keep, **weights):
+        """The `keep` doors of `block` of most potential, ties to the lower door key."""
+        values = self.door_values(block, **weights)
+        return [door for door, _ in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:keep]]
+
+    def people_at(self, doors, precinct=PRECINCT_W):
+        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+            return {person for stop, unit in doors for (person,) in db.execute(
+                "SELECT person_id FROM person WHERE stop_id = ? AND IFNULL(unit, '') = ? AND precinct = ?", (stop, unit, precinct))}
+
+    def door_of(self, key):
+        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+            return tuple(db.execute("SELECT stop_id, IFNULL(unit, '') FROM person WHERE person_id = ?", self.ids(key)).fetchone())
+
+    def blocks_of_w(self):
+        """{span id: the testkit's name of the block} for the five blocks of precinct W."""
+        return {1: 'chd1', 6: 'chd2', 7: 'rdg', self.span_of('jun_s'): 'jun_s', self.span_of('jun_n1'): 'jun_n1'}
 
     def world_without_support(self, name):
         copy_dir = Path(self.temporary.name) / name
@@ -432,6 +473,25 @@ class WalkPlanTests(TestCase):
         far = chd1['b'] if node == chd1['a'] else chd1['a']
         self.assertAlmostEqual(((xy[node][0] - xy[far][0]) ** 2 + (xy[node][1] - xy[far][1]) ** 2) ** 0.5, 200.0, delta=0.5)
 
+    def test_the_fold_keeps_the_undecided_and_supporter_parts_of_each_door_when_asked(self):
+        with W.walk_store() as store:
+            store.attach_scores()
+            rows, blocks = store.span_plan({'precinct': PRECINCT_W})
+            plain, _ = V.fold_plan(store, rows, blocks, V.U.terms(), V.U.knocked(), 0.5, 0.5)
+            split, _ = V.fold_plan(store, rows, blocks, V.U.terms(), V.U.knocked(), 0.5, 0.5, by_door=True)
+        self.assertEqual(plain[1]['parts'], {})                                       # not asked for: nothing kept
+        parts = split[1]['parts']
+        self.assertEqual((len(parts), sum(part[0] for part in parts.values())), (7, 12))      # chd1: seven doors, twelve people
+        # the door of p03, p04 and p05: undecided 0.2 + 0.1 + 0 and supporter 0.15 + 0.2 + 0.3 (the module's hand check)
+        door = parts[self.door_of('p03')]
+        self.assertEqual(door[0], 3)
+        self.assertAlmostEqual(door[1], 0.3)
+        self.assertAlmostEqual(door[2], 0.65)
+        self.assertAlmostEqual(sum(part[1] + part[2] for part in parts.values()), 2.73)
+        self.assertAlmostEqual(split[1]['push'], 2.73)
+        self.assertEqual({k: (v['doors'], v['people'], v['push']) for k, v in split.items()},
+                         {k: (v['doors'], v['people'], v['push']) for k, v in plain.items()})      # the sums are the same either way
+
     # ---- doors with a recorded result ------------------------------------------------------------------------
     def test_a_door_with_a_recorded_result_leaves_the_sums_and_is_counted(self):
         self.knock('p03')                                    # the door at 1132 holds p03, p04 and p05
@@ -480,15 +540,15 @@ class WalkPlanTests(TestCase):
         # blocks of precinct W by potential: chd1 2.73 (7 doors), rdg 1.5793, chd2 1.1 (3 doors), jun_s 0.75, jun_n1 0.375
         jun_s, jun_n1 = self.span_of('jun_s'), self.span_of('jun_n1')
         self.assertEqual(self.turf(10), {'asked': 10, 'spans': [1, 6], 'doors': 10, 'people': 16, 'value': 3.83,
-                                         'undecided': 1.96, 'supporter': 1.87, 'jumps': [], 'stopped': 'full'})
+                                         'undecided': 1.96, 'supporter': 1.87, 'jumps': [], 'stopped': 'full', 'trim': None})
         # rdg, the second best block of all, waits: it meets none of the blocks taken until Juniper Ln is
         self.assertEqual(self.turf(11)['spans'], [1, 6, jun_s])
         self.assertEqual(self.turf(13)['spans'], [1, 6, jun_s, jun_n1])
         full = self.turf(14)
-        self.assertEqual((full['spans'], full['doors'], full['stopped']), ([1, 6, jun_s, jun_n1, 7], 17, 'full'))
+        self.assertEqual((full['spans'], full['doors'], full['stopped']), ([1, 6, jun_s, jun_n1, 7], 14, 'full'))      # rdg cut to 1 of its 4 doors
         everything = self.turf(18)
-        self.assertEqual((everything['spans'], everything['doors'], everything['people'], everything['stopped']),
-                         ([1, 6, jun_s, jun_n1, 7], 17, 24, 'exhausted'))
+        self.assertEqual((everything['spans'], everything['doors'], everything['people'], everything['stopped'], everything['trim']),
+                         ([1, 6, jun_s, jun_n1, 7], 17, 24, 'exhausted', None))
         self.assertEqual(everything['jumps'], [])
 
     def test_the_turf_is_worth_the_potential_at_the_weights_whatever_the_preset(self):
@@ -499,15 +559,46 @@ class WalkPlanTests(TestCase):
         turf = self.turf(10, wp='0', wi='0')                       # supporters alone: chd1 3.0 + chd2's four 0.6
         self.assertEqual((turf['spans'], turf['value'], turf['undecided'], turf['supporter']), ([1, 6], 3.6, 0, 3.6))
 
-    def test_the_turf_overshoots_the_asked_doors_by_less_than_its_last_block(self):
+    def doors_of(self, span, precinct=PRECINCT_W):
         with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
-            for asked in range(10, 18):
-                turf = self.turf(asked)
-                (last,) = db.execute("SELECT COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) FROM person p JOIN stop s ON s.id = p.stop_id "
-                                     "WHERE s.span_id = ? AND p.precinct = ?", (turf['spans'][-1], PRECINCT_W)).fetchone()
-                self.assertEqual(turf['stopped'], 'full', asked)
-                self.assertGreaterEqual(turf['doors'], asked)
-                self.assertLess(turf['doors'] - last, asked)
+            return db.execute("SELECT COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) FROM person p JOIN stop s ON s.id = p.stop_id "
+                              "WHERE s.span_id = ? AND p.precinct = ?", (span, precinct)).fetchone()[0]
+
+    def test_the_turf_holds_exactly_the_asked_doors_with_the_last_block_cut_to_fit(self):
+        for asked in range(10, 18):
+            turf = self.turf(asked)
+            before = sum(self.doors_of(span) for span in turf['spans'][:-1])
+            last = turf['spans'][-1]
+            self.assertEqual((turf['stopped'], turf['doors']), ('full', asked), asked)
+            self.assertLess(before, asked)
+            if before + self.doors_of(last) == asked:
+                self.assertIsNone(turf['trim'], asked)
+            else:
+                self.assertEqual(turf['trim'], {'span': last, 'kept': asked - before, 'of': self.doors_of(last)}, asked)
+
+    def test_the_cut_block_keeps_the_people_of_its_doors_and_the_sums_of_them(self):
+        keep = self.best_doors('rdg', 1)                         # 14 doors: rdg, the last block, keeps the one door worth most
+        turf = self.turf(14)
+        names = self.blocks_of_w()
+        whole = [names[span] for span in turf['spans'][:-1]]
+        people = sum(len(self.people_in(name, precinct=PRECINCT_W)) for name in whole) + len(self.people_at(keep))
+        self.assertEqual((turf['spans'][-1], turf['trim'], turf['doors'], turf['people']), (7, {'span': 7, 'kept': 1, 'of': 4}, 14, people))
+        value = sum(sum(self.door_values(name).values()) for name in whole) + self.door_values('rdg')[keep[0]]
+        self.assertAlmostEqual(turf['value'], value, places=3)
+        self.assertAlmostEqual(turf['undecided'] + turf['supporter'], turf['value'], places=3)
+        self.assertLess(turf['value'], 3.83 + 0.75 + 0.375 + 1.5793)           # less than the whole of rdg would have added
+
+    def test_the_cut_follows_the_weights(self):
+        names = self.blocks_of_w()
+        for weights in ({}, {'wp': '1', 'wi': '0'}, {'wp': '0', 'wi': '0'}, {'wp': '0.3', 'wi': '1'}):
+            numbers = {name: float(text) for name, text in weights.items()}
+            turf = self.turf(14, **weights)
+            *whole, last = turf['spans']
+            listed = self.trimmed(spans=','.join(map(str, turf['spans'])), doors='14', **weights)
+            kept = turf['doors'] - sum(self.doors_of(span) for span in whole)
+            expected = set().union(*(self.people_in(names[span], precinct=PRECINCT_W) for span in whole))
+            expected |= self.people_at(self.best_doors(names[last], kept, **numbers))
+            self.assertEqual(self.voters(listed), expected, weights)
 
     def test_a_block_whose_doors_are_all_done_is_not_in_the_turf(self):
         self.knock(*(f'p{n:02d}' for n in range(1, 13)))          # all of chd1, the best block of the precinct
@@ -520,18 +611,23 @@ class WalkPlanTests(TestCase):
         self.knock('p03')
         turf = self.turf(10)
         jun_s = self.span_of('jun_s')
-        self.assertEqual((turf['spans'], turf['doors'], turf['people']), ([1, 6, jun_s], 11, 15))      # chd1 6 doors, chd2 3, Juniper 2
-        listed = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W, fresh='1')
+        # chd1 6 doors, chd2 3, and Juniper Ln south would make it 11: it keeps its one door of more potential
+        self.assertEqual((turf['spans'], turf['doors'], turf['people'], turf['trim']),
+                         ([1, 6, jun_s], 10, 9 + 4 + 1, {'span': jun_s, 'kept': 1, 'of': 2}))
+        picked = ','.join(map(str, turf['spans']))
+        listed = self.list(spans=picked, precinct=PRECINCT_W, fresh='1', doors='10')
         self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (turf['doors'], turf['people']))
         self.assertGreater(listed['totals']['walk_m'], 0)
-        self.assertEqual(listed['query'], {'spans': ','.join(map(str, sorted(turf['spans']))), 'precinct': PRECINCT_W, 'fresh': '1'})
-        stale = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W)           # without fresh the done doors come back
-        self.assertEqual((stale['totals']['doors'], stale['totals']['voters']), (turf['doors'] + 1, turf['people'] + 3))
+        self.assertEqual(listed['query'], {'spans': picked, 'precinct': PRECINCT_W, 'fresh': '1', 'doors': '10'})
+        whole = self.list(spans=picked, precinct=PRECINCT_W, fresh='1')                  # without doors the blocks come whole
+        self.assertEqual((whole['totals']['doors'], whole['totals']['voters']), (11, 15))
+        stale = self.list(spans=picked, precinct=PRECINCT_W)                             # without fresh the done doors come back
+        self.assertEqual((stale['totals']['doors'], stale['totals']['voters']), (12, 18))
 
     def test_the_list_built_from_a_turf_matches_its_doors_and_people(self):
         for asked in (10, 12, 14, 17):
             turf = self.turf(asked)
-            listed = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W, fresh='1')
+            listed = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W, fresh='1', doors=str(asked))
             self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (turf['doors'], turf['people']), asked)
             self.assertGreater(listed['totals']['walk_m'], 0)
 
@@ -681,6 +777,172 @@ class WalkPlanTests(TestCase):
         shown = self.list(spans='1')
         for query in ({'spans': '1', 'fresh': '0'}, {'spans': '1', 'extra': '1'}, {'fresh': '1'}):
             self.post('/api/v3/walk/lists', {'title': 'x', 'query': query, 'fingerprint': shown['fingerprint']}, 400)
+
+    # ---- a list cut to a door count --------------------------------------------------------------------------
+    def trimmed(self, status=200, spans='1,6', **query):
+        picked = {} if spans is None else {'spans': spans}
+        return self.list(status, **{**picked, 'precinct': PRECINCT_W, 'fresh': '1', **query})
+
+    def test_the_plan_and_the_list_agree_on_the_doors_and_people_whatever_the_count_the_weights_and_the_results(self):
+        for knocked in ((), ('p03',), ('p20', 'p27')):
+            self.knock(*knocked)                                       # each round adds to the doors with a result of the one before
+            for asked in (10, 11, 13, 14, 17):
+                for weights in ({}, {'wp': '1', 'wi': '0'}, {'wp': '0.3', 'wi': '1'}):
+                    turf = self.turf(asked, **weights)
+                    listed = self.trimmed(spans=','.join(map(str, turf['spans'])), doors=str(asked), **weights)
+                    context = (knocked, asked, weights)
+                    self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (turf['doors'], turf['people']), context)
+                    self.assertLessEqual(turf['doors'], asked, context)
+                    if turf['stopped'] == 'full':
+                        self.assertEqual(turf['doors'], asked, context)
+
+    def test_the_other_precinct_agrees_too(self):
+        turf = self.turf(10, precinct=PRECINCT_F)
+        listed = self.trimmed(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_F, doors='10')
+        self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (2, 4))
+        self.assertEqual((turf['doors'], turf['people'], turf['trim']), (2, 4, None))
+
+    def test_a_single_block_is_cut_to_the_doors_of_most_potential(self):
+        listed = self.trimmed(spans='1', doors='10')                               # seven doors, fewer than the count: the whole block
+        self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (7, 12))
+        self.assertEqual(self.voters(self.trimmed(spans='1', doors='10', wp='0.5', wi='0.5')), self.voters(listed))
+        for keep in (6, 3, 1):
+            with mock.patch.object(V, 'MIN_DOORS', 1):                              # the floor of ten is more doors than this world has
+                turf, listed = self.turf(keep), self.trimmed(spans='1', doors=str(keep))
+            kept = self.best_doors('chd1', keep)
+            self.assertEqual((turf['spans'], turf['doors'], turf['trim']), ([1], keep, {'span': 1, 'kept': keep, 'of': 7}))
+            self.assertEqual(self.voters(listed), self.people_at(kept), keep)
+            self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (keep, len(self.people_at(kept))), keep)
+            self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (turf['doors'], turf['people']), keep)
+
+    def test_the_spans_are_read_in_the_order_given_and_the_one_that_passes_the_count_is_cut(self):
+        chd1, chd2, rdg = (self.people_in(name, precinct=PRECINCT_W) for name in ('chd1', 'chd2', 'rdg'))
+        listed = self.trimmed(spans='7,1,6', doors='10')                           # rdg 4 doors whole, chd1 would make 11: it keeps 6 of 7, chd2 left out
+        self.assertEqual(listed['query'], {'spans': '7,1,6', 'precinct': PRECINCT_W, 'fresh': '1', 'doors': '10'})
+        self.assertEqual(listed['totals']['doors'], 10)
+        self.assertEqual(self.voters(listed), rdg | self.people_at(self.best_doors('chd1', 6)))
+        other = self.trimmed(spans='1,6,7', doors='10')                            # chd1 7 + chd2 3 = 10: both whole, rdg left out
+        self.assertEqual(other['query']['spans'], '1,6,7')
+        self.assertEqual((other['totals']['doors'], self.voters(other)), (10, chd1 | chd2))
+        self.assertEqual(self.voters(self.trimmed(spans='6,1,7', doors='10')), chd1 | chd2)
+        middle = self.trimmed(spans='6,7,1', doors='10')                           # chd2 3, rdg 4, then chd1 keeps 3 of 7
+        self.assertEqual(self.voters(middle), chd2 | rdg | self.people_at(self.best_doors('chd1', 3)))
+
+    def test_street_picks_are_added_whole_on_top_of_the_doors_kept_from_the_blocks(self):
+        juniper = self.get('/api/v3/walk/streets?q=juniper')['streets'][0]['id']
+        for name, street in (('cedar', self.cedar()), ('juniper', juniper)):       # cedar holds doors the cut drops, juniper does not
+            on_top = self.trimmed(spans='7,1,6', doors='10', streets='%d:both' % street)
+            only_street = self.trimmed(streets='%d:both' % street, spans=None)
+            blocks = self.trimmed(spans='7,1,6', doors='10')
+            self.assertEqual(on_top['query'], {'streets': '%d:both' % street, 'spans': '7,1,6', 'precinct': PRECINCT_W, 'fresh': '1', 'doors': '10'}, name)
+            self.assertEqual(self.voters(on_top), self.voters(only_street) | self.voters(blocks), name)
+            self.assertEqual(on_top['totals']['voters'], len(self.voters(on_top)), name)
+        cedar_people = self.people_in('chd1', 'chd2', 'chd3', precinct=PRECINCT_W)
+        self.assertTrue(cedar_people <= self.voters(self.trimmed(spans='7,1,6', doors='10', streets='%d:both' % self.cedar())))   # the dropped door is back
+        self.knock('p01')                                                           # fresh still applies to the streets
+        on_top = self.trimmed(spans='7,1,6', doors='10', streets='%d:both' % self.cedar())
+        self.assertEqual(self.voters(on_top) & set(self.ids('p01', 'p02')), set())
+        shown = self.trimmed(spans='7,1,6', doors='10', streets='%d:both' % juniper)
+        saved = self.post('/api/v3/walk/lists', {'title': 'On top', 'query': shown['query'], 'fingerprint': shown['fingerprint']}, 201)
+        self.assertEqual((saved['query'], saved['changed']), (shown['query'], False))
+
+    def test_a_span_named_twice_counts_once_and_the_blocks_after_the_count_is_met_are_left_out(self):
+        listed = self.trimmed(spans='1,6,1,7,6', doors='10')
+        self.assertEqual(listed['query']['spans'], '1,6,7')                        # each once, at its first place
+        self.assertEqual(self.voters(listed), self.people_in('chd1', 'chd2', precinct=PRECINCT_W))
+
+    def test_the_doors_are_the_potential_at_the_weights_sent(self):
+        # rdg 4 doors and chd2 3 are whole, chd1 keeps 3 of its 7: its door 1 (undecided) leads at the defaults and wp 1, door 3 (supporter) at wp 0
+        around = self.people_in('rdg', 'chd2', precinct=PRECINCT_W)
+        sets = set()
+        for weights in ({}, {'wp': '1', 'wi': '0'}, {'wp': '0', 'wi': '0'}, {'wp': '0.3', 'wi': '1'}):
+            numbers = {name: float(text) for name, text in weights.items()}
+            listed = self.trimmed(spans='7,6,1', doors='10', **weights)
+            self.assertEqual(self.voters(listed), around | self.people_at(self.best_doors('chd1', 3, **numbers)), weights)
+            sets.add(frozenset(self.voters(listed)))
+        self.assertEqual(len(sets), 2)                                              # wp 0 keeps other doors of chd1 than the rest do
+
+    def test_doors_with_a_recorded_result_are_not_among_the_doors_kept(self):
+        self.knock('p03')                                    # the door of p03, p04, p05, the most valuable of chd1
+        listed = self.trimmed(spans='1', doors='10')
+        self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (6, 9))
+        listed = self.trimmed(spans='7,6,1', doors='10')    # rdg 4 doors, chd2 3, then chd1 (6 doors left) keeps 3
+        self.assertEqual(listed['totals']['doors'], 10)
+        self.assertEqual(self.voters(listed) & set(self.ids('p03', 'p04', 'p05')), set())
+        self.assertEqual(self.voters(listed), self.people_in('rdg', 'chd2', precinct=PRECINCT_W) | self.people_at(self.best_doors('chd1', 3)))
+
+    def test_everyone_having_a_result_is_still_said_with_a_door_count(self):
+        self.knock(*(f'p{n:02d}' for n in range(1, 13)))
+        self.assertEqual(self.trimmed(400, spans='1', doors='10')['error'], 'Everyone on those blocks already has a recorded result.')
+
+    def test_a_list_cut_to_a_door_count_saves_and_reloads_with_its_count_and_order(self):
+        shown = self.trimmed(spans='7,1,6', doors='010', wp='1.0', wi='0.50')
+        query = {'spans': '7,1,6', 'precinct': PRECINCT_W, 'fresh': '1', 'doors': '10', 'wp': '1', 'wi': '0.5'}
+        self.assertEqual(shown['query'], query)                                      # the count and weights are written plainly
+        saved = self.post('/api/v3/walk/lists', {'title': 'Cut', 'query': query, 'fingerprint': shown['fingerprint']}, 201)
+        self.assertEqual((saved['query'], saved['changed']), (query, False))
+        self.assertEqual(saved['fingerprint'], shown['fingerprint'])
+        again = self.get('/api/v3/walk/lists/' + saved['list']['key'])
+        self.assertEqual((again['query'], self.voters(again)), (query, self.voters(shown)))
+        self.assertEqual(self.list(**query)['fingerprint'], shown['fingerprint'])    # the saved query rebuilds the same list
+        self.knock('p01')                                                            # a result after the save: built again today it is another list
+        rebuilt = self.post('/api/v3/walk/lists', {'title': 'Cut again', 'query': query, 'fingerprint': shown['fingerprint']}, 201)
+        self.assertTrue(rebuilt['changed'])
+        self.assertEqual(rebuilt['query'], query)
+
+    def test_a_list_cut_to_a_door_count_needs_planned_blocks_in_one_precinct_with_fresh_and_a_district_with_a_candidate(self):
+        needs = 'Trim needs planned blocks.'
+        self.assertEqual(self.list(400, precinct=PRECINCT_W, fresh='1', doors='20')['error'], needs)                       # no spans
+        self.assertEqual(self.list(400, ss='010', fresh='1', doors='20')['error'], needs)
+        self.assertEqual(self.list(400, spans='1,6', precinct=PRECINCT_W, doors='20')['error'], needs)                     # no fresh
+        self.assertEqual(self.list(400, spans='1,6', precinct=PRECINCT_W, doors='20', wp='0.5')['error'], needs)
+        self.assertEqual(self.list(400, spans='1,6', precinct=PRECINCT_W, fresh='1', wp='0.5')['error'], needs)           # weights alone
+        self.assertEqual(self.list(400, spans='1,6', precinct=PRECINCT_W, fresh='1', wi='0.5', wp='0')['error'], needs)
+        self.assertEqual(self.list(400, streets='%d:both' % self.cedar(), precinct=PRECINCT_W, fresh='1', doors='20')['error'], needs)   # streets alone
+        self.assertEqual(self.list(400, spans='1,6', fresh='1', doors='20')['error'], 'Plan a walk list from one precinct.')
+        self.assertEqual(self.list(400, spans='1,6', ss='010', fresh='1', doors='20')['error'], 'Plan a walk list from one precinct.')
+        for bad in ('9', '501', '0', '5'):
+            self.assertEqual(self.trimmed(400, doors=bad)['error'], 'Ask for 10 to 500 doors.')
+        for bad in ('x', '1000', '', '-20', '2.5', ' 20', '20 '):
+            self.assertEqual(self.trimmed(400, doors=bad)['error'], 'Invalid request.')
+        for name, bad in (('wp', '1.5'), ('wi', '-1'), ('wp', ''), ('wi', 'x'), ('wp', '0.12345'), ('wi', '1e0'), ('wp', '2')):
+            self.assertEqual(self.trimmed(400, doors='20', **{name: bad})['error'], 'Invalid request.')
+        self.get('/api/v3/walk/list?spans=1&precinct=%s&fresh=1&doors=20&doors=30' % PRECINCT_W, 400)
+        self.get('/api/v3/walk/list?spans=1&precinct=%s&fresh=1&doors=20&wp=0.5&wp=0.4' % PRECINCT_W, 400)
+        with override_settings(DISTRICT=CO):
+            self.assertEqual(self.trimmed(404, doors='20')['error'], 'No candidate is set for this district.')
+            self.assertEqual(self.list(404, ss='010', doors='20')['error'], 'No candidate is set for this district.')
+            self.assertEqual(self.list(404, spans='1', wp='0.5')['error'], 'No candidate is set for this district.')
+            self.assertEqual(self.list(spans='1,6', precinct=PRECINCT_W, fresh='1')['query'], {'spans': '1,6', 'precinct': PRECINCT_W, 'fresh': '1'})
+
+    def test_a_save_may_carry_a_door_count_only_where_a_list_may(self):
+        shown = self.trimmed(spans='1,6')
+        base = {'spans': '1,6', 'precinct': PRECINCT_W, 'fresh': '1'}
+        for query in ({'spans': '1,6', 'precinct': PRECINCT_W, 'doors': '20'}, {**base, 'doors': 20}, {**base, 'doors': None},
+                      {**base, 'doors': '9'}, {**base, 'doors': '20', 'extra': '1'}):
+            self.post('/api/v3/walk/lists', {'title': 'x', 'query': query, 'fingerprint': shown['fingerprint']}, 400)
+
+    def test_a_list_cut_to_a_door_count_needs_the_support_scores(self):
+        with override_settings(DATA_DIR=self.world_without_support('nosupport-trim')):
+            self.assertEqual(self.trimmed(503, doors='20')['error'], 'Support is not built yet.')
+        with mock.patch.object(W.Store, 'attach_scores', return_value=False):
+            self.assertEqual(self.trimmed(503, doors='20')['error'], 'Support is not built yet.')
+
+    def test_a_list_with_no_door_count_never_reads_the_potential(self):
+        with mock.patch.object(V, 'left_out_to_fit', side_effect=AssertionError('trim path read')), \
+                mock.patch.object(V.walk_turf, 'best_doors', side_effect=AssertionError('trim path read')):
+            self.assertEqual(self.list(spans='1,6')['totals']['voters'], 20)
+            self.assertEqual(self.trimmed()['totals']['voters'], 16)
+            self.assertEqual(self.list(ss='010', fresh='1')['query'], {'ss': '010', 'fresh': '1'})
+
+    def test_the_lists_without_a_door_count_are_what_they_were(self):
+        # the digest covers the whole answer (query, totals, runs, doors, paths, voters and the map context) but the day it was built
+        cedar = self.cedar()
+        for query, golden in ((dict(spans='1,6', precinct=PRECINCT_W), GOLDEN['spans']),
+                              (dict(spans='6,1', precinct=PRECINCT_W, fresh='1'), GOLDEN['fresh']),
+                              (dict(streets='%d:both' % cedar), GOLDEN['streets']),
+                              (dict(ss='010'), GOLDEN['area'])):
+            self.assertEqual(digest(self.list(**query)), golden, query)
 
     # ---- the printed scores ----------------------------------------------------------------------------------
     def test_a_candidate_district_gets_overall_participation_support_and_potential_as_whole_numbers(self):

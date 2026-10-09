@@ -366,16 +366,17 @@ class Store:
                     count['odd'] += doors
         return out
 
-    def voters(self, picks, area, limit, spans=None, skip=None):
+    def voters(self, picks, area, limit, spans=None, skip=None, span_skip=None):
         """Rows of the people at the picked street sides ([(street id, 'even'|'odd'|'both')]) and on the picked road
         spans (ids from the street plan) or, with neither, of everyone in `area` who has a stop: at most `limit`. `skip`:
-        doors ({(stop id, unit '')}) whose people are left out; they do not count towards the limit."""
+        doors ({(stop id, unit '')}) whose people are left out; they do not count towards the limit. `span_skip`: more
+        doors left out of what the spans add alone (the street picks keep their people whole)."""
         clause, args = _area(area, 'p')
 
-        def run(sql, sql_args, room):
-            if skip is None:
+        def run(sql, sql_args, room, left_out=skip):
+            if left_out is None:
                 return self.conn.execute(sql + ' LIMIT ?', [*sql_args, room]).fetchall()
-            return list(islice((r for r in self.conn.execute(sql, sql_args) if (r['stop_id'], r['unit'] or '') not in skip), room))
+            return list(islice((r for r in self.conn.execute(sql, sql_args) if (r['stop_id'], r['unit'] or '') not in left_out), room))
 
         if not picks and not spans:
             return run(VOTER_SQL + ' WHERE 1=1' + clause, args, limit)
@@ -387,13 +388,13 @@ class Store:
         if spans:
             left_out, left_out_args = _picked(picks)
             rows.extend(run(VOTER_SQL + ' WHERE s.span_id IN (%s)%s%s' % (','.join('?' * len(spans)), clause, left_out),
-                            [*spans, *args, *left_out_args], max(limit - len(rows), 0)))
+                            [*spans, *args, *left_out_args], max(limit - len(rows), 0), (skip or frozenset()) | span_skip if span_skip else skip))
         return rows
 
-    def count_voters(self, picks, area, spans=None, skip=None):
+    def count_voters(self, picks, area, spans=None, skip=None, span_skip=None):
         """How many people `voters` would list (without a limit); with `skip`, the doors it leaves out are not counted."""
         if skip is not None:                  # person by person: the doors left out are not in the combo table
-            return len(self.voters(picks, area, sys.maxsize, spans, skip))
+            return len(self.voters(picks, area, sys.maxsize, spans, skip, span_skip))
         clause, args = _area(area, 'p')
         if not picks and not spans:
             plain, plain_args = _area(area)
@@ -463,11 +464,15 @@ class Store:
         self.support = self.conn.execute("SELECT 1 FROM scores.sqlite_master WHERE type = 'table' AND name = 'support'").fetchone() is not None
         return True
 
-    def span_people(self, area):
+    def span_people(self, area, spans=None):
         """One row per person at a placed block in `area` (attach_scores first), by block then person id: span_id,
         street_id, len_m, a, b (the block's end nodes), stop_id, unit ('' for none) and pos (the score store's row; None
-        when the person has no score row). The sums the street plan needs are taken over these rows (walk_views.fold_plan)."""
+        when the person has no score row). The sums the street plan needs are taken over these rows (walk_views.fold_plan).
+        `spans`: only the blocks with these ids."""
         clause, args = _area(area, 'p')
+        if spans is not None:
+            clause += ' AND s.span_id IN (%s)' % ','.join('?' * len(spans))
+            args = [*args, *spans]
         return self.conn.execute(
             "SELECT s.span_id, p.street_id, r.len_m, r.a, r.b, p.stop_id, IFNULL(p.unit, '') AS unit, sc.pos "
             "FROM person p JOIN stop s ON s.id = p.stop_id JOIN road_span r ON r.id = s.span_id "
