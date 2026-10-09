@@ -117,20 +117,6 @@ def potential(s, t, i, wp=0.5, wi=0.5):
     return undecided + supporter
 
 
-# The earlier "Needs a push" on the support and participation standings. The street plan and the printed scores (walk_views,
-# walk_store.PUSH_SQL) still read these until the walk lane moves them to potential(); that lane deletes both with their tests.
-def push_parts(sup_pct, part_pct):
-    """Needs a push, 0..100, as its two parts: (undecided and likely to vote, supporter who may not vote) = (100 x (1 - |2s - 1|) x p,
-    100 x s x (1 - p)) with s = sup_pct / 100 and p = part_pct / 100. Numbers or numpy arrays."""
-    s, p = sup_pct / 100.0, part_pct / 100.0
-    return 100.0 * (1 - abs(2 * s - 1)) * p, 100.0 * s * (1 - p)
-
-
-def push(sup_pct, part_pct):
-    """The two parts of push_parts added: 0 for a sure supporter who always votes and for a sure opponent, 100 at most (s 0.5 with
-    p 1, or s 1 with p 0)."""
-    return sum(push_parts(sup_pct, part_pct))
-
 # Display of the source status. Order is the stored status code.
 STATUSES = ('observed', 'estimated_gpu_model', 'estimated_household_model', 'estimated_majority_default',
             'estimated_accuracy_argmax')
