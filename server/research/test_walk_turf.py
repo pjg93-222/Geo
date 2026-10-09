@@ -123,10 +123,39 @@ class TurfTests(SimpleTestCase):
         self.assertEqual((result['spans'], result['people'], result['stopped']), ([2, 4], 26, 'cap'))      # block 3 would make 39
         result = turf(self.CHAIN, XY, 99, max_spans=3)
         self.assertEqual((result['spans'], result['stopped']), ([2, 4, 3], 'cap'))
-        result = turf(self.CHAIN, XY, 99, max_people=1, max_spans=1)               # the first block is always taken
+        result = turf(self.CHAIN, XY, 99, max_people=13, max_spans=1)              # the first block fits; the second passes max_spans
         self.assertEqual((result['spans'], result['stopped']), ([2], 'cap'))
+        result = turf(self.CHAIN, XY, 99, max_people=1)                             # no block alone fits: an empty turf
+        self.assertEqual((result['spans'], result['doors'], result['stopped']), ([], 0, 'cap'))
         self.assertEqual(turf(self.CHAIN, XY, 99)['stopped'], 'exhausted')
         self.assertEqual(turf(self.CHAIN, XY, 25, max_spans=3)['stopped'], 'full')  # the doors are reached before the cap is
+
+    def test_a_seed_that_alone_passes_max_people_is_passed_over_for_the_next(self):
+        blocks = {**self.CHAIN, 6: block(8, 9, 50.0, people=99)}                   # the best block, 300 m off, too big on its own
+        result = turf(blocks, XY, 99, max_people=60)
+        self.assertEqual((result['spans'], result['people'], result['stopped']), ([2, 4, 3, 1], 52, 'cap'))     # 6 would make 151
+
+    def test_a_cut_off_seed_gives_way_to_the_next_best_seed(self):
+        blocks = {**self.CHAIN, 7: block(10, 11, 50.0)}                             # the best block, alone 500 m off: out of reach
+        result = turf(blocks, XY, 25)
+        self.assertEqual((result['spans'], result['doors'], result['stopped'], result['jumps']), ([2, 4, 3], 30, 'full', []))
+        self.assertEqual(turf(dict(reversed(list(blocks.items()))), XY, 25), result)
+        result = turf(blocks, XY, 45)                                               # neither seed reaches 45: the one with more doors
+        self.assertEqual((result['spans'], result['doors'], result['stopped']), ([2, 4, 3, 1], 40, 'far'))
+        result = turf(blocks, XY, 5)                                                # the best seed alone is enough: it is kept
+        self.assertEqual((result['spans'], result['stopped']), ([7], 'full'))
+
+    def test_the_tie_between_seeds_goes_to_more_potential_then_the_earlier_seed(self):
+        far = {1: block(1, 2, 9.0), 2: block(90, 91, 5.0), 3: block(92, 93, 7.0)}   # 10 doors each; 2 and 3 have no coordinates to reach
+        self.assertEqual(turf(far, XY, 25)['spans'], [1])                          # equal doors: the most potential
+        far[2] = block(90, 91, 5.0, doors=12)
+        self.assertEqual(turf(far, XY, 25)['spans'], [2])                          # more doors first
+        self.assertEqual(turf({3: block(1, 2, 9.0), 2: block(90, 91, 9.0), 1: block(92, 93, 9.0)}, XY, 25)['spans'], [1])   # all equal: the first seed
+
+    def test_at_most_five_seeds_are_tried(self):
+        xy = {n: (n * 1000.0, 0.0) for n in range(20)}
+        lonely = {k: block(2 * k, 2 * k + 1, 10.0 - k, doors=1 if k < 5 else 9) for k in range(7)}   # 1 km apart, none in reach
+        self.assertEqual(turf(lonely, xy, 9)['spans'], [0])                        # seeds 0 to 4, one door each: the sixth is not tried
 
     def test_ties_go_to_the_lower_span_id(self):
         blocks = {7: block(2, 3, 5.0), 3: block(1, 2, 5.0), 5: block(3, 4, 5.0)}
@@ -229,7 +258,8 @@ class TrimTests(SimpleTestCase):
         capped = turf(pair, XY, 20, max_people=44)                                  # whole, 60 people: the first block only
         self.assertEqual((capped['spans'], capped['stopped'], capped['trim']), ([2], 'cap', None))
         self.assertEqual(turf(pair, XY, 14, max_spans=1)['stopped'], 'cap')
-        self.assertEqual(turf(pair, XY, 4, max_people=1)['trim'], {'span': 2, 'kept': 4, 'of': 10})   # the first block is always taken, cut
+        self.assertEqual(turf(pair, XY, 4, max_people=12)['trim'], {'span': 2, 'kept': 4, 'of': 10})  # the seed is cut before the cap sees it
+        self.assertEqual(turf(pair, XY, 4, max_people=11)['spans'], [])                                 # 12 people even when cut: no seed fits
 
     def test_a_block_without_parts_is_taken_whole_as_before(self):
         result = turf({1: block(1, 2, 4.0), 2: block(2, 3, 9.0), 3: block(3, 4, 6.0)}, XY, 25)

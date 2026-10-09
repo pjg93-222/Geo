@@ -2,7 +2,9 @@
 
 Start at the block with the most untapped potential and grow along connected streets (a shared road node). When no block
 left touches the turf, take the block with the most potential among those whose nearer end is within `jump_m` metres
-(straight line, end node to end node) of the turf's nodes. Stop at the asked-for door count.
+(straight line, end node to end node) of the turf's nodes. Stop at the asked-for door count. When that seed is cut off (the turf
+stops short with no block left in reach), grow again from the next best blocks not yet in a turf, up to SEEDS seeds in all, and
+keep the turf with the most doors (then the most potential, then the earlier seed).
 
 blocks: {span id: {'a', 'b' (end nodes), 'doors', 'people', 'value', 'undecided', 'supporter'}}, after the doors with a
 recorded result are left out; xy: {node id: (x, y)} in metres. The block with the larger total goes first (not the larger
@@ -14,6 +16,8 @@ only that block's doors worth most (trim_doors), so it holds exactly the asked-f
 the same function (walk_views), so the list built from a turf has the turf's doors.
 """
 from math import hypot
+
+SEEDS = 5       # seeds tried for one turf: the best block, then the next best not in a turf already when the turf falls short
 
 
 def gap(xy, ends, nodes):
@@ -45,20 +49,41 @@ def turf(blocks, xy, asked, jump_m=400.0, max_people=1500, max_spans=200):
     """{'asked', 'spans' (pick order), 'doors', 'people', 'value', 'undecided', 'supporter', 'jumps' ([{'span', 'metres'}], the
     blocks reached across a gap), 'stopped', 'trim'}; the sums are rounded to 4 digits. 'stopped' says why the turf ends: 'full' it
     holds the asked-for doors, 'exhausted' no block with people and potential is left, 'far' none left is within jump_m, 'cap'
-    the next block would take it past max_people or max_spans (the first block is always taken). 'trim' is {'span', 'kept',
-    'of'} when the last block was cut to its `kept` doors of most value out of `of` (blocks with 'parts'), else None. The turf has
-    at most 1 + len(jumps) connected pieces; with no 'parts' it overshoots the asked-for doors by less than its last block's doors."""
+    the next block would take it past max_people or max_spans (a seed that alone passes max_people is passed over for the next
+    seed; when none fits the turf is empty and 'cap'). 'trim' is {'span', 'kept', 'of'} when the last block was cut to its `kept`
+    doors of most value out of `of` (blocks with 'parts'), else None. The turf has at most 1 + len(jumps) connected pieces; with no
+    'parts' it overshoots the asked-for doors by less than its last block's doors."""
     pool = {k: b for k, b in blocks.items() if b['doors'] >= 1 and b['value'] > 0}
+    best, seen, tries = None, set(), 0
+    for seed in sorted(pool, key=lambda k: (-pool[k]['value'], k)):
+        if seed in seen:
+            continue
+        got = grow(pool, xy, asked, jump_m, max_people, max_spans, seed)
+        if not got['spans']:                    # the seed alone is past max_people: the next seed
+            best = best or got
+            continue
+        seen.update(got['spans'])
+        tries += 1
+        if not best or not best['spans'] or (got['doors'], got['value']) > (best['doors'], best['value']):
+            best = got
+        if best['doors'] >= asked or best['stopped'] not in ('far', 'exhausted') or tries >= SEEDS:
+            break
+    return best or grow(pool, xy, asked, jump_m, max_people, max_spans, None)
+
+
+def grow(pool, xy, asked, jump_m, max_people, max_spans, seed):
+    """The turf grown from `seed` (None: an empty turf) over a copy of pool, as turf() describes it."""
+    pool = dict(pool)
     order = lambda k: (-pool[k]['value'], k)
     picked, jumps, nodes, trim = [], [], set(), None
     total = dict.fromkeys(('doors', 'people', 'value', 'undecided', 'supporter'), 0)
-    stopped, nxt, jump = 'exhausted', (min(pool, key=order) if pool else None), None
+    stopped, nxt, jump = 'exhausted', seed, None
     while nxt is not None:
         block, cut = pool.pop(nxt), None
         if block.get('parts') and total['doors'] + block['doors'] > asked:      # the last block: only the doors that fit
             keep = asked - total['doors']
             cut, block = {'span': nxt, 'kept': keep, 'of': block['doors']}, shrink(block, keep)
-        if picked and (total['people'] + block['people'] > max_people or len(picked) >= max_spans):
+        if total['people'] + block['people'] > max_people or len(picked) >= max_spans:
             stopped = 'cap'
             break
         picked.append(nxt)
