@@ -294,10 +294,21 @@ class Directory:
 # ---- queries -------------------------------------------------------------------------------------------------------
 
 def _area(area, alias=''):
-    """(' AND ss=? ...', args) for the area codes given."""
+    """(' AND ss=? ...', args) for the area codes given. On the person table (`alias`), an area that leaves out a leading
+    code of the index person_area(ss, sh, precinct), a precinct alone above all, also takes the codes it lies in from
+    combo, so the index is searched instead of scanned: person is WITHOUT ROWID, and a scan of person_area looks up every
+    person by the text key before it tests the precinct (seconds per request). The rows are the same: combo holds the
+    (ss, sh, precinct) of every person with a stop, every query of person here joins stop, and the codes are never NULL."""
     prefix = alias + '.' if alias else ''
     given = [column for column in AREA_COLUMNS if area.get(column)]
-    return ''.join(' AND %s%s=?' % (prefix, column) for column in given), [area[column] for column in given]
+    clause, args = ''.join(' AND %s%s=?' % (prefix, column) for column in given), [area[column] for column in given]
+    gaps = [column for column in AREA_COLUMNS[:AREA_COLUMNS.index(given[-1])] if not area.get(column)] if alias and given else []
+    if gaps:
+        inner, inner_args = _area(area)
+        clause += ' AND (%s) IN (SELECT %s FROM combo WHERE 1=1%s)' % (
+            ', '.join(prefix + column for column in gaps), ', '.join(gaps), inner)
+        args += inner_args
+    return clause, args
 
 
 def _picked(picks):

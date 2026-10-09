@@ -477,6 +477,20 @@ class WalkPlanTests(TestCase):
         far = chd1['b'] if node == chd1['a'] else chd1['a']
         self.assertAlmostEqual(((xy[node][0] - xy[far][0]) ** 2 + (xy[node][1] - xy[far][1]) ** 2) ** 0.5, 200.0, delta=0.5)
 
+    def test_a_precinct_alone_searches_the_area_index_and_reads_the_same_rows(self):
+        area = {'precinct': PRECINCT_W}
+        clause, args = W._area(area, 'p')
+        plain = (' AND p.precinct=?', [PRECINCT_W])          # the clause before the combo seek: a scan of person_area
+        sql = W.VOTER_SQL + ' WHERE 1=1%s ORDER BY p.person_id'
+        with W.walk_store() as store:
+            plan = ' '.join(row[-1] for row in store.conn.execute('EXPLAIN QUERY PLAN ' + sql % clause, args))
+            self.assertIn('SEARCH p USING INDEX person_area (ss=? AND sh=? AND precinct=?)', plan)
+            rows = [tuple(r) for r in store.conn.execute(sql % clause, args)]
+            self.assertTrue(rows)
+            self.assertEqual(rows, [tuple(r) for r in store.conn.execute(sql % plain[0], plain[1])])
+            self.assertEqual([tuple(r) for r in store.voters([], area, 1000)],
+                             [tuple(r) for r in store.conn.execute(W.VOTER_SQL + ' WHERE 1=1' + plain[0], plain[1])])
+
     def test_the_fold_keeps_the_undecided_and_supporter_parts_of_each_door_when_asked(self):
         with W.walk_store() as store:
             store.attach_scores()
