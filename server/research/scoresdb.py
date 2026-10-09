@@ -12,7 +12,6 @@ import re
 import sqlite3
 import threading
 import zlib
-from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +20,8 @@ from django.conf import settings
 from tools import field_labels as FL
 from tools import scores_schema as S
 from tools.demo_names import demo_name
+
+from .terrier_contacts import SourceStoreError
 
 EVIDENCE_LAYOUT = (('values', '<u2', 0), ('status', 'u1', 80), ('p', '<f4', 120), ('exposure', '<f4', 280))
 EVIDENCE_BYTES = 440
@@ -120,29 +121,37 @@ class StoreInfo:
             self._parties = {code: int(n) for code, n in rows}
         return self._parties
 
+    def terms(self):
+        """untapped.terms() (support score, chance of voting, influence standing of every person), as a StoreError when it
+        cannot be worked out or does not cover this store's people."""
+        from . import untapped
+        try:
+            terms = untapped.terms()
+        except SourceStoreError as problem:
+            raise StoreError(str(problem)) from problem
+        if terms.n != self.n:
+            raise StoreError('The turnout terms do not cover every person')
+        return terms
+
     def push(self):
         """(push 0..100 per person in pos order, positions from the highest push down with ties by position, the push
-        values ascending) of a candidate district: field_labels.push of the stored support and participation standings,
-        worked out on first use, so the store needs no rebuild."""
-        if self._push is None:
+        values ascending) of a candidate district: 100 x field_labels.potential of the terms at the district's default
+        weights, worked out on first use, so the store needs no rebuild. Worked out again when the terms are (a store
+        file changed)."""
+        from . import untapped
+        terms = self.terms()
+        cached = self._push
+        if cached is None or cached[0] is not terms:
             with self._push_lock:
-                if self._push is None:
-                    conn = _open(self.path)
-                    try:
-                        standings = np.fromiter(chain.from_iterable(conn.execute(
-                            'SELECT s.sup_pct, p.part_pct FROM support s JOIN person p ON p.pos = s.pos ORDER BY s.pos')),
-                            dtype=np.float64).reshape(-1, 2)
-                    finally:
-                        conn.close()
-                    if len(standings) != self.n:
-                        raise StoreError('The support table does not cover every person')
-                    value = FL.push(standings[:, 0], standings[:, 1])
+                cached = self._push
+                if cached is None or cached[0] is not terms:
+                    value = 100.0 * FL.potential(terms.s, terms.t, terms.i, *untapped.default_weights())
                     order = np.lexsort((np.arange(len(value)), -value)).astype(np.int32)
                     ascending = np.sort(value)
                     for array in (value, order, ascending):
                         array.flags.writeable = False
-                    self._push = value, order, ascending
-        return self._push
+                    self._push = cached = (terms, (value, order, ascending))
+        return cached[1]
 
     def outlook_codes(self):
         """One cached category per stored evidence row; never derive views from the lean score.

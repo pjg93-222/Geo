@@ -83,6 +83,11 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(set(d['support']['signals']), {'partisan', 'presidential', 'registration', 'primary_ballot'})
             self.assertEqual(set(d['roi']['presets']), set(FL.ROI_PRESETS))
             self.assertIn(d['roi']['preset'], d['roi']['presets'])
+            self.assertEqual(d['roi']['p'], 'turnout')          # the chance of voting is the mean of the five turnout-only scores
+            self.assertEqual(d['roi']['potential'], {'wp': 0.5, 'wi': 0.5})        # agent defaults (Paul 2026-10-09)
+            self.assertEqual(d['roi']['turf'], {'doors': 60, 'jump_m': 400.0})
+            self.assertEqual(len(FL.TURNOUT_FIELDS), 5)
+        self.assertIsNot(OR['roi']['potential'], CT['roi']['potential'])                # one district's edit never moves the other's
         self.assertIsNot(OR['support']['signals'], CT['support']['signals'])           # one district's edit never moves the other's
 
 

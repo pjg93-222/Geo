@@ -80,8 +80,8 @@ class FeaturesTests(TestCase):
                              ['Needs a push', 'Mixed-support streets', 'Supporter turnout', 'Voter identification'])
             self.assertTrue(all(p['formula'] for p in roi['presets']))
             self.assertEqual({k: v for k, v in roi.items() if k != 'presets'}, {
-                'preset': 'push', 'p': 'participation', 'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0},
-                'min_doors': 5, 'min_length_m': 50})
+                'preset': 'push', 'p': 'turnout', 'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0},
+                'min_doors': 5, 'min_length_m': 50, 'potential': {'wp': 0.5, 'wi': 0.5}, 'turf': {'doors': 60, 'jump_m': 400.0}})
 
     def test_the_mode_shown_is_the_configured_one_primary_included(self):
         body = self.features({**OR, 'race_mode': 'primary', 'primary_universe': 'party_plus_unaffiliated'})
@@ -91,11 +91,11 @@ class FeaturesTests(TestCase):
     def test_support_and_density_layers_follow_what_is_built(self):
         self.assertEqual(self.features(OR)['overlay'], {'layers': BASE_LAYERS, 'density': False})
         store = lambda: SimpleNamespace(meta={'support': {}})
-        self.assertEqual(self.features(OR, store)['overlay'], {'layers': BASE_LAYERS + ['sup'], 'density': False})
+        self.assertEqual(self.features(OR, store)['overlay'], {'layers': BASE_LAYERS + ['sup', 'untapped'], 'density': False})
         self.assertEqual(self.features(OR, lambda: SimpleNamespace(meta={}))['overlay']['layers'], BASE_LAYERS)
         (self.root / 'density.json').write_text('{}', encoding='utf-8')
         self.assertEqual(self.features(OR, store)['overlay'],
-                         {'layers': BASE_LAYERS + ['sup', 'pop_density', 'voter_density'], 'density': True})
+                         {'layers': BASE_LAYERS + ['sup', 'untapped', 'pop_density', 'voter_density'], 'density': True})
         self.assertEqual(self.features(CO)['overlay'],
                          {'layers': BASE_LAYERS + ['pop_density', 'voter_density'], 'density': True})
 

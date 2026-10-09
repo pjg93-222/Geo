@@ -3,10 +3,11 @@
   GET /api/v3/meta                                         static facts, the score-store status, the demo flag
   GET /api/v3/districts                                    the districts of the header selector, each with its instance port
   GET /api/v3/features                                     this district's settings: industries, candidate, overlay layers, street plan
+  GET /api/v3/untapped?level=<level>                        untapped potential summed per area (candidate districts), results left out
   GET /api/v3/density                                      DATA_DIR/density.json (population and voter density per area), 404 until built
   GET /api/v3/areas/<snapshot>/<basis>/<level>.json        columnar values of one level (registration or residence)
   GET /api/v3/parties/<snapshot>/<basis>/<level>.json      people per party code in each area of one level (O-10)
-  GET /api/v3/geometry/<snapshot>/<level>/<coarse|fine>.json  polygons with label points
+  GET /api/v3/geometry/<snapshot>/<level>/<coarse|fine>.json  polygons with label points (the four area levels, state_house, state_senate)
 
 Areas and geometry are immutable per snapshot (the key is in the URL): `private, max-age=31536000, immutable`, a strong
 ETag and a precomputed gzip body. They are available to any signed-in user like the other aggregate endpoints. Nothing
@@ -24,8 +25,11 @@ from tools import districts as D
 from tools import field_labels as FL
 from tools import scores_schema as S
 
+from . import scoresdb
+from . import untapped as UT
 from . import v3_cache
 from .models import Snapshot
+from .terrier_contacts import SourceStoreError
 from .v3_http import (BadRequest, IMMUTABLE, REVALIDATE, blob_response, error, get_only, json_etag_response, params,
                       signed_in)
 
@@ -130,7 +134,7 @@ def features(request):
     built = (Path(settings.DATA_DIR) / 'density.json').is_file()
     layers = ['ovr', 'cua', 'part', 'soi', 'lean']
     if d['candidate'] and _store_has_support():
-        layers.append('sup')
+        layers += ['sup', 'untapped']
     if built:
         layers += ['pop_density', 'voter_density']
     candidate = d['candidate'] and {
@@ -145,6 +149,33 @@ def features(request):
         'schema': 'v3-features-1', 'district': d['id'], 'industries': industries, 'industry': d['industries'][0],
         'candidate': candidate, 'party_codes': FL.PARTY_CODES,
         'overlay': {'layers': layers, 'density': built}, 'roi': roi}, REVALIDATE)
+
+
+@lru_cache(maxsize=12)
+def _untapped_blob(stamp, version, level):
+    """One level's untapped sums. The stores' stamps and the results version are in the key, so a rebuilt store or a
+    saved result is read again, and the ETag changes with them."""
+    return v3_cache.Blob(json.dumps(UT.area_payload(level), separators=(',', ':'), allow_nan=False).encode('utf-8'))
+
+
+@get_only
+@signed_in
+def untapped(request):
+    """Untapped potential per area (candidate districts): over the people who do not live at a door with a recorded result,
+    the sums of the undecided part, the supporter part and each times the influence standing, which the page turns into
+    potential at any weights; see untapped.py. 404 for a district with no candidate, 400 for a level that is not offered,
+    503 or 409 when the stores are not usable. Revalidated: the answer changes when a result is saved."""
+    q = params(request, {'level'}, {'level'})
+    d = settings.DISTRICT
+    if not d['candidate'] or not d['roi']:
+        return error('No candidate is set for this district.', 404)
+    if q['level'] not in UT.LEVELS:
+        raise BadRequest('Invalid level')
+    try:
+        blob = _untapped_blob(UT.terms().stamp, UT.results_version(), q['level'])
+    except (SourceStoreError, scoresdb.StoreError) as problem:
+        return error(str(problem), problem.status)
+    return blob_response(request, blob, REVALIDATE)
 
 
 @lru_cache(maxsize=2)
@@ -219,10 +250,14 @@ def parties(request, snap, basis, level):
 @signed_in
 def geometry(request, snap, level, variant):
     params(request, set())
-    if level not in AL.LEVEL_ORDER or variant not in ('coarse', 'fine'):
+    if level not in v3_cache.GEOMETRY_LEVELS or variant not in ('coarse', 'fine'):
         return error('Unknown geometry.', 404)
     try:
         key = _snapshot_or_404(snap)
     except LookupError:
         return error('Unknown snapshot.', 404)
-    return blob_response(request, v3_cache.geometry_blob(key, level, variant), IMMUTABLE)
+    try:
+        made = v3_cache.geometry_blob(key, level, variant)
+    except LookupError:                                   # a snapshot without that level's polygons
+        return error('Unknown geometry.', 404)
+    return blob_response(request, made, IMMUTABLE)

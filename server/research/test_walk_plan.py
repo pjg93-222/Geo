@@ -188,7 +188,7 @@ class WalkPlanTests(TestCase):
     def test_mixed_support_streets_by_hand(self):
         plan = self.plan()
         self.assertEqual({k: plan[k] for k in ('schema', 'preset', 'p', 'race_mode')},
-                         {'schema': 'walk-plan-1', 'preset': 'mixed', 'p': 'participation', 'race_mode': 'general'})
+                         {'schema': 'walk-plan-1', 'preset': 'mixed', 'p': 'turnout', 'race_mode': 'general'})
         self.assertEqual(plan['weights'], {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0})
         self.assertEqual(plan['spans'], [
             {'span': 6, 'street': 'Cedar Heights Dr', 'doors': 6, 'people': 8, 'len_m': 200.0, 's_mean': 0.3778, 'p_mean': 0.625,

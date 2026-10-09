@@ -49,6 +49,21 @@ def enable_fault_log(port):
     _fault_log = stream
 
 
+def warm_untapped(info, started):
+    """Candidate districts: decode the turnout scores (about 3 s), order the people by push, read the saved results and sum
+    the precinct level, so the first map and the first people list wait for nothing. A failure is logged and warming goes on."""
+    from server.research import untapped
+    try:
+        terms = untapped.terms()
+        info.push()
+        untapped.area_payload('precinct')
+        log.info('warm: untapped terms ready (%d people; t from the turnout scores %d, from the general record %d, even odds %d; '
+                 '%d people at doors with a result) in %.1fs', terms.n, terms.t_source['sai'], terms.t_source['record'],
+                 terms.t_source['even'], untapped.knocked().people, time.time() - started)
+    except Exception as problem:
+        log.info('warm: untapped not ready (%s)', problem)
+
+
 def warm():
     """Parse the active snapshot and open the score store before the first click (S1: the 6 s cold parse is paid here)."""
     started = time.time()
@@ -70,6 +85,8 @@ def warm():
             if snap is not None and snap.manifest.get('schema') == 'cu-summary-v4':
                 v3_people_views._area_table(snap.key)
             log.info('warm: score store ready (%d people) in %.1fs', info.n, time.time() - started)
+            if settings.DISTRICT['candidate'] and info.support:
+                warm_untapped(info, started)
             # pull the first pages of the large local files into the operating system's cache: the street directory
             # (748 MB) is otherwise read cold by the first street view, and demo mode parses the block polygons once
             conn = scoresdb.connection(street=True)

@@ -31,6 +31,11 @@ DERIVED_VERSION = 'v3'                     # v3: every area is shown (status 'ok
 COARSE, FINE = 0.00055, 0.00006          # simplification tolerances in degrees (about 55 m and 6 m)
 COORD_DECIMALS = 5
 LEVELS = AL.LEVEL_ORDER
+# the polygon layer of each geometry level in the snapshot's geometry.json. State House and Senate districts are not area-index
+# levels (no values, not in `prepare`); they are drawn under the Untapped layer and built on the first request.
+GEOMETRY_KEY = {'block': 'block', 'precinct': 'precinct', 'tract': 'tract', 'zip': 'zcta',
+                'state_house': 'state_house', 'state_senate': 'state_senate'}
+GEOMETRY_LEVELS = tuple(GEOMETRY_KEY)
 SNAPSHOT_RE = re.compile(D.snapshot_pattern(settings.DISTRICT))
 VALUE_DECIMALS = 8                         # values are served at 8 decimals ...
 SHARE_DECIMALS = 8
@@ -160,7 +165,7 @@ def build_areas(key, basis, level):
     adjacency = {}
     if basis == 'registration':
         geometry = read_json(key, 'geometry.json')
-        key_geo = {'block': 'block', 'precinct': 'precinct', 'tract': 'tract', 'zip': 'zcta'}[level]
+        key_geo = GEOMETRY_KEY[level]
         ids |= set(geometry[key_geo])
         del geometry
         if level in AL.ADJACENCY_LEVELS:
@@ -230,7 +235,9 @@ def build_geometry_pair(key, level):
     """Both variants of one level from the snapshot geometry: {'coarse': FeatureCollection, 'fine': ...}."""
     from shapely.geometry import mapping, shape
     source = read_json(key, 'geometry.json')
-    layer = source[{'block': 'block', 'precinct': 'precinct', 'tract': 'tract', 'zip': 'zcta'}[level]]
+    layer = source.get(GEOMETRY_KEY[level])
+    if layer is None:
+        raise LookupError('The snapshot has no %s polygons' % level)
     result = {'coarse': [], 'fine': []}
     for ident in sorted(layer):
         full = shape(layer[ident]['geometry'])

@@ -55,9 +55,13 @@ _INTERIM = {'cua': 40, 'part': 35, 'soi': 25}     # Colorado's weights, shown fo
 _SUPPORT = {'signals': {'partisan': 1, 'presidential': 1, 'registration': 1, 'primary_ballot': 1},
             'party_values': {}, 'ballot_years': (2014, 2025)}
 # Street plan (Phase 4E; Paul 2026-10-07): presets (field_labels.ROI_PRESETS), weights of the percentile-rank blend, floors;
-# the default is "Needs a push" (Paul 2026-10-08), the other three stay as alternatives
-_ROI = {'presets': ('push', 'mixed', 'turnout', 'identify'), 'preset': 'push', 'p': 'participation',
-        'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0}, 'min_doors': 5, 'min_length_m': 50}
+# the default is "Needs a push" (Paul 2026-10-08), the other three stay as alternatives. p: what the chance of voting is read
+# from (the mean of the five turnout-only scores). potential: the defaults of the two weights of "Needs a push" (Paul 2026-10-09
+# left them to the agent: wp the balance of undecided against supporter, wi the weight of sphere of influence, top counts 1.5
+# times). turf: the one-click walk list's door count (10..500) and the longest straight jump between pieces, in metres.
+_ROI = {'presets': ('push', 'mixed', 'turnout', 'identify'), 'preset': 'push', 'p': 'turnout',
+        'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0}, 'min_doors': 5, 'min_length_m': 50,
+        'potential': {'wp': 0.5, 'wi': 0.5}, 'turf': {'doors': 60, 'jump_m': 400.0}}
 # NAMELSAD of every county the district polygon meets (area > 1e-10 deg2, the extend_geography rule), read from the
 # TIGER2025 county file on 2026-10-07; CT's TIGER2025 "counties" are the planning regions
 _OR_NAMES = {'41003': 'Benton County', '41005': 'Clackamas County', '41017': 'Deschutes County',

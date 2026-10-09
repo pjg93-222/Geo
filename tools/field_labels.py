@@ -87,14 +87,38 @@ BY_NAME = {row['name']: row for row in FIELDS}
 # (O-12); its fields and weights are the frozen rowfw-1.0.0 CUA weights above, checked on every score build.
 INDUSTRIES = {'cua': {'label': GROUP_LABELS['cua'], 'group': 'cua',
                       'fields': [(r['name'], r['label'], r['weight']) for r in FIELDS if r['group'] == 'cua']}}
-# Street plan presets (Phase 4E): id -> (label, formula in words); s = candidate support 0..1, p = participation standing 0..1.
-# push (Paul 2026-10-08): s is the support standing (sup_pct / 100), see push(); the other three read the support score.
-ROI_PRESETS = {'push': ('Needs a push', 'sum over people of (1 - |2s - 1|) x p + s x (1 - p)'),
-               'mixed': ('Mixed-support streets', 'sum over people of (1 - |2s - 1|) x p'),
-               'turnout': ('Supporter turnout', 'sum over people of s x (1 - p)'),
+# Street plan presets (Phase 4E): id -> (label, formula in words). s = candidate support 0..1 (the support score / 100, not
+# the standing), t = chance of voting 0..1 (the mean of the five turnout-only scores / 100, TURNOUT_FIELDS), i = sphere of
+# influence standing 0..1. push (Paul 2026-10-09, "Untapped"): see potential(); the other three read s and t the same way.
+ROI_PRESETS = {'push': ('Needs a push', 'sum over people of (wP x (1 - |2s - 1|) x t + wR x s x (1 - t)) x (1 + wI x i); '
+                                        'doors with a recorded result left out'),
+               'mixed': ('Mixed-support streets', 'sum over people of (1 - |2s - 1|) x t'),
+               'turnout': ('Supporter turnout', 'sum over people of s x (1 - t)'),
                'identify': ('Voter identification', 'people with s in the middle third or missing')}
+# The five turnout-only scores whose mean is t (Paul 2026-10-09): the stored literals are integers 0..100, not percentiles.
+TURNOUT_FIELDS = ('sai_midterm_general_turnout_score', 'sai_non_presidential_primary_turnout_score',
+                  'sai_offyear_general_turnout_score', 'sai_presidential_general_turnout_score',
+                  'sai_presidential_primary_turnout_score')
 
 
+def potential_parts(s, t, i, wp=0.5, wi=0.5):
+    """Untapped potential of one person on 0..1 as its two parts: (undecided part, supporter part) =
+    (wp x (1 - |2s - 1|) x t x (1 + wi x i), (1 - wp) x s x (1 - t) x (1 + wi x i)). s = support score / 100, t = chance of
+    voting, i = sphere of influence standing; wp is the balance between the two parts, wi the weight of influence. Numbers
+    or numpy arrays."""
+    boost = 1 + wi * i
+    return wp * (1 - abs(2 * s - 1)) * t * boost, (1 - wp) * s * (1 - t) * boost
+
+
+def potential(s, t, i, wp=0.5, wi=0.5):
+    """The two parts of potential_parts added: 0 for a sure opponent, and 0 for a sure supporter who always votes; at the
+    defaults 0.5 at most without influence (s 0.5 with t 1, or s 1 with t 0) and 0.75 with the most."""
+    undecided, supporter = potential_parts(s, t, i, wp, wi)
+    return undecided + supporter
+
+
+# The earlier "Needs a push" on the support and participation standings. The street plan and the printed scores (walk_views,
+# walk_store.PUSH_SQL) still read these until the walk lane moves them to potential(); that lane deletes both with their tests.
 def push_parts(sup_pct, part_pct):
     """Needs a push, 0..100, as its two parts: (undecided and likely to vote, supporter who may not vote) = (100 x (1 - |2s - 1|) x p,
     100 x s x (1 - p)) with s = sup_pct / 100 and p = part_pct / 100. Numbers or numpy arrays."""

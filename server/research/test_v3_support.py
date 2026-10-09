@@ -13,6 +13,7 @@ from django.test import Client, TestCase, override_settings
 
 from tools import area_layers as AL
 from tools import districts as D
+from tools import field_labels as FL
 from tools import make_scores_fixture as MF
 from tools import scores_writer as SW
 from tools import support as SUP
@@ -201,25 +202,43 @@ class PeopleAndProfileTests(TestCase):
         scores = [r['sup_pct'] for r in page['rows']]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
-    # ---- Needs a push (Paul 2026-10-08): computed from sup_pct and part_pct when asked, no rebuild ---------------------
+    # ---- Needs a push (Paul 2026-10-09: the untapped potential): computed from the support score, the five turnout literals
+    # and the influence standing when asked, no rebuild ------------------------------------------------------------------
     @staticmethod
-    def hand_push(sup_pct, part_pct):
-        """(1 - |2s - 1|) p + s (1 - p), on 0..100, written out again here."""
-        s, p = sup_pct / 100.0, part_pct / 100.0
-        return 100.0 * ((1 - abs(2 * s - 1)) * p + s * (1 - p))
+    def hand_parts(sup_score, turnout, soi_pct, wp=0.5, wi=0.5):
+        """(undecided part, supporter part) on 0..100, written out again here: s = support score / 100, t = the mean of the five
+        turnout literals / 100, i = influence standing / 100."""
+        s, t, i = sup_score / 100.0, sum(turnout) / len(turnout) / 100.0, soi_pct / 100.0
+        boost = 1 + wi * i
+        return 100.0 * (wp * (1 - abs(2 * s - 1)) * t * boost), 100.0 * ((1 - wp) * s * (1 - t) * boost)
 
     def stored_push(self):
-        """[(person id, sup_pct, part_pct, push)] for the candidate store, highest push first, ties by position."""
-        rows = self.stored(self.candidate, 'SELECT p.person_id, s.sup_pct, p.part_pct, p.pos FROM support s JOIN person p ON p.pos = s.pos ORDER BY s.pos')
-        return sorted(((r[0], r[1], r[2], self.hand_push(r[1], r[2]), r[3]) for r in rows), key=lambda r: (-r[3], r[4]))
+        """[(person id, sup score, turnout literals, soi_pct, push, pos)] for the candidate store, highest push first, ties by
+        position. The literals are read through the evidence blob and the value dictionary, as the app has to."""
+        fids = [FL.BY_NAME[name]['fid'] for name in FL.TURNOUT_FIELDS]
+        words = {(fid, code): float(literal) for fid, code, literal in self.stored(
+            self.candidate, 'SELECT fid, code, literal FROM value_dict WHERE fid IN (%s)' % ','.join(map(str, fids)))}
+        rows = self.stored(self.candidate, 'SELECT p.person_id, s.sup_score, p.soi_pct, p.pos, e.blob FROM support s JOIN person p '
+                           'ON p.pos = s.pos JOIN evidence e ON e.pos = p.pos ORDER BY s.pos')
+        out = []
+        for person, score, soi, pos, blob in rows:
+            values = scoresdb.decode_evidence(blob)['values']
+            turnout = [words[(fid, int(values[fid]))] for fid in fids]
+            out.append((person, score, turnout, soi, sum(self.hand_parts(score, turnout, soi)), pos))
+        return sorted(out, key=lambda r: (-r[4], r[5]))
 
-    def test_every_row_of_a_candidate_store_carries_push_and_it_is_the_formula_of_its_two_standings(self):
+    def test_every_row_of_a_candidate_store_carries_push_and_it_is_the_potential_of_its_terms(self):
         page = self.get('/api/v3/people?basis=registration', self.candidate).json()
         by_id = {r[0]: r for r in self.stored_push()}
         for row in page['rows']:
             want = by_id[row['person_id']]
-            self.assertAlmostEqual(row['push'], want[3], places=5)
-            self.assertTrue(0.0 <= row['push'] <= 100.0)
+            self.assertAlmostEqual(row['push'], want[4], places=5)
+            self.assertTrue(0.0 <= row['push'] <= 75.0)
+
+    def test_the_range_at_the_defaults_is_zero_to_seventy_five(self):
+        values = [r[4] for r in self.stored_push()]
+        self.assertTrue(0.0 <= min(values) and max(values) <= 75.0)
+        self.assertGreater(max(values), 40.0)                    # a real spread, not a flat line
 
     def test_sort_push_lists_people_from_the_highest_push_down_with_equals_for_ties(self):
         want = self.stored_push()
@@ -228,9 +247,9 @@ class PeopleAndProfileTests(TestCase):
         self.assertEqual([r['person_id'] for r in page['rows']], [w[0] for w in want[:50]])
         pushes = [r['push'] for r in page['rows']]
         self.assertEqual(pushes, sorted(pushes, reverse=True))
-        higher = lambda value: sum(1 for w in want if w[3] > value + 1e-9)
-        tied = lambda value: sum(1 for w in want if abs(w[3] - value) <= 1e-9)
-        self.assertEqual([r['rank'] for r in page['rows']], [v3p.rank_text(higher(w[3]) + 1, tied(w[3])) for w in want[:50]])
+        higher = lambda value: sum(1 for w in want if w[4] > value + 1e-9)
+        tied = lambda value: sum(1 for w in want if abs(w[4] - value) <= 1e-9)
+        self.assertEqual([r['rank'] for r in page['rows']], [v3p.rank_text(higher(w[4]) + 1, tied(w[4])) for w in want[:50]])
         nxt = self.get('/api/v3/people?basis=registration&sort=push&after=' + page['next'], self.candidate).json()
         self.assertEqual([r['person_id'] for r in nxt['rows']], [w[0] for w in want[50:100]])
         back = self.get('/api/v3/people?basis=registration&sort=push&dir=prev&after=' + nxt['prev'], self.candidate).json()
@@ -253,13 +272,24 @@ class PeopleAndProfileTests(TestCase):
         self.assertNotIn('push', person['cards'])
 
     def test_the_profile_gives_push_and_its_two_parts(self):
-        for person, sup_pct, part_pct, push, _ in self.stored_push()[:2] + self.stored_push()[-2:]:
+        for person, score, turnout, soi, push, _ in self.stored_push()[:2] + self.stored_push()[-2:]:
             card = self.get('/api/v3/person?id=' + person, self.candidate).json()['cards']['push']
-            s, p = sup_pct / 100.0, part_pct / 100.0
-            self.assertAlmostEqual(card['undecided'], 100.0 * (1 - abs(2 * s - 1)) * p, places=5)      # undecided and likely to vote
-            self.assertAlmostEqual(card['supporter'], 100.0 * s * (1 - p), places=5)                    # supporter who may not vote
+            undecided, supporter = self.hand_parts(score, turnout, soi)
+            self.assertAlmostEqual(card['undecided'], undecided, places=5)      # undecided and usually votes
+            self.assertAlmostEqual(card['supporter'], supporter, places=5)      # supporter who may not vote
             self.assertAlmostEqual(card['value'], push, places=5)
             self.assertAlmostEqual(card['undecided'] + card['supporter'], card['value'], places=4)
+
+    def test_the_terms_of_a_candidate_store_come_from_its_turnout_literals(self):
+        scoresdb.reset()
+        with override_settings(DATA_DIR=self.candidate):
+            terms = scoresdb.info().terms()
+        self.assertEqual(terms.n, self.fx.n)
+        self.assertEqual(terms.t_source, {'sai': self.fx.n, 'record': 0, 'even': 0})      # every fixture person has the five literals
+        by_pos = {r[5]: r for r in self.stored_push()}
+        for pos in (1, 2, self.fx.n):
+            self.assertAlmostEqual(terms.t[pos - 1], sum(by_pos[pos][2]) / 5 / 100.0, places=12)
+            self.assertAlmostEqual(terms.s[pos - 1], by_pos[pos][1] / 100.0, places=12)
 
     def test_without_a_support_table_sort_sup_is_a_400_and_rows_have_no_sup_pct(self):
         self.assertEqual(self.get('/api/v3/people?basis=registration&sort=sup', self.fx.directory).status_code, 400)

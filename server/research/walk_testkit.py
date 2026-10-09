@@ -8,6 +8,8 @@
                                       builder reads, contacts has no full-text `search` table; scores=False writes no
                                       scores.sqlite3 (a world for a district whose person fields come from the CSV)
     even_left_for(block, a, b)        1/0: are even numbers on the left walking a -> b along an expected block
+    add_potential_inputs(scores, people)  gives that scores.sqlite3 what the untapped potential reads: soi_pct, and the five
+                                      turnout literals as evidence blobs with a value dictionary
 
 The neighbourhood lies near lon -104.80, lat 38.85. Local metres below are x east, y north of that point.
 
@@ -37,6 +39,8 @@ import json
 import math
 import re
 import sqlite3
+import struct
+import zlib
 from collections import namedtuple
 from contextlib import closing
 from datetime import date
@@ -734,6 +738,52 @@ def write_minimal_stores(data_dir, case=None, *, date_format='%Y-%m-%d', scores=
                   street_path=_write_street(directory / 'street.sqlite3', case.rows, sha),
                   roads_path=_write_roads(directory / 'roads.sqlite3'),
                   person_ids=[r['person_id'] for r in case.rows])
+
+
+DECOY_EXPOSURE = 0.137                      # what the evidence blob holds as exposure unless a person names one: never equal to t
+NO_CODE = 0xFFFF                            # a value code that has no row in value_dict
+
+
+def add_potential_inputs(scores_path, people):
+    """Give a testkit scores.sqlite3 the inputs of the untapped potential that it lacks (call it once, after the store is
+    written and before the app opens it). people: {person_id: {'sai': [five literals] or None, 'soi_pct': float or None,
+    'exposure': float (optional)}}, the five literals the turnout-only scores of field_labels.TURNOUT_FIELDS in order, each an
+    int, a text or None (a value with no dictionary row). Adds the soi_pct column when it is missing and sets it; (re)creates
+    `evidence` and `value_dict` with the S.TABLES definitions: a 440-byte zlib blob per person with a 'sai' list, holding the
+    literals' dictionary codes at fields 17 to 21 (codes are the literals' rank among those of the field, so a test cannot pass
+    by reading a code as a value), status 0 (observed), p NaN, and every exposure DECOY_EXPOSURE (or the person's own).
+    A person with 'sai' None gets no blob. Returns {person_id: pos}."""
+    from tools import field_labels as FL
+    fids = [FL.BY_NAME[name]['fid'] for name in FL.TURNOUT_FIELDS]
+    ddl = {name: next(t for t in S.TABLES if t.startswith('CREATE TABLE ' + name)) for name in ('evidence', 'value_dict')}
+    with closing(sqlite3.connect(scores_path)) as db, db:
+        if 'soi_pct' not in {row[1] for row in db.execute('PRAGMA table_info(person)')}:
+            db.execute('ALTER TABLE person ADD COLUMN soi_pct REAL')
+        pos = dict(db.execute('SELECT person_id, pos FROM person'))
+        unknown = sorted(set(people) - set(pos))
+        if unknown:
+            raise KeyError('Not in the score store: %d people' % len(unknown))
+        for name in ('evidence', 'value_dict'):
+            db.execute('DROP TABLE IF EXISTS ' + name)
+            db.execute(ddl[name])
+        literals = [sorted({str(e['sai'][k]) for e in people.values() if e.get('sai') and e['sai'][k] is not None})
+                    for k in range(len(fids))]
+        db.executemany('INSERT INTO value_dict VALUES (?,?,?)',
+                       [(fid, code, text) for fid, texts in zip(fids, literals) for code, text in enumerate(texts)])
+        for person, entry in people.items():
+            if 'soi_pct' in entry:
+                db.execute('UPDATE person SET soi_pct = ? WHERE person_id = ?', (entry['soi_pct'], person))
+            if not entry.get('sai'):
+                continue
+            values, status = [0] * 40, [0] * 40
+            p, exposure = [math.nan] * 40, [0.0] * 40
+            for k, fid in enumerate(fids):
+                value = entry['sai'][k]
+                values[fid] = NO_CODE if value is None else literals[k].index(str(value))
+                exposure[fid] = entry.get('exposure', DECOY_EXPOSURE)
+            blob = struct.pack('<40H40B40f40f', *values, *status, *p, *exposure)
+            db.execute('INSERT INTO evidence VALUES (?,?)', (pos[person], zlib.compress(blob)))
+    return pos
 
 
 def main(argv=None):

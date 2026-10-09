@@ -25,6 +25,7 @@ from tools import scores_schema as S
 from tools.geography_levels import area_label, area_pattern
 
 from . import scoresdb as DB
+from . import untapped
 from .street_views import local_only
 from .v3_http import BadRequest, params
 
@@ -34,7 +35,7 @@ MAX_HOUSEHOLD_PEOPLE = 100
 MAX_SEARCH = 8
 LEAN_PARAMS = {'all', '-2', '-1', '0', '1', '2', 'U'}
 SORTS = {'ovr': None, 'cua': 'ord_cua', 'part': 'ord_part', 'soi': 'ord_soi', 'within': 'ord_within', 'sup': 'ord_sup',
-         'push': 'push'}       # push: the order worked out from the standings (StoreInfo.push), no stored column
+         'push': 'push'}       # push: the order worked out from the untapped potential (StoreInfo.push), no stored column
 RANK_COLUMNS = {'ovr': ('ovr_rank', 'ovr_tie_n'), 'cua': ('cua_rank', 'cua_tie_n'), 'part': ('part_rank', 'part_tie_n'),
                 'soi': ('soi_rank', 'soi_tie_n'), 'within': ('reg_rank', None), 'sup': ('sup_rank', 'sup_tie_n')}   # sup: the support table
 AREA_LEVELS = {'registration': {'block': 'reg_block', 'precinct': 'reg_precinct', 'tract': 'reg_tract', 'zip': 'reg_zip'},
@@ -226,6 +227,7 @@ def people(request, demo):
             'SELECT pos, sup_pct, sup_rank, sup_tie_n FROM support WHERE pos IN (%s)' % marks, [p + 1 for p in positions])
         } if info.support else {}
         rank_column, tie_column = RANK_COLUMNS.get(q['sort'], (None, None))      # push: ranked from the values (push_rank)
+        push = info.push()[0] if info.support else None                           # 100 x untapped potential at the default weights
         for r in ordered:
             code, label = DB.outlook_fields(DB.outlook_code(info, evidence[r['pos']]))
             ranked = support[r['pos']] if q['sort'] == 'sup' else r
@@ -239,7 +241,7 @@ def people(request, demo):
                 'lean_code': code, 'lean_label': label, 'ovr_grade': r['ovr_grade'],
                 'within_pct': DB.number(r['ovr_pct_within_reg']), 'within_group': registration_label(r['reg_group']),
                 **({'sup_pct': DB.number(support[r['pos']]['sup_pct']),
-                    'push': DB.number(FL.push(support[r['pos']]['sup_pct'], r['part_pct']))} if info.support else {}),
+                    'push': DB.number(push[r['pos'] - 1])} if info.support else {}),
             })
     return {
         'rows': rows, 'total': total, 'first': start + 1 if rows else 0, 'last': start + len(rows),
@@ -379,7 +381,9 @@ def person(request, demo):
     if info.support:          # candidate district: a score and a standing, no interval and no grade
         sup = conn.execute('SELECT sup_score, sup_pct FROM support WHERE pos=?', (r['pos'],)).fetchone()
         cards['sup'] = {'score': DB.number(sup['sup_score']), 'pct': DB.number(sup['sup_pct'])}
-        undecided, supporter = FL.push_parts(sup['sup_pct'], r['part_pct'])      # needs a push, in its two parts
+        terms, at = info.terms(), r['pos'] - 1       # needs a push (untapped potential at the default weights), in its two parts
+        undecided, supporter = (100.0 * part for part in FL.potential_parts(
+            terms.s[at], terms.t[at], terms.i[at], *untapped.default_weights()))
         cards['push'] = {'value': DB.number(undecided + supporter), 'undecided': DB.number(undecided), 'supporter': DB.number(supporter)}
     return {
         'person_id': ident, 'name': names.get(ident, ''), 'age': r['age'], 'household_size': r['hh_size'],
