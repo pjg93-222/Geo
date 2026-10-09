@@ -26,6 +26,31 @@ def gap(xy, ends, nodes):
     return min(lines) if lines else None
 
 
+def cells(pool, xy, jump_m):
+    """The end nodes of the pool's blocks bucketed in a grid of jump_m-metre cells: {(i, j): [(span, end)]} over ends with coordinates."""
+    size, grid = jump_m if jump_m > 0 else 1.0, {}
+    for k, b in pool.items():
+        for end in (b['a'], b['b']):
+            if end in xy:
+                grid.setdefault((int(xy[end][0] // size), int(xy[end][1] // size)), []).append((k, end))
+    return grid
+
+
+def reach_from(grid, pool, xy, node, jump_m, reach):
+    """Lower reach[span] to the straight line from `node` to an end of a block of the grid still in the pool, for the ends within jump_m of it
+    (only the 3 x 3 cells around the node can hold one, as a cell is at least jump_m wide)."""
+    if node not in xy:
+        return
+    size = jump_m if jump_m > 0 else 1.0
+    cx, cy = int(xy[node][0] // size), int(xy[node][1] // size)
+    for i in range(cx - 1, cx + 2):
+        for j in range(cy - 1, cy + 2):
+            for k, end in grid.get((i, j), ()):
+                d = hypot(xy[end][0] - xy[node][0], xy[end][1] - xy[node][1])
+                if k in pool and d <= jump_m and d < reach.get(k, d + 1):
+                    reach[k] = d
+
+
 def trim_doors(doors, keep):
     """The keys of the `keep` doors of most value, most valuable first. doors: [(key, value)]; equal values go to the lower key."""
     return [key for key, _ in sorted(doors, key=lambda door: (-door[1], door[0]))[:keep]]
@@ -76,10 +101,12 @@ def grow(pool, xy, asked, jump_m, max_people, max_spans, seed):
     pool = dict(pool)
     order = lambda k: (-pool[k]['value'], k)
     picked, jumps, nodes, trim = [], [], set(), None
+    grid, reach = cells(pool, xy, jump_m), {}       # reach: {block: its gap to the turf} for the blocks within jump_m of it
     total = dict.fromkeys(('doors', 'people', 'value', 'undecided', 'supporter'), 0)
     stopped, nxt, jump = 'exhausted', seed, None
     while nxt is not None:
         block, cut = pool.pop(nxt), None
+        reach.pop(nxt, None)
         if block.get('parts') and total['doors'] + block['doors'] > asked:      # the last block: only the doors that fit
             keep = asked - total['doors']
             cut, block = {'span': nxt, 'kept': keep, 'of': block['doors']}, shrink(block, keep)
@@ -88,7 +115,10 @@ def grow(pool, xy, asked, jump_m, max_people, max_spans, seed):
             break
         picked.append(nxt)
         trim = cut
-        nodes.update((block['a'], block['b']))
+        for node in (block['a'], block['b']):
+            if node not in nodes:
+                nodes.add(node)
+                reach_from(grid, pool, xy, node, jump_m, reach)
         for name in total:
             total[name] += block[name]
         if jump:
@@ -100,11 +130,9 @@ def grow(pool, xy, asked, jump_m, max_people, max_spans, seed):
         if touching:
             nxt, jump = min(touching, key=order), None
             continue
-        # ponytail: a straight scan of the pool for each gap, fine for the few hundred blocks of one precinct; a KD-tree if areas grow
-        near = {k: d for k, d in ((k, gap(xy, (b['a'], b['b']), nodes)) for k, b in pool.items()) if d is not None and d <= jump_m}
-        if near:
-            nxt = min(near, key=order)
-            jump = {'span': nxt, 'metres': round(near[nxt], 1)}
+        if reach:
+            nxt = min(reach, key=order)
+            jump = {'span': nxt, 'metres': round(reach[nxt], 1)}
         else:
             nxt, stopped = None, 'far' if pool else 'exhausted'
     return {'asked': asked, 'spans': picked, 'doors': total['doors'], 'people': total['people'],

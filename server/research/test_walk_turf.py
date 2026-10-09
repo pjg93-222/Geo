@@ -16,9 +16,14 @@ Trimming (blocks that carry 'parts', the people, undecided and supporter part of
 parts added; the last block keeps the doors worth most. Door values here are quarters (exact in floating point), the undecided
 part three quarters of the value.
 """
+import random
+from math import hypot
+from unittest import mock
+
 from django.test import SimpleTestCase
 
-from .walk_turf import best_doors, trim_doors, turf
+from . import walk_turf
+from .walk_turf import best_doors, shrink, trim_doors, turf
 
 XY = {1: (0.0, 0.0), 2: (100.0, 0.0), 3: (200.0, 0.0), 4: (300.0, 0.0), 5: (100.0, 100.0),
       8: (600.0, 0.0), 9: (700.0, 0.0), 10: (800.0, 0.0), 11: (900.0, 0.0)}
@@ -270,3 +275,89 @@ class TrimTests(SimpleTestCase):
         first = turf(blocks, XY, 27)
         self.assertEqual(turf(dict(reversed(list(blocks.items()))), XY, 27), first)
         self.assertEqual(first['doors'], 27)
+
+
+def _reference_grow(pool, xy, asked, jump_m, max_people, max_spans, seed):
+    """The turf grown as before the grid index: a scan of the whole pool for each gap. The grid version must match it exactly."""
+    def gap(ends, nodes):
+        lines = [hypot(xy[end][0] - xy[node][0], xy[end][1] - xy[node][1]) for end in ends if end in xy for node in nodes if node in xy]
+        return min(lines) if lines else None
+    pool = dict(pool)
+    order = lambda k: (-pool[k]['value'], k)
+    picked, jumps, nodes, trim = [], [], set(), None
+    total = dict.fromkeys(('doors', 'people', 'value', 'undecided', 'supporter'), 0)
+    stopped, nxt, jump = 'exhausted', seed, None
+    while nxt is not None:
+        block, cut = pool.pop(nxt), None
+        if block.get('parts') and total['doors'] + block['doors'] > asked:
+            keep = asked - total['doors']
+            cut, block = {'span': nxt, 'kept': keep, 'of': block['doors']}, shrink(block, keep)
+        if total['people'] + block['people'] > max_people or len(picked) >= max_spans:
+            stopped = 'cap'
+            break
+        picked.append(nxt)
+        trim = cut
+        nodes.update((block['a'], block['b']))
+        for name in total:
+            total[name] += block[name]
+        if jump:
+            jumps.append(jump)
+        if total['doors'] >= asked:
+            stopped = 'full'
+            break
+        touching = [k for k, b in pool.items() if b['a'] in nodes or b['b'] in nodes]
+        if touching:
+            nxt, jump = min(touching, key=order), None
+            continue
+        near = {k: d for k, d in ((k, gap((b['a'], b['b']), nodes)) for k, b in pool.items()) if d is not None and d <= jump_m}
+        if near:
+            nxt = min(near, key=order)
+            jump = {'span': nxt, 'metres': round(near[nxt], 1)}
+        else:
+            nxt, stopped = None, 'far' if pool else 'exhausted'
+    return {'asked': asked, 'spans': picked, 'doors': total['doors'], 'people': total['people'],
+            'value': round(total['value'], 4), 'undecided': round(total['undecided'], 4),
+            'supporter': round(total['supporter'], 4), 'jumps': jumps, 'stopped': stopped, 'trim': trim}
+
+
+def synthetic(rng, n, layout):
+    """n blocks laid out 'connected' (chained along rows), 'sparse' (each its own two nodes, 100 to 700 m apart) or 'islands'
+    (sparse plus small clusters far from everything); values are rounded so ties occur, a few nodes have no coordinates."""
+    blocks, xy, side = {}, {}, int(n ** 0.5) + 1
+    spacing = rng.choice((120, 350, 700))
+    for i in range(n):
+        r, c = divmod(i, side)
+        if layout == 'connected':
+            a, b = ('n', r, c), ('n', r, c + 1)
+            xy[a], xy[b] = (c * 100.0, r * 100.0), ((c + 1) * 100.0, r * 100.0)
+        else:
+            a, b = ('a', i), ('b', i)
+            xy[a], xy[b] = (c * spacing + rng.random() * 40, r * spacing), (c * spacing + 50.0, r * spacing + rng.random() * 40)
+        doors = rng.randint(3, 15)
+        value = round(rng.random() * 4, 1) + 0.1
+        blocks[i] = {'a': a, 'b': b, 'doors': doors, 'people': doors * 2, 'value': value, 'undecided': value * 0.5, 'supporter': value * 0.5}
+        if rng.random() < 0.3:
+            blocks[i]['parts'] = {(i, str(d)): (2, 0.25 * (d % 4 + 1), 0.25) for d in range(doors)}
+            blocks[i].update(value=sum(u + s for _, u, s in blocks[i]['parts'].values()))
+    if layout == 'islands':
+        for k in range(6):
+            for j in range(rng.randint(1, 4)):
+                a, b = ('i', k, j), ('i', k, j + 1)
+                xy[a], xy[b] = (1e5 * (k + 1) + j * 60.0, -5e4), (1e5 * (k + 1) + j * 60.0 + 50.0, -5e4)
+                blocks[10 ** 6 + k * 10 + j] = {'a': a, 'b': b, 'doors': 2, 'people': 4, 'value': 50.0 - k, 'undecided': 1, 'supporter': 1}
+    for node in rng.sample(sorted(xy, key=repr), max(1, len(xy) // 50)):
+        del xy[node]
+    return blocks, xy
+
+
+class TurfGridIndexTests(SimpleTestCase):
+    def test_the_grid_index_picks_what_the_full_scan_picked(self):
+        for seed, (n, layout) in enumerate([(40, 'connected'), (60, 'sparse'), (120, 'sparse'), (80, 'islands'), (150, 'islands')] * 4):
+            rng = random.Random(seed)
+            blocks, xy = synthetic(rng, n, layout)
+            for asked in (1, 25, 120, 400, 5000):
+                for jump_m, max_people, max_spans in ((400.0, 1500, 200), (150.0, 10000, 30), (0.0, 10000, 200), (800.0, 300, 200)):
+                    got = turf(blocks, xy, asked, jump_m, max_people, max_spans)
+                    with mock.patch.object(walk_turf, 'grow', _reference_grow):
+                        want = turf(blocks, xy, asked, jump_m, max_people, max_spans)
+                    self.assertEqual(got, want, (seed, n, layout, asked, jump_m, max_people, max_spans))
