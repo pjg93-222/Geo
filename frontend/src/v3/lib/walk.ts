@@ -3,6 +3,7 @@
 import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkScores,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkTurf,WalkVoter,WalkWindow} from '../api/walkTypes';
 import {csvValue} from './csv.ts';
 import {MAX_LIST_PEOPLE,MAX_PLAN_SPANS,parseSpansParam,parseTrim} from './plan.ts';
+import {marginBin} from './opinions.ts';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -669,11 +670,11 @@ export function doorBreaks(values:readonly number[],bins=5):number[]{
   }
   return out;
 }
-/** The party code (as on file; '' = none) with the most voters on a block; a tie is "mixed" and no voters is "none". */
-export function majorParty(c:Record<string,number>):string{
-  const top=Math.max(0,...Object.values(c));if(!(top>0))return 'none';
-  const lead=Object.keys(c).filter(k=>c[k]===top);
-  return lead.length===1?lead[0]:'mixed';
+/** The party lean of a block from its voters per party code: the opinions.MARGIN_LABELS step (0..4) of its D share minus its R share,
+ *  every voter (U and other codes too) counted in the shares; null when the block has no voters. */
+export function blockLean(c:Record<string,number>):number|null{
+  const total=Object.values(c).reduce((sum,n)=>sum+(n>0?n:0),0);
+  return total>0?marginBin((c.D??0)/total,(c.R??0)/total):null;
 }
 /** A party code for the map key: "W Working Families" when the district knows the code, "Code T" when it does not. */
 export const partyName=(code:string,names:Record<string,string>):string=>!code?'No code':names[code]?`${code} ${names[code]}`:`Code ${code}`;

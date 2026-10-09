@@ -52,7 +52,7 @@ test('colors: every area with registered people is colored, small ones included;
     assert.equal(bins[ids.length], A.BIN_PENDING);
   }
   const lean = A.binsFor(p, 'lean', 'share', meta);
-  assert.ok([0, 1, 2, 3, 4].every(i => lean[i] < 5), 'registration colors too'); assert.equal(lean[5], A.BIN_NONE);
+  assert.ok([0, 1, 2, 3, 4].every(i => lean[i] === 3), 'registration colors too: D 40% and R 30% is D +10'); assert.equal(lean[5], A.BIN_NONE);
   assert.ok(A.BIN_NONE >= 5 && A.BIN_PENDING >= 5 && A.BIN_NONE !== A.BIN_PENDING, 'sentinels sit above every class');
 });
 

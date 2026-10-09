@@ -6,7 +6,7 @@ import {ENDASH,MIDDOT,binOf,int,round} from './format.ts';
 import {areaAt,type UntappedAreas,type UntappedWeights} from './untapped.ts';
 
 export const SHARE_RAMP=['#E6F1EC','#C2E0DB','#8BC2BC','#54979B','#286D73'];
-export const LEAN_RAMP=['#95ADCE','#E7A490','#C6C2D3','#F5F1E9','#E5DFDA'];
+export const LEAN_RAMP=['#BE5E43','#DD9E85','#E5DFDA','#8DACCF','#4978AF'];   // --strong-r .. --strong-d: the steps of opinions.MARGIN_LABELS
 /** Bivariate palette, index = 3 * (first layer's third) + (second layer's third). The first layer runs teal across (--s1, a light --s3, a
  *  deepened --s4), the second runs plum down (white, a pale lavender, a mid --accent), each cell the product of the two. Both axes darken
  *  at every step, and the lowest cell is at least 3:1 in luminance from each of the other three corners (tested). */

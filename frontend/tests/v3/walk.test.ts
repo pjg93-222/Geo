@@ -197,7 +197,7 @@ test('door script copy follows the neutral-wording gate', () => {
 
 // --- walk screen helpers: streets in the list, titles, history key, map shading, results in the CSV -------------------
 import {
-  MAX_WALK_STREETS, defaultListTitle, doorBreaks, doorsOnSide, historyKey, initialResults, listLabel, majorParty, mergePick, nextSide,
+  MAX_WALK_STREETS, defaultListTitle, doorBreaks, doorsOnSide, historyKey, initialResults, listLabel, blockLean, mergePick, nextSide,
   parseStreetsParam, partyName, sideWords, streetsParam, yearRange
 } from '../../src/v3/lib/walk.ts';
 
@@ -258,10 +258,12 @@ test('map shading: door-count edges give each shade about the same number of blo
   for (let n = 0; n < 40; n++) { const e = doorBreaks(Array.from({length: n}, (_, i) => (i * 7) % 11)); assert.deepEqual(e, [...e].sort((a, b) => a - b)); assert.equal(new Set(e).size, e.length); }
 });
 
-test('map shading: largest party on a block, ties are mixed', () => {
-  assert.equal(majorParty({D: 5, R: 2, U: 1}), 'D'); assert.equal(majorParty({R: 1, U: 3, L: 1}), 'U'); assert.equal(majorParty({D: 1, W: 2}), 'W');
-  assert.equal(majorParty({D: 1, R: 0, '': 2}), ''); assert.equal(majorParty({D: 3, R: 3, U: 1}), 'mixed'); assert.equal(majorParty({G: 1, L: 1}), 'mixed');
-  assert.equal(majorParty({}), 'none'); assert.equal(majorParty({D: 0, R: 0}), 'none');
+test('map shading: party lean of a block, D share minus R share over every voter, U never picked', () => {
+  assert.equal(blockLean({D: 5, R: 2, U: 1}), 4, 'D +37.5'); assert.equal(blockLean({R: 5, D: 2, U: 1}), 0, 'R +37.5');
+  assert.equal(blockLean({D: 2, R: 1, U: 7}), 3, 'U leads, D +10: the D lean step'); assert.equal(blockLean({D: 1, R: 2, U: 7}), 1, 'R +10');
+  assert.equal(blockLean({D: 3, R: 3, U: 1}), 2, 'even'); assert.equal(blockLean({U: 9}), 2, 'only unaffiliated: the centre'); assert.equal(blockLean({G: 1, L: 1}), 2);
+  assert.equal(blockLean({D: 1, R: 0, '': 19}), 3, 'D +5 exactly'); assert.equal(blockLean({D: 0, R: 1, W: 5, '': 14}), 1, 'R +5 exactly');
+  assert.equal(blockLean({}), null); assert.equal(blockLean({D: 0, R: 0}), null);
   assert.equal(partyName('W', {W: 'Working Families'}), 'W Working Families'); assert.equal(partyName('T', {W: 'Working Families'}), 'Code T'); assert.equal(partyName('', {}), 'No code');
 });
 

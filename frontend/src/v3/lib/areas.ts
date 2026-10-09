@@ -1,7 +1,7 @@
 // Derivations over the columnar area payload: color bins for the map and the numbers of the area rails.
 import type {AreasPayload,Group,IndexLayer,Meta} from '../types';
 import {binOf,countLabel,leanBand,likelyRange,likelyShare,round,type Level} from './format';
-import {registrationBin} from './opinions';
+import {marginBin} from './opinions';
 
 // The sentinels sit above every class index, so a palette of up to 250 colors fits (the bivariate map has nine).
 // BIN_NONE is an area with nothing to color: no registered people, or no value for the chosen layer. It gets a plain pale fill.
@@ -26,8 +26,8 @@ export function binsFor(p:AreasPayload,group:IndexLayer,layer:Layer,meta:Meta):U
     if(p.status[i]!=='ok'){out[i]=BIN_NONE;continue;}
     if(layer==='measured'){const m=p.groups[group]?.measured[i];out[i]=m==null?BIN_NONE:binOf(m,meta.measured_breaks);continue;}
     if(group==='lean'){
-      const c=p.groups.lean,d=c.share_d[i],r=c.share_r[i],u=c.share_u[i];
-      out[i]=d==null||r==null||u==null?BIN_NONE:registrationBin({d,r,u,o:Math.max(0,1-d-r-u)});continue;
+      const c=p.groups.lean,d=c.share_d[i],r=c.share_r[i];
+      out[i]=d==null||r==null?BIN_NONE:marginBin(d,r);continue;
     }
     const t=p.groups[group]?.top10[i];
     out[i]=t==null?BIN_NONE:binOf(t,meta.share_breaks);

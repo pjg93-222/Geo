@@ -8,14 +8,14 @@ import type {HouseholdPopover,StreetPayload,OverlayLayer} from '../types';
 import {ENDASH,MIDDOT,householdLabel,int,round,seconds} from '../lib/format';
 import {LAYER_NAME,luminance,type Mode,type Overlay,type OverlayLegend} from '../lib/overlay';
 import {useTiming} from '../lib/timing';
+import {MARGIN_LABELS} from '../lib/opinions';
 import {uPx} from '../lib/units';
 
 const SHARE_LABELS=['Under 5%',`5${ENDASH}8%`,`8${ENDASH}12%`,`12${ENDASH}18%`,'18%+'];
 const MEASURED_LABELS=['Under 20%',`20${ENDASH}40%`,`40${ENDASH}60%`,`60${ENDASH}80%`,'80%+'];
-const LEAN_LABELS=['Dem.','Rep.','Unaff.','Other','Mixed'];
 const HH_LABELS=[`0${ENDASH}20`,`20${ENDASH}40`,`40${ENDASH}60`,`60${ENDASH}80`,`80${ENDASH}100`];
 const RAMP=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)'];
-const LEAN_RAMP=['var(--reg-d)','var(--reg-r)','var(--reg-u)','var(--reg-o)','var(--centre)'];
+const LEAN_RAMP=['var(--strong-r)','var(--lean-r)','var(--centre)','var(--lean-d)','var(--strong-d)'];
 const TOP_NAME:Partial<Record<OverlayLayer,string>>={ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',sup:'Candidate support'};
 
 /** `overlay` is the legend of a density, blend or two-layer map; without it this is the legend of an index layer (share, lean or % measured). */
@@ -23,7 +23,7 @@ export function Legend(p:{group:OverlayLayer;measured:boolean;onMeasured:(v:bool
   let title:string,sub:string,labels:string[],ramp:string[];
   if(p.overlay){({title,sub,labels,ramp}=p.overlay);}
   else if(p.measured){title='% measured';sub='Area mean of % measured';labels=MEASURED_LABELS;ramp=RAMP;}
-  else if(p.group==='lean'){title='Registration';sub='Largest registration group; Mixed means a tie';labels=LEAN_LABELS;ramp=LEAN_RAMP;}
+  else if(p.group==='lean'){title='Registration';sub='Democratic minus Republican share of registered people, in points';labels=[...MARGIN_LABELS];ramp=LEAN_RAMP;}
   else{title=INDEX_NAME[p.group];sub=`Share of people in the ${TOP_NAME[p.group]} top 10%`;labels=SHARE_LABELS;ramp=RAMP;}
   const axes=p.overlay?.axes;
   return <section className="legend" aria-label="Legend">

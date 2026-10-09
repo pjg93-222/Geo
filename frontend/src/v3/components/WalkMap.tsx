@@ -1,5 +1,5 @@
 // Walk list map: its own MapLibre instance, drawn like the main map (flat land, white roads with a casing, roads loaded for the view).
-// Blocks of the area are shaded by door count or by largest registration group, the route runs over them on the walked side of each
+// Blocks of the area are shaded by door count or by party lean (D share minus R share), the route runs over them on the walked side of each
 // street, and a numbered DOM marker sits at the first door of every stop (no glyph files offline). The map supplements the list, so the
 // canvas is an image for assistive technology and the list below it stays the way to work through every door.
 import {useEffect,useMemo,useRef,useState} from 'react';
@@ -7,11 +7,12 @@ import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type {WalkListPayload,WalkOverviewProps,WalkRun} from '../api/walkTypes';
-import {getFeatures,getRoads} from '../api/client';
+import {getRoads} from '../api/client';
 import {getWalkOverview,type WalkOverview} from '../api/walk';
 import {ZoomControl} from './MapParts';
 import {cx} from './ui';
-import {countText,doorBreaks,majorParty,partyName} from '../lib/walk';
+import {blockLean,countText,doorBreaks} from '../lib/walk';
+import {MARGIN_LABELS} from '../lib/opinions';
 import {uPx} from '../lib/units';
 import {areaParts,cleanLine,doorPoints,isListed,labelPoint,lineLength,listedPrecincts,spotAlong,usableBounds} from '../lib/walkGeo';
 
@@ -27,8 +28,8 @@ const WALK_LINE='#57447B';
 // The colours come from the shared tokens (tokens.css); these are the same values for when a token cannot be read.
 const token=(name:string,fallback:string):string=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 const RAMP=[['--s1','#E6F1EC'],['--s2','#C2E0DB'],['--s3','#8BC2BC'],['--s4','#54979B'],['--s5','#286D73']] as const;
-// D, R and U have their own shade; every other code shares the 'other' one and is named in the key when it leads a block.
-const PARTY=[['D','--reg-d','#95ADCE','Dem.'],['R','--reg-r','#E7A490','Rep.'],['U','--reg-u','#C6C2D3','Unaff.'],['other','--reg-o','#F5F1E9','Other'],['mixed','--centre','#E5DFDA','Mixed']] as const;
+// The five steps of party lean, R side first, as on the main map's registration layer.
+const LEAN=[['--strong-r','#BE5E43'],['--lean-r','#DD9E85'],['--centre','#E5DFDA'],['--lean-d','#8DACCF'],['--strong-d','#4978AF']] as const;
 
 /** Shade for each door-count band, spread over the five-step ramp (one band uses the middle shade). */
 function doorColor(breaks:number[],ramp:string[]):Expr{
@@ -39,23 +40,22 @@ function doorColor(breaks:number[],ramp:string[]):Expr{
   breaks.forEach((b,i)=>e.push(b,shade(i+1)));
   return e as Expr;
 }
-function partyColor(c:Record<string,string>):Expr{
-  return ['match',['get','maj'],'D',c.D,'R',c.R,'U',c.U,'mixed',c.mixed,c.other] as unknown as Expr;   // 'none' is filtered out
+function partyColor(c:readonly string[]):Expr{
+  return ['match',['get','lean'],0,c[0],1,c[1],2,c[2],3,c[3],c[4]] as unknown as Expr;   // a block with no voters (-1) is filtered out
 }
 
-interface Prepared{fc:GeoJSON.FeatureCollection;breaks:number[];leads:string[]}
+interface Prepared{fc:GeoJSON.FeatureCollection;breaks:number[]}
 function prepare(data:WalkOverview):Prepared{
-  const features:GeoJSON.Feature[]=[];const doors:number[]=[];const leads=new Set<string>();
+  const features:GeoJSON.Feature[]=[];const doors:number[]=[];
   for(const f of data?.features??[]){
     if(f?.geometry?.type!=='LineString')continue;
     const p=(f.properties??{}) as Partial<WalkOverviewProps>;
     const count=Object.fromEntries(Object.entries(p.parties??{}).map(([k,v])=>[k,Number(v)||0]));
-    const n=Number(p.doors)||0,maj=majorParty(count);
-    if(!['D','R','U','mixed','none'].includes(maj))leads.add(maj);
-    features.push({type:'Feature',geometry:f.geometry,properties:{doors:n,maj}});
+    const n=Number(p.doors)||0,lean=blockLean(count)??-1;
+    features.push({type:'Feature',geometry:f.geometry,properties:{doors:n,lean}});
     doors.push(n);
   }
-  return {fc:{type:'FeatureCollection',features},breaks:doorBreaks(doors),leads:[...leads].sort()};
+  return {fc:{type:'FeatureCollection',features},breaks:doorBreaks(doors)};
 }
 
 const runLine=(r:WalkRun):[number,number][]=>{
@@ -75,12 +75,11 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
   const mapRef=useRef<maplibregl.Map|null>(null);
   const [ready,setReady]=useState(false);const [failed,setFailed]=useState(false);
   const [overview,setOverview]=useState<WalkOverview|null>(null);
-  const [codes,setCodes]=useState<Record<string,string>>({});
   const stop=useRef(onStop);stop.current=onStop;
   const area={ss:payload.query?.ss??'',sh:payload.query?.sh??'',precinct:payload.query?.precinct??''};
   const areaKey=`${area.ss}|${area.sh}|${area.precinct}`;
   const prepared=useMemo(()=>overview?prepare(overview):null,[overview]);
-  const colors=useMemo(()=>({ramp:RAMP.map(([n,f])=>token(n,f)),party:Object.fromEntries(PARTY.map(([k,n,f])=>[k,token(n,f)])) as Record<string,string>}),[]);
+  const colors=useMemo(()=>({ramp:RAMP.map(([n,f])=>token(n,f)),party:LEAN.map(([n,f])=>token(n,f))}),[]);
 
   // ---- create ------------------------------------------------------------------------------------------------------------
   useEffect(()=>{
@@ -158,11 +157,6 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
 
   // ---- blocks of the area --------------------------------------------------------------------------------------------------
   useEffect(()=>{
-    const ac=new AbortController();
-    getFeatures(ac.signal).then(f=>setCodes(f.party_codes??{})).catch(()=>{/* the key then shows the bare codes */});
-    return ()=>ac.abort();
-  },[]);
-  useEffect(()=>{
     if(!area.ss&&!area.sh&&!area.precinct){setOverview(null);return;}
     const ac=new AbortController();
     getWalkOverview(area,ac.signal).then(setOverview).catch(()=>{if(!ac.signal.aborted)setOverview(null);});
@@ -175,7 +169,7 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
   useEffect(()=>{
     const m=mapRef.current;if(!m||!ready)return;
     m.setPaintProperty('overview','line-color',shade==='doors'?doorColor(prepared?.breaks??[],colors.ramp):partyColor(colors.party));
-    m.setFilter('overview',shade==='doors'?['>',['get','doors'],0]:['!=',['get','maj'],'none']);
+    m.setFilter('overview',shade==='doors'?['>',['get','doors'],0]:['>=',['get','lean'],0]);
   },[ready,shade,prepared,colors]);
 
   // ---- route and stops -----------------------------------------------------------------------------------------------------
@@ -276,8 +270,8 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
       {shading&&(shade==='doors'
         ?<div className="walk-legend-group"><p className="walk-legend-title">Doors per block</p>
           <div className="walk-ramp"><span>fewer</span><ul className="walk-swatches" aria-hidden="true">{colors.ramp.map((c,i)=><li key={i}><i style={{background:c}}/></li>)}</ul><span>more</span></div></div>
-        :<div className="walk-legend-group"><p className="walk-legend-title">Largest party per block</p>
-          <ul className="walk-swatches party">{[...PARTY.slice(0,3).map(([k,,,name])=>[k,k,name]),...prepared.leads.map(c=>[c,'other',partyName(c,codes)]),['mixed','mixed','Mixed']].map(([id,k,name])=><li key={id}><i style={{background:colors.party[k]}}/><span>{name}</span></li>)}</ul></div>)}
+        :<div className="walk-legend-group"><p className="walk-legend-title">Party lean per block</p>
+          <ul className="walk-swatches party">{MARGIN_LABELS.map((name,i)=><li key={name}><i style={{background:colors.party[i]}}/><span>{name}</span></li>)}</ul></div>)}
       <ul className="walk-lines">
         <li><i className="walk-sample solid"/>Walk</li>
         <li><i className="walk-sample dashed"/>Between stops</li>

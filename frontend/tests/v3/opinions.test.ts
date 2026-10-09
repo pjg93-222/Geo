@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {describeOpinions,registrationBin} from '../../src/v3/lib/opinions.ts';
+import {MARGIN_LABELS,describeOpinions,marginBin} from '../../src/v3/lib/opinions.ts';
 test('distinct registration and opinion are not averaged into a middle position',()=>{
   const fields=[{field:'svi_party_registration',value:'Democrat'},{field:'sci_ct_political_partyaff_gop',value:'Yes'},{field:'sci_ct_political_outlk_vconserv',value:'Yes'}];
   assert.deepEqual(describeOpinions(fields),{affiliation:'Republican',outlook:'Very conservative'});
@@ -17,8 +17,15 @@ test('a conservative Democrat and an unaffiliated Democratic identifier preserve
   const fields=[{field:'svi_party_registration',value:'Unaffiliated'},{field:'sci_ct_political_partyaff_democrat',value:'Yes'},{field:'sci_ct_political_outlk_swconserv',value:'Yes'}];
   assert.deepEqual(describeOpinions(fields),{affiliation:'Democrat',outlook:'Somewhat conservative'});
 });
-test('registration map preserves largest category and ties without a partisan average',()=>{
-  assert.equal(registrationBin({d:.3,r:.4,u:.2,o:.1}),1);
-  assert.equal(registrationBin({d:.4,r:.4,u:.1,o:.1}),4);
-  assert.equal(registrationBin({d:.05,r:.05,u:.85,o:.05}),2);
+test('registration map: five steps of D share minus R share, breaks at 5 and 15 points either way',()=>{
+  assert.deepEqual([...MARGIN_LABELS],['R +15 or more','R +5 to 15','Within 5','D +5 to 15','D +15 or more']);
+  for(const [d,r,want] of [[.10,.40,0],[.20,.35,0],[.20,.34,1],[.30,.40,1],[.30,.35,1],[.30,.34,2],[.40,.40,2],[.34,.30,2],[.35,.30,3],[.40,.30,3],[.34,.20,3],[.35,.20,4],[.60,.10,4],[0,0,2],[1,0,4],[0,1,0]] as const)
+    assert.equal(marginBin(d,r),want,`${d} - ${r}`);
+  assert.equal(marginBin(.2,.15),3,'exactly 5 points is the lean step, whatever the floating point');
+  assert.equal(marginBin(.15,.2),1);
+});
+test('registration map: an area where unaffiliated is the largest group still shows its D and R lean',()=>{
+  assert.equal(marginBin(.18,.30),1,'U 50%: R +12 is the R lean step, not a grey Unaffiliated');
+  assert.equal(marginBin(.25,.08),4,'U 60%: D +17');
+  assert.equal(marginBin(.05,.05),2,'U 85%, D and R even: the centre');
 });
