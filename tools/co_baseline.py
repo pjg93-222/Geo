@@ -12,7 +12,8 @@ What it records (stdlib only; the server it starts needs the repo's own Python, 
              sha256 of the rows dumped in a sorted, deterministic order (primary key, else every column), plus the
              sha256 of the schema. Never the raw file bytes. The stores are opened read-only.
   files      sha256 of .local/.walk-salt, of every file of the snapshots .local/snapshots/co-cd005-* (the derived/
-             folder is a rebuildable cache and is listed apart), and of the row-framework files the bundle is built
+             folder is a rebuildable cache and is listed apart; `check` passes a derived/ file the fixture does not
+             list as INTENDED, the live server builds those on demand), and of the row-framework files the bundle is built
              from (the three rowfw parquet files with their manifests, the frozen config/plan/criteria files, the area
              table and the suppressed-id list). The frozen three are checked against tools.area_layers.FROZEN_SHA256.
   endpoints  golden answers (status, content type, byte count, sha256 of the body) of a fixed list of GET endpoints,
@@ -237,6 +238,21 @@ INTENDED = {'walk_overview_precinct': ('O-10 party codes as themselves', overvie
 ADDED = {'parties_%s_%s' % (basis, level): ('O-10 party codes as themselves', 'areas_%s_%s' % (basis, level), parties_split)
          for basis, level in (('registration', 'block'), ('registration', 'precinct'), ('registration', 'tract'),
                               ('registration', 'zip'), ('residence', 'tract'), ('residence', 'zip'))}
+
+
+# Ruled: the live server writes a snapshot's derived/ memo files the first time someone browses a level, so a derived_cache file
+# of a recorded snapshot that the fixture does not list is expected. One the fixture lists that changed or went missing still fails.
+LAZY_CACHE = (re.compile(r'NEW +files\.snapshots\.%s\.derived_cache\.\S+' % SNAPSHOT_DIR.pattern),
+              'derived cache built on demand by the live server')
+
+
+def lazy_cache_intended(lines):
+    """`lines` without the NEW derived_cache files of a recorded snapshot, each printed as INTENDED."""
+    pattern, ruling = LAZY_CACHE
+    for line in lines:
+        if pattern.fullmatch(line):
+            print('INTENDED %s (%s)' % (line.split(None, 1)[1], ruling))
+    return [line for line in lines if not pattern.fullmatch(line)]
 
 
 def log(message):
@@ -1226,6 +1242,7 @@ def run(mode, args):
     if 'api' in parts:
         compare({'snapshot': expected.get('snapshot')}, {'snapshot': current.get('snapshot')}, '', lines)
         compare_endpoints(expected.get('endpoints', {}), current['endpoints'], bodies, BODY_DIR, lines, rules)
+    lines = lazy_cache_intended(lines)
     if ctx:
         lines = unmask_unexplained(lines, ctx) + unmask_final(ctx)
     problems += lines

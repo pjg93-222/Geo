@@ -884,5 +884,46 @@ class UnmaskGateTests(unittest.TestCase):
             B.run('record', SimpleNamespace(**base))
 
 
+class LazyCacheTests(unittest.TestCase):
+    """The ruled difference of the files part: a derived_cache file the live server built on demand passes, nothing else does."""
+
+    PATH = 'files.snapshots.%s.derived_cache.derived/' % OLD_KEY
+
+    def snapshot(self, derived, core=None, key=OLD_KEY):
+        return {'snapshots': {key: {'core': core or {'rows.json': 'c' * 64}, 'derived_cache': derived}}}
+
+    def lines(self, recorded, now):
+        out, printed = [], io.StringIO()
+        B.compare(recorded, now, 'files', out)
+        with contextlib.redirect_stdout(printed):
+            left = B.lazy_cache_intended(out)
+        return left, printed.getvalue().splitlines()
+
+    def test_new_derived_files_pass_as_intended_one_line_each(self):
+        built = {'derived/v3_areas_block.json': 'a' * 64, 'derived/v3_areas_block.json.gz': 'b' * 64}
+        left, printed = self.lines(self.snapshot({}), self.snapshot(built))
+        self.assertEqual(left, [])
+        self.assertEqual(printed, ['INTENDED %s%s (derived cache built on demand by the live server)' % (self.PATH, name[len('derived/'):])
+                                   for name in built])
+
+    def test_a_listed_derived_file_that_changed_or_went_missing_still_fails(self):
+        listed = {'derived/a.json': 'a' * 64, 'derived/b.json': 'b' * 64}
+        left, printed = self.lines(self.snapshot(listed), self.snapshot({'derived/a.json': 'f' * 64, 'derived/c.json': 'c' * 64}))
+        self.assertEqual([line.split(':')[0] for line in left], ['DIFFERENT ' + self.PATH + 'a.json', 'MISSING   ' + self.PATH + 'b.json'])
+        self.assertEqual(len(printed), 1)
+        self.assertIn(self.PATH + 'c.json', printed[0])
+
+    def test_nothing_else_new_passes(self):
+        other = 'co-cd005-' + 'f' * 12
+        recorded = self.snapshot({})
+        now = {'snapshots': {**self.snapshot({}, core={'rows.json': 'c' * 64, 'extra.json': 'd' * 64})['snapshots'],
+                             **self.snapshot({'derived/x.json': 'e' * 64}, key=other)['snapshots']},
+               'rowfw': {'new.csv': 'a' * 64}}
+        left, printed = self.lines({**recorded, 'rowfw': {}}, now)
+        self.assertEqual(printed, [])
+        self.assertEqual(sorted(line.split()[1] for line in left),
+                         sorted(['files.rowfw.new.csv', 'files.snapshots.%s' % other, 'files.snapshots.%s.core.extra.json' % OLD_KEY]))
+
+
 if __name__ == '__main__':
     unittest.main()
