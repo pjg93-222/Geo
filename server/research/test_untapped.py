@@ -17,6 +17,7 @@ import copy
 import gzip
 import itertools
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -28,6 +29,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+from django.conf import settings
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 
 from tools import build_walk as B
@@ -160,6 +162,133 @@ class WeightTests(SimpleTestCase):
             for name in ('wp', 'wi'):
                 with self.assertRaises(BadRequest, msg=repr(text)):
                     self.parse({name: text})
+
+
+def chance(x, a, b):
+    """A smooth rising chance of voting, 1 / (1 + exp(-(a + b x))): the truth that the invented records are drawn from."""
+    return 1 / (1 + np.exp(-(a + b * np.asarray(x, dtype=float))))
+
+
+def binomial_people(rng, count, a, b, trials=6, truth=None):
+    """count people: raw t a whole number of per cent on 0..1, 1..trials eligible generals, and a vote record drawn from the
+    chance `truth(raw t)` (default: the smooth chance of (a, b)). Returns (x, voted, elig)."""
+    x = rng.integers(0, 101, count) / 100
+    elig = rng.integers(1, trials + 1, count)
+    return x, rng.binomial(elig, chance(x, a, b) if truth is None else truth(x)), elig
+
+
+def groups(*rows):
+    """People in groups of equal raw t: rows of (raw t, votes of each person, generals of each person, people).
+    Returns (x, voted, elig) arrays."""
+    return tuple(np.concatenate([np.full(row[3], row[k], dtype=float) for row in rows]) for k in (0, 1, 2))
+
+
+class FitTurnoutTests(SimpleTestCase):
+    """fit_turnout: the general-election record made non-decreasing in the raw chance of voting by weighted pooled adjacent
+    violators, as the points (block centre, block rate) of a curve; t is that curve at the raw t."""
+
+    def test_the_pooling_by_hand_weights_by_eligible_generals(self):
+        # 400 people at each raw t; rates .2 .7 .5 .8 .7. Generals per person 10, 10, 30, 10, 10 (votes 2, 7, 15, 8, 7).
+        # .7 then .5 is a violation: pooled (7 + 15) / (10 + 30) = .55 at the centre (.2 x 10 + .3 x 30) / 40 = .275.
+        # .8 then .7: pooled 15 / 20 = .75 at (.4 + .5) / 2 = .45. The first point stands alone.
+        x, voted, elig = groups((.1, 2, 10, 400), (.2, 7, 10, 400), (.3, 15, 30, 400), (.4, 8, 10, 400), (.5, 7, 10, 400))
+        centres, values = U.fit_turnout(x, voted, elig)
+        np.testing.assert_allclose(centres, [.1, .275, .45], rtol=0, atol=1e-12)
+        np.testing.assert_allclose(values, [.2, .55, .75], rtol=0, atol=1e-12)
+        np.testing.assert_allclose(np.interp([0, .1, .275, .45, 1], centres, values), [.2, .2, .55, .75, .75], atol=1e-12)
+        np.testing.assert_allclose(np.interp(.19375, centres, values), .2 + (.55 - .2) * (.19375 - .1) / (.275 - .1), atol=1e-12)
+
+    def test_a_record_that_already_rises_keeps_one_point_per_raw_t(self):
+        x, voted, elig = groups(*[(k / 10, k, 10, 250) for k in range(1, 10)])
+        centres, values = U.fit_turnout(x, voted, elig)
+        np.testing.assert_allclose(centres, np.arange(1, 10) / 10, atol=1e-12)
+        np.testing.assert_allclose(values, np.arange(1, 10) / 10, atol=1e-12)
+
+    def test_it_recovers_a_known_step(self):
+        x = np.repeat(np.arange(101) / 100, 20)                                  # 2020 people, raw t 0 to 1
+        voted, elig = np.where(x <= .5, 2.0, 9.0), np.full(len(x), 10.0)         # .2 up to .5, .9 above: exact, so the blocks are exact
+        centres, values = U.fit_turnout(x, voted, elig)
+        np.testing.assert_allclose(values, [.2, .9], atol=1e-12)
+        np.testing.assert_allclose(centres, [.25, .755], atol=1e-12)             # the mean of 0..50 and of 51..100, per cent
+        truth = lambda t: np.where(np.asarray(t) <= .5, .2, .9)
+        for t in (0, .1, .25, .755, .9, 1):                                      # at and beyond the block centres, within 0.02
+            self.assertAlmostEqual(float(np.interp(t, centres, values)), float(truth(t)), delta=0.02, msg=t)
+        rng = np.random.default_rng(31)                                          # drawn records: away from the jump the curve is within 0.02
+        x, voted, elig = binomial_people(rng, 200_000, 0, 0, truth=truth)
+        centres, values = U.fit_turnout(x, voted, elig)
+        away = np.array([t for t in np.arange(101) / 100 if abs(t - .5) >= .2])
+        self.assertLessEqual(np.abs(np.interp(away, centres, values) - truth(away)).max(), 0.02)
+
+    def test_it_recovers_a_known_smooth_curve_within_0_02_everywhere(self):
+        rng = np.random.default_rng(20261009)
+        for a, b in ((-1.5, 7.0), (-1.0, 4.0), (0.5, 2.0)):
+            x, voted, elig = binomial_people(rng, 500_000, a, b, trials=20)
+            centres, values = U.fit_turnout(x, voted, elig)
+            grid = np.arange(101) / 100
+            self.assertLessEqual(np.abs(np.interp(grid, centres, values) - chance(grid, a, b)).max(), 0.02, (a, b))
+
+    def test_the_curve_never_turns_the_order_round_and_rises_strictly_between_its_points(self):
+        for seed, (a, b, count) in enumerate(((-1.0, 4.0, 5000), (0.0, 0.5, 3000), (1.0, 0.1, 40_000))):    # the last two are mostly noise
+            x, voted, elig = binomial_people(np.random.default_rng(seed), count, a, b, trials=3)
+            centres, values = U.fit_turnout(x, voted, elig)
+            self.assertTrue(np.all(np.diff(centres) > 0) and np.all(np.diff(values) > 0), (a, b))
+            self.assertTrue(0 <= values[0] and values[-1] <= 1)
+            grid = np.linspace(0, 1, 2001)
+            curve = np.interp(grid, centres, values)
+            self.assertTrue(np.all(np.diff(curve) >= 0))                                          # non-decreasing everywhere
+            inside = (grid >= centres[0]) & (grid <= centres[-1])
+            self.assertTrue(np.all(np.diff(curve[inside]) > 0))                                   # strictly rising between the points
+            self.assertTrue(np.all(curve[grid < centres[0]] == values[0]) and np.all(curve[grid > centres[-1]] == values[-1]))
+
+    def test_the_curve_matches_the_record_taken_together(self):
+        x, voted, elig = binomial_people(np.random.default_rng(11), 40_000, -0.8, 3.5)
+        centres, values = U.fit_turnout(x, voted, elig)
+        self.assertAlmostEqual((elig * np.interp(x, centres, values)).sum() / elig.sum(), voted.sum() / elig.sum(), delta=0.005)
+
+    def test_the_fit_needs_one_thousand_people(self):
+        x, voted, elig = binomial_people(np.random.default_rng(3), 1000, -1.0, 4.0)
+        self.assertIsNotNone(U.fit_turnout(x, voted, elig))
+        self.assertIsNone(U.fit_turnout(x[:999], voted[:999], elig[:999]))
+        self.assertIn('fewer than 1000 people', U._fit(x[:999], voted[:999], elig[:999])[1])
+        self.assertEqual(U.FIT_MIN_PEOPLE, 1000)
+
+    def test_a_record_that_does_not_rise_with_the_scores_is_left_alone(self):
+        x, _, elig = binomial_people(np.random.default_rng(5), 3000, 0, 1)
+        falling = np.random.default_rng(6).binomial(elig, .9 - .7 * x)           # pooled into one block
+        flat = elig / 2                                                          # every record half: one block
+        for label, voted in (('falling', falling), ('flat', flat), ('nobody voted', np.zeros(len(x))), ('everybody voted', elig.astype(float))):
+            curve, why = U._fit(x, voted, elig)
+            self.assertIsNone(curve, label)
+            self.assertRegex(why, r'^fewer than 2 blocks', label)
+            self.assertIsNone(U.fit_turnout(x, voted, elig), label)
+        curve, why = U._fit(np.full(len(x), .6), falling, elig)                  # one raw t: one block
+        self.assertIsNone(curve)
+        self.assertRegex(why, r'^fewer than 2 blocks')
+
+    def test_a_value_that_is_not_finite_is_refused(self):
+        x, voted, elig = binomial_people(np.random.default_rng(9), 2000, -1.0, 4.0)
+        at = np.arange(len(x)) == 0
+        for label, args in (('a NaN raw t', (np.where(at, np.nan, x), voted, elig)), ('an infinite raw t', (np.where(at, np.inf, x), voted, elig)),
+                            ('a NaN record', (x, np.where(at, np.nan, voted), elig)), ('infinite generals', (x, voted, np.where(at, np.inf, elig)))):
+            curve, why = U._fit(*args)
+            self.assertIsNone(curve, label)
+            self.assertEqual(why, 'a turnout score or a record is not finite', label)
+            self.assertIsNone(U.fit_turnout(*args), label)
+
+    def test_more_votes_than_eligible_generals_count_as_all_of_them(self):
+        x, voted, elig = binomial_people(np.random.default_rng(17), 2000, -1.0, 4.0)
+        odd = np.arange(len(x)) % 2 == 1
+        over = U.fit_turnout(x, voted + 3 * odd * elig, elig)
+        capped = U.fit_turnout(x, np.where(odd, elig, voted), elig)
+        np.testing.assert_array_equal(over[0], capped[0])
+        np.testing.assert_array_equal(over[1], capped[1])
+
+    def test_people_with_no_eligible_general_carry_no_weight(self):
+        x, voted, elig = binomial_people(np.random.default_rng(19), 2000, -1.0, 4.0)
+        base = U.fit_turnout(x, voted, elig)
+        more = U.fit_turnout(np.append(x, [.33, .66]), np.append(voted, [0, 0]), np.append(elig, [0, 0]))
+        np.testing.assert_array_equal(base[0], more[0])
+        np.testing.assert_array_equal(base[1], more[1])
 
 
 @override_settings(LOCAL_ADMIN_ACCESS=True, HOSTED=False, DEMO_MODE=False, DISTRICT=CANDIDATE)
@@ -313,6 +442,7 @@ class UntappedTests(TestCase):
     def test_t_source_counts_where_each_t_came_from(self):
         terms = U.terms()
         self.assertEqual(terms.t_source, {'sai': SAI_PEOPLE, 'record': 28, 'even': 1})
+        self.assertIsNone(terms.t_fit)                                                   # the small world keeps the raw t
         self.assertEqual(sum(terms.t_source.values()), terms.n)
         self.assertEqual(terms.n, len(self.expected['keys']))
 
@@ -444,8 +574,9 @@ class UntappedTests(TestCase):
         self.assertEqual(body['defaults'], {'wp': 0.5, 'wi': 0.5})
         self.assertEqual(body['t_source'], {'sai': SAI_PEOPLE, 'record': 28, 'even': 1})
         self.assertEqual(body['results'], {'version': '0-0', 'people_knocked': 0})
+        self.assertIsNone(body['t_calibration'])                                         # 38 people are too few to line t up with the record
         self.assertEqual(list(body), ['schema', 'level', 'ids', 'labels', 'people', 'knocked', 'undecided', 'supporter',
-                                      'undecided_i', 'supporter_i', 'defaults', 't_source', 'results'])
+                                      'undecided_i', 'supporter_i', 'defaults', 't_source', 't_calibration', 'results'])
 
     def test_the_third_precinct_by_hand(self):
         body = self.body('precinct')
@@ -576,6 +707,178 @@ class UntappedTests(TestCase):
             self.assertEqual(self.client.get('/api/v3/features').json()['overlay']['layers'], ['ovr', 'cua', 'part', 'soi', 'lean'])
         with override_settings(DISTRICT=CO), mock.patch.object(scoresdb, 'info', return_value=mock.Mock(meta={'support': {}})):
             self.assertNotIn('untapped', self.client.get('/api/v3/features').json()['overlay']['layers'])
+
+
+PRECINCTS = ('5200021301', '5200021302')
+CALIBRATED = re.compile(r'chance of voting calibrated against the general-election record: n=(\d+), (\d+) points, '
+                        r'mean (\d\.\d{4}) -> (\d\.\d{4}) \(record (\d\.\d{4})\)')
+
+
+def write_fit_world(directory, literals, voted, elig):
+    """A score store (person, evidence, value_dict) and a walk store (gen_voted, gen_elig) of len(literals) invented people.
+    literals[k] is the whole number held by all five turnout literals of person k, so raw t = literals[k] / 100; None gives the
+    person no evidence record (no raw t)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    ids = ['f%05d' % k for k in range(len(literals))]
+    with closing(sqlite3.connect(directory / 'scores.sqlite3')) as db, db:
+        db.execute('CREATE TABLE person (pos INTEGER PRIMARY KEY, person_id TEXT UNIQUE NOT NULL, reg_precinct TEXT)')
+        db.executemany('INSERT INTO person VALUES (?,?,?)', [(k + 1, pid, PRECINCTS[k % 2]) for k, pid in enumerate(ids)])
+    T.add_potential_inputs(directory / 'scores.sqlite3', {pid: {'sai': None if lit is None else [int(lit)] * 5}
+                                                          for pid, lit in zip(ids, literals)})
+    with closing(sqlite3.connect(directory / 'walk.sqlite3')) as db, db:
+        db.execute('CREATE TABLE person (person_id TEXT PRIMARY KEY, gen_voted INTEGER, gen_elig INTEGER)')
+        db.executemany('INSERT INTO person VALUES (?,?,?)', zip(ids, map(int, voted), map(int, elig)))
+
+
+@override_settings(LOCAL_ADMIN_ACCESS=True, HOSTED=False, DEMO_MODE=False, DISTRICT=CANDIDATE)
+class CalibratedTermsTests(TestCase):
+    """terms() lines t up against the general-election record when there are 1000 people to do it with, and not otherwise."""
+    A, B = -1.0, 4.0
+
+    def setUp(self):
+        self.client = Client(**LOOPBACK)
+        self.addCleanup(U.reset)
+        U.reset()
+
+    def world(self, fit_people=1500, no_record=40, no_score=30, no_score_no_record=7, falling=False, seed=2026):
+        """Write a world: `fit_people` people with a raw t and an eligible general (record drawn from a chance that rises with
+        raw t, or from one that falls), `no_record` with a raw t and no eligible general, `no_score` with an eligible general
+        and no raw t, `no_score_no_record` with neither. Returns the arrays of everyone, in score-store order."""
+        rng = np.random.default_rng(seed)
+        x, voted, elig = binomial_people(rng, fit_people, self.A, self.B, truth=(lambda t: .9 - .7 * t) if falling else None)
+        extra_x = rng.integers(0, 101, no_record) / 100
+        other_x, other_voted, other_elig = binomial_people(rng, no_score, 0.0, 1.0)
+        literals = np.concatenate([np.rint(x * 100), np.rint(extra_x * 100), np.full(no_score + no_score_no_record, np.nan)])
+        voted = np.concatenate([voted, np.zeros(no_record, int), other_voted, np.zeros(no_score_no_record, int)])
+        elig = np.concatenate([elig, np.zeros(no_record, int), other_elig, np.zeros(no_score_no_record, int)])
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        write_fit_world(directory, [None if np.isnan(v) else int(v) for v in literals], voted, elig)
+        override = override_settings(DATA_DIR=directory)
+        override.enable()
+        self.addCleanup(override.disable)
+        raw = np.where(np.isnan(literals), np.nan, literals / 100)
+        return raw, voted, elig
+
+    def test_the_chance_of_voting_is_the_curve_of_the_raw_one_for_everyone_with_a_raw_one(self):
+        raw, voted, elig = self.world()
+        terms = U.terms()
+        has = ~np.isnan(raw)
+        fit = has & (elig >= 1)
+        curve = U.fit_turnout(raw[fit], voted[fit], elig[fit])
+        self.assertIsNotNone(curve)
+        self.assertEqual(terms.t_fit, {'n': int(fit.sum()), 'points': len(curve[0]), 'method': 'monotone'})
+        self.assertGreater(terms.t_fit['points'], 2)
+        np.testing.assert_array_equal(terms.t[has], np.interp(raw[has], *curve))                      # the people without a record too
+        self.assertAlmostEqual((elig[fit] * terms.t[fit]).sum() / elig[fit].sum(), voted[fit].sum() / elig[fit].sum(), delta=0.01)
+        self.assertGreater(terms.t[fit].mean(), raw[fit].mean())                                      # raw t is the lower of the two here
+        self.assertEqual(terms.t_source, {'sai': int(has.sum()), 'record': 30, 'even': 7})
+
+    def test_people_without_a_raw_chance_keep_their_own_record_and_even_odds(self):
+        raw, voted, elig = self.world()
+        terms = U.terms()
+        record = np.isnan(raw) & (elig > 0)
+        self.assertEqual((int(record.sum()), int((np.isnan(raw) & (elig == 0)).sum())), (30, 7))
+        self.assertEqual(terms.t[record].tolist(), (voted[record] / elig[record]).tolist())
+        self.assertTrue(np.all(terms.t[np.isnan(raw) & (elig == 0)] == 0.5))
+
+    def test_the_order_of_people_does_not_change(self):
+        raw, voted, elig = self.world()
+        terms = U.terms()
+        has = ~np.isnan(raw)
+        centres, values = U.fit_turnout(raw[has & (elig >= 1)], voted[has & (elig >= 1)], elig[has & (elig >= 1)])
+        distinct = np.unique(raw[has])
+        calibrated = np.array([terms.t[has][raw[has] == value][0] for value in distinct])
+        self.assertTrue(np.all(np.diff(calibrated) >= 0))                                              # never turned round
+        inside = (distinct >= centres[0]) & (distinct <= centres[-1])
+        self.assertGreater(inside.sum(), 50)
+        self.assertTrue(np.all(np.diff(calibrated[inside]) > 0))                                       # a bigger raw t is a bigger t
+        self.assertTrue(np.all(calibrated[distinct < centres[0]] == values[0]))                        # flat only outside the points
+        self.assertTrue(np.all(calibrated[distinct > centres[-1]] == values[-1]))
+        self.assertTrue(np.all((terms.undecided >= 0) & (terms.supporter >= 0)))
+
+    def test_the_arrays_are_still_read_only_and_the_potential_uses_the_calibrated_chance(self):
+        self.world()
+        terms = U.terms()
+        with self.assertRaises(ValueError):
+            terms.t[0] = 0.0
+        self.assertEqual(terms.undecided.tolist(), ((1 - np.abs(2 * terms.s - 1)) * terms.t).tolist())
+        self.assertEqual(terms.supporter.tolist(), (terms.s * (1 - terms.t)).tolist())
+
+    def test_the_log_says_what_was_fitted_and_what_it_did(self):
+        raw, voted, elig = self.world()
+        with self.assertLogs('cu.untapped', level='INFO') as logs:
+            terms = U.terms()
+        found = CALIBRATED.fullmatch(logs.records[0].getMessage())
+        self.assertIsNotNone(found, logs.output)
+        fit = ~np.isnan(raw) & (elig >= 1)
+        self.assertEqual(found.groups(), (str(int(fit.sum())), str(terms.t_fit['points']), '%.4f' % raw[fit].mean(),
+                                          '%.4f' % terms.t[fit].mean(), '%.4f' % (voted[fit].sum() / elig[fit].sum())))
+        self.assertEqual(len(logs.records), 1)
+        U.terms()                                                                    # cached: the line is said once per build
+        self.assertEqual(len(logs.records), 1)
+
+    def test_the_payload_carries_the_fit_and_null_when_there_is_none(self):
+        self.world()
+        body = json.loads(self.client.get('/api/v3/untapped?level=precinct').content)
+        terms = U.terms()
+        self.assertEqual(body['t_calibration'], terms.t_fit)
+        self.assertEqual(set(body['t_calibration']), {'n', 'points', 'method'})
+        self.assertIsInstance(body['t_calibration']['n'], int)
+        self.assertIsInstance(body['t_calibration']['points'], int)
+        self.assertEqual(body['t_calibration']['method'], 'monotone')
+        self.assertEqual(U.area_payload('precinct')['t_calibration'], terms.t_fit)
+        self.assertEqual(body['ids'], list(PRECINCTS))
+        self.assertEqual(sum(body['people']), terms.n)
+
+    def test_the_sums_use_the_calibrated_chance(self):
+        self.world()
+        terms = U.terms()
+        body = U.area_payload('precinct')
+        for k, ident in enumerate(body['ids']):
+            mine = np.arange(terms.n) % 2 == k
+            self.assertAlmostEqual(body['undecided'][k], terms.undecided[mine].sum(), places=5)
+            self.assertAlmostEqual(body['supporter'][k], terms.supporter[mine].sum(), places=5)
+
+    def test_999_people_to_fit_with_are_too_few_and_a_thousand_are_enough(self):
+        for fit_people, calibrated in ((999, False), (1000, True)):
+            with self.subTest(fit_people=fit_people):
+                U.reset()
+                raw, voted, elig = self.world(fit_people=fit_people)                  # plus 40 with a raw t and no eligible general
+                self.assertGreater((~np.isnan(raw)).sum(), 1000)                      # the people with a raw t alone number over 1000
+                with self.assertLogs('cu.untapped', level='INFO') as logs:
+                    terms = U.terms()
+                has = ~np.isnan(raw)
+                if calibrated:
+                    self.assertEqual(terms.t_fit['n'], 1000)
+                    self.assertIsNotNone(CALIBRATED.fullmatch(logs.records[0].getMessage()))
+                else:
+                    self.assertIsNone(terms.t_fit)
+                    self.assertEqual(terms.t[has].tolist(), raw[has].tolist())        # the raw t stands
+                    self.assertEqual(logs.records[0].getMessage(), 'chance of voting not calibrated (fewer than 1000 people with a '
+                                     'turnout score and an eligible general: 999)')
+                    self.assertIsNone(U.area_payload('precinct')['t_calibration'])
+
+    def test_a_record_that_falls_with_the_raw_chance_leaves_the_raw_chance_as_it_is(self):
+        raw, _, _ = self.world(falling=True)
+        with self.assertLogs('cu.untapped', level='INFO') as logs:
+            terms = U.terms()
+        has = ~np.isnan(raw)
+        self.assertIsNone(terms.t_fit)
+        self.assertEqual(terms.t[has].tolist(), raw[has].tolist())
+        self.assertRegex(logs.records[0].getMessage(), r'^chance of voting not calibrated \(fewer than 2 blocks: .*\)$')
+
+    def test_without_a_walk_store_there_is_no_record_to_line_up_with(self):
+        raw, _, _ = self.world()
+        (Path(settings.DATA_DIR) / 'walk.sqlite3').unlink()
+        U.reset()
+        with self.assertLogs('cu.untapped', level='INFO') as logs:
+            terms = U.terms()
+        has = ~np.isnan(raw)
+        self.assertIsNone(terms.t_fit)
+        self.assertEqual(terms.t[has].tolist(), raw[has].tolist())
+        self.assertEqual(terms.t_source, {'sai': int(has.sum()), 'record': 0, 'even': int((~has).sum())})
+        self.assertIn('fewer than 1000 people', logs.records[0].getMessage())
 
 
 SQUARE = lambda x: {'type': 'Polygon', 'coordinates': [[[x, 0], [x, 1], [x + 1, 1], [x + 1, 0], [x, 0]]]}

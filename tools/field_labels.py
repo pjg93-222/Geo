@@ -88,8 +88,9 @@ BY_NAME = {row['name']: row for row in FIELDS}
 INDUSTRIES = {'cua': {'label': GROUP_LABELS['cua'], 'group': 'cua',
                       'fields': [(r['name'], r['label'], r['weight']) for r in FIELDS if r['group'] == 'cua']}}
 # Street plan presets (Phase 4E): id -> (label, formula in words). s = candidate support 0..1 (the support score / 100, not
-# the standing), t = chance of voting 0..1 (the mean of the five turnout-only scores / 100, TURNOUT_FIELDS), i = sphere of
-# influence standing 0..1. push (Paul 2026-10-09, "Untapped"): see potential(); the other three read s and t the same way.
+# the standing), t = chance of voting 0..1 (the mean of the five turnout-only scores / 100, TURNOUT_FIELDS, lined up against
+# the district's own general-election record by untapped.fit_turnout), i = sphere of influence standing 0..1. push (Paul
+# 2026-10-09, "Untapped"): see potential(); the other three read s and t the same way.
 ROI_PRESETS = {'push': ('Needs a push', 'sum over people of (wP x (1 - |2s - 1|) x t + wR x s x (1 - t)) x (1 + wI x i); '
                                         'doors with a recorded result left out'),
                'mixed': ('Mixed-support streets', 'sum over people of (1 - |2s - 1|) x t'),

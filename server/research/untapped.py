@@ -3,8 +3,8 @@
 For every person not at a door with a recorded result:
   s  candidate support on the absolute scale, support.sup_score / 100 (0.5 when the person has no support row)
   t  chance of voting: the mean of the five turnout-only scores (field_labels.TURNOUT_FIELDS) / 100, read from the stored
-     evidence literals (not a percentile, not the exposure); else the person's general-election record (gen_voted /
-     gen_elig of the walk store); else 0.5
+     evidence literals (not a percentile, not the exposure), lined up against the district's own general-election record
+     (see fit_turnout); else the person's general-election record (gen_voted / gen_elig of the walk store); else 0.5
   i  sphere of influence standing, person.soi_pct / 100 (0 without it)
   undecided = (1 - |2s - 1|) x t        supporter = s x (1 - t)
   potential = (wp x undecided + (1 - wp) x supporter) x (1 + wi x i)        field_labels.potential
@@ -14,11 +14,14 @@ and area_payload() adds the four sums per area (undecided, supporter and each ti
 without asking again. The weights are linear in these sums, so the map and the list move at once with the sliders.
 
   terms()            the per-person arrays, cached per (score store, walk store) file stamps
+  fit_turnout(...)   the monotone curve of raw t against people's own general-election record, per district
   knocked()          the doors that have a result in some saved list, cached per results version
   results_version()  changes whenever a result is saved or a list deleted
   parse_weights(q)   wp and wi from a query dict, the district's defaults when absent
   area_payload(l)    the body of GET /api/v3/untapped?level=l
 """
+import itertools
+import logging
 import math
 import os
 import re
@@ -54,6 +57,9 @@ STATE_CODE = re.compile(r'\d{1,3}')
 TURNOUT_FIDS = tuple(FL.BY_NAME[name]['fid'] for name in FL.TURNOUT_FIELDS)
 CHUNK = 900
 BATCH = 20000                                                         # evidence records decoded at a time
+FIT_MIN_PEOPLE = 1000                                                 # fewer people with a turnout score and an eligible general: t stays raw
+
+log = logging.getLogger('cu.untapped')
 
 NO_SCORES = 'The local score store has not been built.'
 UNREADABLE = 'The local score store is unreadable.'
@@ -102,11 +108,13 @@ def _stamp():
 
 class Terms:
     """The per-person values of one version of the stores. Arrays are float64[n] in score-store order (index = pos - 1) and
-    read-only; a Terms is replaced, never changed."""
-    __slots__ = ('n', 's', 't', 'i', 'undecided', 'supporter', 't_source', 'stamp')
+    read-only; a Terms is replaced, never changed. t_fit is {'n', 'points', 'method'} of the calibration of t, None when t is
+    the raw mean of the turnout scores."""
+    __slots__ = ('n', 's', 't', 'i', 'undecided', 'supporter', 't_source', 't_fit', 'stamp')
 
-    def __init__(self, stamp, s, t, i, t_source):
+    def __init__(self, stamp, s, t, i, t_source, t_fit=None):
         self.stamp, self.n, self.s, self.t, self.i, self.t_source = stamp, len(s), s, t, i, t_source
+        self.t_fit = None if t_fit is None else dict(t_fit)
         self.undecided = (1 - np.abs(2 * s - 1)) * t
         self.supporter = s * (1 - t)
         for array in (self.s, self.t, self.i, self.undecided, self.supporter):
@@ -163,23 +171,57 @@ def _turnout(conn, n, tables):
     return np.where(counts > 0, sums / np.maximum(counts, 1) / 100.0, math.nan)
 
 
-def _record(n, need, scores_path, walk_path):
-    """(t from the general-election record, which people it covered): gen_voted / gen_elig where the person has an eligible
-    general; the walk store is read only for the people in `need`."""
-    t, found = np.full(n, math.nan), np.zeros(n, dtype=bool)
-    if walk_path is None or not need.any():
-        return t, found
+def _record(n, scores_path, walk_path):
+    """(voted, eligible): float64[n] general elections each person voted in and was eligible for (the walk store's gen_voted
+    and gen_elig; 0 and 0 without an eligible general, or without a usable walk store)."""
+    voted, eligible = np.zeros(n), np.zeros(n)
+    if walk_path is None:
+        return voted, eligible
     try:
         with closing(sqlite3.connect(walk_path.as_uri() + '?mode=ro', uri=True, timeout=3)) as conn:
             conn.execute('ATTACH DATABASE ? AS scores', (scores_path.as_uri() + '?mode=ro',))
-            rows = conn.execute('SELECT sc.pos, p.gen_voted, p.gen_elig FROM person p JOIN scores.person sc '
-                                'ON sc.person_id = p.person_id WHERE p.gen_elig > 0').fetchall()
+            rows = np.fromiter(itertools.chain.from_iterable(conn.execute(
+                'SELECT sc.pos, IFNULL(p.gen_voted, 0), p.gen_elig FROM person p JOIN scores.person sc '
+                'ON sc.person_id = p.person_id WHERE p.gen_elig > 0')), dtype=np.float64).reshape(-1, 3)
     except sqlite3.Error:
-        return t, found                    # no usable walk store: those people fall to even odds
-    for pos, voted, eligible in rows:
-        if need[pos - 1]:
-            t[pos - 1], found[pos - 1] = min(1.0, max(0.0, voted / eligible)), True
-    return t, found
+        return voted, eligible              # no usable walk store: those people fall to even odds
+    at = rows[:, 0].astype(np.intp) - 1
+    voted[at], eligible[at] = rows[:, 1], rows[:, 2]
+    return voted, eligible
+
+
+def _fit(x, voted, elig):
+    """((centres, values), None), or (None, why) when the raw t is left as it is: fewer than FIT_MIN_PEOPLE people, a raw t or
+    a record that is not finite, or fewer than two blocks once the record is made non-decreasing in raw t."""
+    x, voted, elig = (np.asarray(v, dtype=np.float64) for v in (x, voted, elig))
+    if len(x) < FIT_MIN_PEOPLE:
+        return None, 'fewer than %d people with a turnout score and an eligible general: %d' % (FIT_MIN_PEOPLE, len(x))
+    if not (np.isfinite(x).all() and np.isfinite(voted).all() and np.isfinite(elig).all()):
+        return None, 'a turnout score or a record is not finite'
+    voted = np.clip(voted, 0.0, elig)
+    distinct, inverse = np.unique(x, return_inverse=True)
+    votes, trials = np.bincount(inverse.reshape(-1), voted), np.bincount(inverse.reshape(-1), elig)
+    blocks = []                      # pool adjacent violators: [votes, trials, trials x raw t], the rate of each above the last
+    for k in np.flatnonzero(trials > 0):
+        blocks.append([votes[k], trials[k], trials[k] * distinct[k]])
+        while len(blocks) > 1 and blocks[-2][0] * blocks[-1][1] >= blocks[-1][0] * blocks[-2][1]:    # rate before >= rate after
+            last = blocks.pop()
+            blocks[-1] = [blocks[-1][i] + last[i] for i in range(3)]
+    if len(blocks) < 2:
+        return None, 'fewer than 2 blocks: the record does not rise with the turnout scores (%d)' % len(blocks)
+    votes, trials, weighted = np.array(blocks).T
+    return (weighted / trials, votes / trials), None
+
+
+def fit_turnout(x, voted, elig):
+    """(centres, values): the curve that lines the raw t x of each person up against their general-election record (`voted` of
+    `elig` generals) without ever turning the order round. The people are summed by distinct raw t, the record rate of each
+    is made non-decreasing in raw t by weighted pool-adjacent-violators (weights `elig`), and each pooled block is a point:
+    its centre is the mean raw t weighted by `elig`, its value the votes over the generals of the block. Centres and values
+    strictly increase. t = np.interp(raw t, centres, values): strictly increasing between the first and last centre, flat
+    outside them. None when the raw t is better left as it is (see _fit): fewer than 1000 people, a value that is not
+    finite, or fewer than two blocks."""
+    return _fit(x, voted, elig)[0]
 
 
 def _build_terms(stamp):
@@ -204,11 +246,28 @@ def _build_terms(stamp):
     except sqlite3.Error as problem:
         raise SourceStoreError(UNREADABLE, 503) from problem
     sai = ~np.isnan(t)
-    t = np.clip(t, 0.0, 1.0)
-    record_t, record = _record(n, ~sai, path, (Path(settings.DATA_DIR) / 'walk.sqlite3').resolve() if stamp[1] else None)
-    t = np.where(sai, t, np.where(record, record_t, EVEN_ODDS))
+    raw = np.clip(t, 0.0, 1.0)
+    voted, eligible = _record(n, path, (Path(settings.DATA_DIR) / 'walk.sqlite3').resolve() if stamp[1] else None)
+    record = ~sai & (eligible > 0)
+    t = np.where(sai, raw, np.where(record, np.clip(voted / np.maximum(eligible, 1.0), 0.0, 1.0), EVEN_ODDS))
     source = {'sai': int(sai.sum()), 'record': int(record.sum()), 'even': int((~sai & ~record).sum())}
-    return Terms(stamp, s, t, i, source)
+    t, t_fit = _calibrate(t, raw, sai, voted, eligible)
+    return Terms(stamp, s, t, i, source, t_fit)
+
+
+def _calibrate(t, raw, sai, voted, eligible):
+    """(t, t_fit): t with every person who has a raw t (`sai`) replaced by the district's curve of it (fit_turnout against the
+    general-election record of the people who also had an eligible general); the same t and None when the fit is refused."""
+    fit_people = sai & (eligible >= 1.0)
+    curve, why = _fit(raw[fit_people], voted[fit_people], eligible[fit_people])
+    if curve is None:
+        log.info('chance of voting not calibrated (%s)', why)
+        return t, None
+    calibrated = np.interp(raw, *curve)
+    log.info('chance of voting calibrated against the general-election record: n=%d, %d points, mean %.4f -> %.4f '
+             '(record %.4f)', fit_people.sum(), len(curve[0]), raw[fit_people].mean(), calibrated[fit_people].mean(),
+             np.clip(voted[fit_people], 0.0, eligible[fit_people]).sum() / eligible[fit_people].sum())
+    return np.where(sai, calibrated, t), {'n': int(fit_people.sum()), 'points': len(curve[0]), 'method': 'monotone'}
 
 
 _terms_lock = threading.Lock()
@@ -372,7 +431,8 @@ def _label(level, ident):
 
 def area_payload(level):
     """The body of GET /api/v3/untapped (schema v3-untapped-1): per area, the people counted and left out (they live at a
-    door with a result), and over the counted people the sums of undecided, supporter, undecided x i and supporter x i."""
+    door with a result), and over the counted people the sums of undecided, supporter, undecided x i and supporter x i. Also
+    where t came from (t_source) and how it was lined up against the general-election record ({n, points, method}, or null)."""
     if level not in LEVELS:
         raise BadRequest('Invalid level')
     t, left = terms(), knocked()
@@ -392,7 +452,7 @@ def area_payload(level):
         'people': total().tolist(), 'knocked': np.bincount(codes[dropped], minlength=size).tolist(),
         'undecided': rounded(total(t.undecided)), 'supporter': rounded(total(t.supporter)),
         'undecided_i': rounded(total(t.undecided * t.i)), 'supporter_i': rounded(total(t.supporter * t.i)),
-        'defaults': dict(zip(('wp', 'wi'), default_weights())), 't_source': t.t_source,
+        'defaults': dict(zip(('wp', 'wi'), default_weights())), 't_source': t.t_source, 't_calibration': t.t_fit,
         'results': {'version': left.version, 'people_knocked': left.people}}
 
 
