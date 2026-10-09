@@ -135,6 +135,18 @@ def blocks_from_source(blocks_zip, d, ids):
     return {g: geom for g, geom in zip(blocks.geoid, blocks.geometry) if g in set(ids)}
 
 
+def aliases_from_source(blocks, d, ids):
+    """{TIGER block id: region block id} for the blocks of a state block frame (GEOID20, TRACTCE20, BLOCKCE20 and the
+    interior-point columns, as the state file has them) that share a tract and block number with one of the table block
+    `ids`; a district's block_aliases.json holds only the blocks touching the district. The same recode_blocks, which reads
+    only the interior points, so no block shape is loaded. (Not the whole state: two water blocks of different old counties
+    meet in one region id, and recode_blocks stops on that.)"""
+    blocks = blocks[blocks.GEOID20.str[5:].isin({i[5:] for i in ids})]
+    points = gpd.GeoDataFrame(blocks, geometry=gpd.points_from_xy(blocks.INTPTLON20.astype(float), blocks.INTPTLAT20.astype(float)), crs=4326)
+    regions = gpd.read_file(COUNTIES, where="STATEFP = '%s'" % d['state_fips']).to_crs(4326)
+    return alias_map(recode_blocks(points, regions, d['state_fips'])[0])
+
+
 def join_receipt(csv_path, geoids):
     """{column: {rows, blank, joined, rate}} for the two block-id columns of a source CSV (counts only); rate is
     joined / non-blank rows."""

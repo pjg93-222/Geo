@@ -3,8 +3,9 @@
 Population density = POP20 / ALAND20 (square km) of the TIGER2025 tabblock20 blocks; a block with ALAND20 = 0 has none. An
 area's blocks are the distinct blocks its registered people live in (a block shared by two precincts counts in each), so its
 land is the land of its inhabited blocks. Voter density = those people / the same land, for every area (nothing is withheld).
-People in a block with no block row or with ALAND20 = 0 count in neither number. The road-span voter density (people per 100 m)
-belongs to the street plan.
+People in a block with no block row or with ALAND20 = 0 count in neither number. Connecticut: the state file's old county codes
+are re-coded to planning-region codes for the blocks the voter file uses, so people registered outside the district join too. The
+road-span voter density (people per 100 m) belongs to the street plan.
 
     <venv python> -m tools.build_density --district or-05          (writes <data dir>/density.json)
 
@@ -24,6 +25,7 @@ import pyogrio
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools import districts as D               # noqa: E402
+from tools import prepare_geography as PG      # noqa: E402
 from tools import scores_schema as S           # noqa: E402
 from tools.glassbox import GlassBox, new_run_id    # noqa: E402
 
@@ -45,9 +47,10 @@ def listed(series, digits):
 def compute(people, blocks, aliases):
     """(levels, counts, join). blocks: GEOID20, POP20, ALAND20 as TIGER has them; aliases carry a TIGER id to the id the
     voter file and the area table use (Connecticut: county codes to planning-region codes; other ids stay)."""
-    blocks = blocks.assign(block=blocks.GEOID20.map(lambda g: aliases.get(g, g))).set_index('block')
-    assert blocks.index.is_unique, 'Block identifiers are not unique after the alias map'
-    row = people.join(blocks[['POP20', 'ALAND20']], on='reg_block')
+    recoded = blocks[blocks.GEOID20.isin(list(aliases))]                # these join under the new id and the old (a few people still carry it)
+    keyed = pd.concat([blocks.assign(block=blocks.GEOID20.map(lambda g: aliases.get(g, g))), recoded.assign(block=recoded.GEOID20)]).set_index('block')
+    assert keyed.index.is_unique, 'Block identifiers are not unique after the alias map'
+    row = people.join(keyed[['POP20', 'ALAND20']], on='reg_block')
     with_block, joined = int((people.reg_block != '').sum()), int(row.ALAND20.notna().sum())
     join = {'people': len(people), 'with_block': with_block, 'joined': joined, 'rate': round(joined / with_block, 6),
             'blocks_in_file': len(blocks), 'land_zero_blocks': int((blocks.ALAND20 == 0).sum()),
@@ -79,8 +82,12 @@ def main(argv=None):
     gb = GlassBox(new_run_id('cu-geo-v3-density'), 'cu-geography-v3/tools/build_density.py')
     gb.run('running', 'start', 'density.json build for %s (counts only)' % d['id'])
     try:
-        blocks = pyogrio.read_dataframe(blocks_zip, columns=['GEOID20', 'POP20', 'ALAND20'], read_geometry=False)
-        levels, counts, join = compute(read_people(D.data_dir(d) / 'scores.sqlite3'), blocks, D.block_aliases(d))
+        blocks = pyogrio.read_dataframe(blocks_zip, columns=['GEOID20', 'POP20', 'ALAND20', 'TRACTCE20', 'BLOCKCE20', 'INTPTLON20', 'INTPTLAT20'],
+                                        read_geometry=False)
+        people = read_people(D.data_dir(d) / 'scores.sqlite3')
+        # block_aliases.json holds only the blocks touching the district: people registered just outside it need the state file's
+        aliases = PG.aliases_from_source(blocks, d, set(people.reg_block)) if d['block_regions'] else D.block_aliases(d)
+        levels, counts, join = compute(people, blocks, aliases)
     except Exception as error:
         gb.failed('build', 'density build crashed: %s: %s' % (type(error).__name__, error))
         raise

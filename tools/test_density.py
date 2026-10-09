@@ -8,11 +8,13 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import geopandas as gpd
 import pandas as pd
+from shapely.geometry import box
 
 from tools import build_density as BD
 from tools import districts as D
@@ -64,6 +66,12 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(BD.compute(PEOPLE, old, {})[2]['joined'], 4)                  # without it the two B1 people fall out
 
 
+    def test_a_person_still_carrying_the_old_county_id_joins_the_same_block(self):
+        old = BLOCKS.assign(GEOID20=['090010000001', 'B2', 'B3', 'B4'])
+        people = PEOPLE.assign(reg_block=['090010000001'] + list(PEOPLE.reg_block[1:]))
+        self.assertEqual(BD.compute(people, old, {'090010000001': 'B1'})[2]['joined'], 6)      # the new id and the old both join
+
+
 class MainTests(unittest.TestCase):
     """main() on small real files: a person table and a dummy blocks.zip (the block read is patched)."""
 
@@ -89,7 +97,7 @@ class MainTests(unittest.TestCase):
 
     def write_people(self, frame):
         (self.home / 'scores.sqlite3').unlink(missing_ok=True)
-        with sqlite3.connect(self.home / 'scores.sqlite3') as db:
+        with closing(sqlite3.connect(self.home / 'scores.sqlite3')) as db:
             frame.to_sql('person', db, index=False)
 
     def run_main(self, blocks=BLOCKS):
@@ -108,6 +116,25 @@ class MainTests(unittest.TestCase):
         self.assertEqual(document['levels']['precinct'], {'ids': ['P1', 'P2'], 'pop_density': [100.0, 180.0],
                                                           'voter_density': [2.0, 0.8], 'land_km2': [1.5, 2.5]})
         self.assertFalse(list(self.home.glob('*.tmp')))
+
+    def test_a_connecticut_block_outside_the_district_file_gets_its_density(self):
+        """The district's block_aliases.json holds only the blocks touching the district (here it knows neither block); the state
+        file's re-code reaches the block registered outside it, and a person who still carries the old county id joins too."""
+        self.district.update(block_regions=True, state_fips='09')
+        tiger = pd.DataFrame({'GEOID20': ['090010001001001', '090030002001002'], 'TRACTCE20': ['000100', '000200'], 'BLOCKCE20': ['1001', '1002'],
+                              'INTPTLON20': ['+0.5000000', '+1.5000000'], 'INTPTLAT20': ['+0.5000000'] * 2,
+                              'POP20': [100, 50], 'ALAND20': [1_000_000, 500_000]})
+        regions = gpd.GeoDataFrame({'COUNTYFP': ['110', '130']}, geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)], crs=4326)
+        self.write_people(pd.DataFrame([('091100001001001', 'P1', 'T1', 'Z1'), ('091300002001002', 'P1', 'T2', 'Z1'),
+                                        ('091300002001002', 'P2', 'T2', 'Z1'), ('090030002001002', 'P2', 'T3', 'Z1')], columns=PEOPLE.columns))
+        with mock.patch.object(gpd, 'read_file', return_value=regions):
+            code, _ = self.run_main(tiger)
+        document = json.loads((self.home / 'density.json').read_text())
+        self.assertEqual((code, document['join']['joined'], document['join']['rate']), (0, 4, 1.0))
+        self.assertEqual(document['levels']['block']['ids'], ['090030002001002', '091100001001001', '091300002001002'])
+        self.assertEqual(document['levels']['block']['voter_density'], [2.0, 1.0, 4.0])          # the outside block: 2 people / 0.5 km2
+        self.assertEqual(document['levels']['tract']['pop_density'], [100.0, 100.0, 100.0])
+        self.assertEqual(document['levels']['tract']['voter_density'], [1.0, 4.0, 2.0])
 
     def test_a_join_rate_under_99_percent_exits_2_and_writes_nothing(self):
         code, err = self.run_main(BLOCKS.iloc[[0, 1, 2]])                               # B4's person falls out: 5 of 6 join

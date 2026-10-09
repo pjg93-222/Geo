@@ -118,6 +118,20 @@ class BlocksFromSourceTests(unittest.TestCase):
         self.assertEqual(prepare_geography.blocks_from_source(zipped, D.get('or-05'), ['410059999999999']), {})
 
 
+class AliasesFromSourceTests(unittest.TestCase):
+    """Phase 4 density: the region id of the state blocks that share a tract and block number with a table block."""
+
+    def test_only_blocks_sharing_a_table_suffix_are_recoded(self):
+        regions = gpd.GeoDataFrame({'STATEFP': ['09', '09'], 'COUNTYFP': ['110', '130']}, geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)], crs=4326)
+        # the last two are water blocks of two old counties that would meet in one region id (recode_blocks stops on that)
+        rows = [('090010462201013', .5, .5), ('090030462201013', 1.5, .6), ('090010462201014', .5, .5), ('090079901000005', 1.5, .5), ('090119901000005', 1.6, .5)]
+        blocks = pd.DataFrame([(g, g[5:11], g[11:], '%+.7f' % x, '%+.7f' % y) for g, x, y in rows],
+                              columns=['GEOID20', 'TRACTCE20', 'BLOCKCE20', 'INTPTLON20', 'INTPTLAT20'])
+        with patch.object(prepare_geography.gpd, 'read_file', return_value=regions):
+            aliases = prepare_geography.aliases_from_source(blocks, D.get('ct-01'), ['091100462201013', '091300462201013', '091100462299999'])
+        self.assertEqual(aliases, {'090010462201013': '091100462201013', '090030462201013': '091300462201013'})
+
+
 class DistrictShapeTests(unittest.TestCase):
     def test_union_of_the_districts_rows_and_failure_when_missing(self):
         frame = gpd.GeoDataFrame({'STATEFP': ['41', '41', '41', '09'], 'CD119FP': ['05', '05', '04', '05']},
