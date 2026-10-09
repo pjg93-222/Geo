@@ -1,8 +1,10 @@
 """Street plan (GET /api/v3/walk/plan), the one-click turf (doors=), the road-span pick of the walk list (spans=, fresh=1) and the
 printed scores (POST /api/v3/walk/scores): hand-computed presets, the 5-door and 50 m rules, the weights, doors with a recorded
 result, refusals, and the pick feeding a walk list. The world is walk_testkit's invented neighbourhood with invented scores and a
-support table added to its score store. The untapped terms (untapped.terms) and the doors with a result (untapped.knocked) are
-set by the tests, so the sums here do not depend on how they are read (test_untapped.py covers that).
+support table added to its score store. WalkPlanTests set the untapped terms (untapped.terms) and the doors with a result
+(untapped.knocked) themselves, so its sums do not depend on how those are read; RealUntappedTests run the same tests with
+them read as the app reads them: the five turnout literals and the sphere of influence standing in the score store, the
+results posted to a saved list (test_untapped.py covers the reading itself).
 
 Hand-checked terms of the three blocks that matter (s = support score / 100, 0.5 with none; t = the invented participation / 100,
 the chance of voting; undecided (1 - |2s - 1|) t; supporter s (1 - t)):
@@ -39,6 +41,7 @@ import shutil
 import sqlite3
 import tempfile
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -75,7 +78,7 @@ SCORES = {                                # person key -> (support score or None
     'p18': (200 / 3.0, 50.0), 'p19': (None, 50.0), 'p20': (None, 50.0),
     'p27': (100 / 3.0, 50.0), 'p28': (32.9, 50.0), 'p29': (67.0, 50.0), 'p30': (50.0, 50.0), 'p31': (None, 50.0),
 }
-INFLUENCE = {'p01': 0.8, 'p05': 0.4, 'p17': 0.6}      # sphere of influence standing; everyone else 0
+SOI = {'p01': 80.0, 'p05': 40.0, 'p17': 60.0}         # sphere of influence standing (soi_pct); everyone else 0
 OVR = {'p01': 71.5, 'p02': 40.4}          # overall standings that exercise the rounding (half goes up)
 SUP_PCT = {'p01': 62.5}                   # a support standing that is not the support score
 PRECINCT_W = '5200021301'
@@ -102,11 +105,13 @@ def add_scores(stores):
                        (OVR.get(key, 50.0), part, census[person], pos))
             if sup is not None:
                 db.execute('INSERT INTO support VALUES (?, ?, ?, 1, 1, 1)', (pos, sup, SUP_PCT.get(key, sup)))
+    T.add_potential_inputs(stores.directory / 'scores.sqlite3', {      # five equal turnout scores: t is the participation / 100
+        person: {'sai': [int(SCORES.get(key, PLAIN)[1])] * 5, 'soi_pct': SOI.get(key, 0.0)} for key, person in stores.expected['keys'].items()})
     return positions
 
 
 def fake_terms(positions):
-    """What untapped.terms() gives for the world: s = support score / 100 (0.5 with none), t = participation / 100, i = INFLUENCE."""
+    """What untapped.terms() gives for the world: s = support score / 100 (0.5 with none), t = participation / 100, i = soi_pct / 100."""
     n = len(positions)
     s, t, i = np.full(n, 0.5), np.full(n, 0.5), np.zeros(n)
     for key, pos in positions.items():
@@ -114,7 +119,7 @@ def fake_terms(positions):
         if sup is not None:
             s[pos - 1] = sup / 100.0
         t[pos - 1] = part / 100.0
-        i[pos - 1] = INFLUENCE.get(key, 0.0)
+        i[pos - 1] = SOI.get(key, 0.0) / 100.0
     return SimpleNamespace(n=n, s=s, t=t, i=i, undecided=(1 - np.abs(2 * s - 1)) * t, supporter=s * (1 - t),
                            t_source={'sai': n, 'record': 0, 'even': 0}, stamp=None)
 
@@ -122,6 +127,7 @@ def fake_terms(positions):
 @override_settings(LOCAL_ADMIN_ACCESS=True, HOSTED=False, DEMO_MODE=False, DISTRICT=CANDIDATE)
 class WalkPlanTests(TestCase):
     """The synthetic walk world with scores and support, built once; every test reads it through the API."""
+    real = False                    # True: untapped.terms() and untapped.knocked() are not replaced (RealUntappedTests)
 
     @classmethod
     def setUpClass(cls):
@@ -149,6 +155,11 @@ class WalkPlanTests(TestCase):
     def setUp(self):
         self.client = Client(**LOOPBACK)
         self.doors = set()                          # doors with a recorded result: (stop id, unit)
+        self.lists = {}                             # real results: the saved list of each senate district
+        if self.real:
+            V.U.reset()                             # cached on the results version, which a rolled-back test can repeat
+            self.addCleanup(V.U.reset)
+            return
         for name, value in (('terms', lambda: self.terms),
                             ('knocked', lambda: SimpleNamespace(version='0-0', doors=frozenset(self.doors), pos=None, people=0))):
             patch = mock.patch.object(V.U, name, side_effect=value)
@@ -197,10 +208,19 @@ class WalkPlanTests(TestCase):
         return span
 
     def knock(self, *keys):
-        """A result is recorded at the doors of these people: everyone at those doors is left out."""
-        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
-            for person in self.ids(*keys):
-                self.doors.add(db.execute("SELECT stop_id, IFNULL(unit, '') FROM person WHERE person_id = ?", (person,)).fetchone())
+        """A result is recorded for these people: everyone at their doors is left out."""
+        if not self.real:
+            with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+                for person in self.ids(*keys):
+                    self.doors.add(db.execute("SELECT stop_id, IFNULL(unit, '') FROM person WHERE person_id = ?", (person,)).fetchone())
+            return
+        for ss in sorted({self.expected['people'][person]['ss'] for person in self.ids(*keys)}):      # a result goes on a saved list
+            if ss not in self.lists:
+                shown = self.list(ss=ss)
+                self.lists[ss] = self.post('/api/v3/walk/lists', {'title': 'Worked ' + ss, 'query': {'ss': ss},
+                                                                  'fingerprint': shown['fingerprint']}, 201)['list']['key']
+            entries = [{'person_id': person, 'code': 'S'} for person in self.ids(*keys) if self.expected['people'][person]['ss'] == ss]
+            self.post('/api/v3/walk/dispositions', {'list': self.lists[ss], 'on': date.today().isoformat(), 'entries': entries})
 
     def world_without_support(self, name):
         copy_dir = Path(self.temporary.name) / name
@@ -398,7 +418,7 @@ class WalkPlanTests(TestCase):
         with W.walk_store() as store:
             store.attach_scores()
             rows, blocks = store.span_plan({'ss': '010'})
-            spans, gone = V.fold_plan(store, rows, blocks, self.terms, SimpleNamespace(doors=frozenset()), 0.5, 0.5)
+            spans, gone = V.fold_plan(store, rows, blocks, V.U.terms(), SimpleNamespace(doors=frozenset()), 0.5, 0.5)
             with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
                 ends = dict((i, (a, b)) for i, a, b in db.execute('SELECT id, a, b FROM road_span'))
             xy = store.node_xy([n for span in spans.values() for n in (span['a'], span['b'])])
@@ -765,3 +785,17 @@ class WordingTests(SimpleTestCase):
         self.assertGreater(FL.self_check(), 0)
         self.assertEqual(list(FL.ROI_PRESETS)[:2], ['push', 'mixed'])
         self.assertEqual(FL.ROI_PRESETS['push'][0], 'Needs a push')
+
+
+class RealUntappedTests(WalkPlanTests):
+    """The same world and the same hand-checked numbers, with the terms and the doors with a result read by untapped.py: the five
+    turnout scores of a person are all their participation, so t is what the tests above set, and a result is posted to a saved list."""
+    real = True
+
+    def test_the_terms_are_read_from_the_score_store(self):
+        terms = V.U.terms()
+        np.testing.assert_array_equal(terms.s, self.terms.s)
+        np.testing.assert_array_equal(terms.t, self.terms.t)
+        np.testing.assert_array_equal(terms.i, self.terms.i)
+        self.assertEqual(terms.t_source, {'sai': 38, 'record': 0, 'even': 0})
+
