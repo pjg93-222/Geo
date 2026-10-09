@@ -52,8 +52,8 @@ test('doors, wp and wi of an address or a saved query: doors 1 to the people cei
   assert.deepEqual(parseTrim('60', '1.5', 'x'), {doors: 60}, 'a weight the server would refuse is left out, the doors stay');
   assert.deepEqual(parseTrim('60', '-0.1', '0.12345'), {doors: 60});
   assert.deepEqual(parseTrim('60', '1.0001', '1.0'), {doors: 60, wi: '1.0'});
-  for (const [good, n] of [['1', 1], ['9', 9], ['501', 501], ['1000', 1000], ['10000', 10000], ['0060', 60]] as const) assert.deepEqual(parseTrim(good), {doors: n}, good);
-  for (const bad of ['0', '000', '10001', '1000000', '-60', '6.5', '1e2', '060x', '', 'abc', ' ']) assert.equal(parseTrim(bad, '0.5', '0.5'), null, bad);
+  for (const [good, n] of [['1', 1], ['9', 9], ['501', 501], ['1000', 1000], ['0060', 60]] as const) assert.deepEqual(parseTrim(good), {doors: n}, good);
+  for (const bad of ['0', '000', '1001', '5000', '10000', '1000000', '-60', '6.5', '1e2', '060x', '', 'abc', ' ']) assert.equal(parseTrim(bad, '0.5', '0.5'), null, bad);
   assert.equal(parseTrim(null, '0.5', '0.5'), null); assert.equal(parseTrim(undefined), null);
 });
 
@@ -111,11 +111,11 @@ test('block plan screen: ranks only on request, shows nothing it did not rank fo
 });
 
 // --- one click: doors, the settings an older server leaves out, the request, and the words of the plan --------------------------------------
-test('doors: whole numbers from 1 to the people one list can hold, blank or unreadable text takes the default, and the default is held to the range too', () => {
-  for (const [v, want] of [[60, 60], ['75', 75], [' 75 ', 75], [9, 9], ['1', 1], [0, 1], [-5, 1], [501, 501], ['5000', 5000], ['100000', 10000], [74.6, 75], ['74.4', 74], ['1e2', 100],
+test('doors: whole numbers from 1 to 1,000, blank or unreadable text takes the default, and the default is held to the range too', () => {
+  for (const [v, want] of [[60, 60], ['75', 75], [' 75 ', 75], [9, 9], ['1', 1], [0, 1], [-5, 1], [501, 501], ['1000', 1000], ['5000', 1000], ['100000', 1000], [74.6, 75], ['74.4', 74], ['1e2', 100],
     ['', 60], ['abc', 60], [NaN, 60], [Infinity, 60], [null, 60], [undefined, 60]] as const) assert.equal(clampDoors(v), want, String(v));
-  assert.equal(clampDoors('', 80), 80); assert.equal(clampDoors('x', 5), 5); assert.equal(clampDoors('x', 0), 1); assert.equal(clampDoors('', 900), 900); assert.equal(clampDoors('', 20000), 10000); assert.equal(clampDoors('', NaN), 60);
-  assert.deepEqual([DOORS_MIN, DOORS_MAX, DOORS_DEFAULT], [1, MAX_LIST_PEOPLE, 60]);
+  assert.equal(clampDoors('', 80), 80); assert.equal(clampDoors('x', 5), 5); assert.equal(clampDoors('x', 0), 1); assert.equal(clampDoors('', 900), 900); assert.equal(clampDoors('', 20000), 1000); assert.equal(clampDoors('', NaN), 60);
+  assert.deepEqual([DOORS_MIN, DOORS_MAX, DOORS_DEFAULT], [1, 1000, 60]);
 });
 
 test('doors are kept per viewer and district, and a storage that throws changes nothing', () => {
@@ -125,7 +125,7 @@ test('doors are kept per viewer and district, and a storage that throws changes 
   writeDoors('or-05', 120, store); writeDoors('ct-01', 25, store);
   assert.equal(readDoors('or-05', 60, store), 120); assert.equal(readDoors('ct-01', 60, store), 25);
   assert.deepEqual([...kept.keys()].sort(), ['terrier.untapped.doors.ct-01', 'terrier.untapped.doors.or-05']);
-  writeDoors('or-05', 99999, store); assert.equal(readDoors('or-05', 60, store), 10000, 'what is written is held to the range');
+  writeDoors('or-05', 99999, store); assert.equal(readDoors('or-05', 60, store), 1000, 'what is written is held to the range');
   kept.set('terrier.untapped.doors.or-05', 'junk'); assert.equal(readDoors('or-05', 80, store), 80, 'unreadable text gives the default');
   const broken = {getItem: (): string | null => { throw new Error('blocked'); }, setItem: (): void => { throw new Error('blocked'); }};
   assert.equal(readDoors('or-05', 80, broken), 80); assert.doesNotThrow(() => writeDoors('or-05', 80, broken));

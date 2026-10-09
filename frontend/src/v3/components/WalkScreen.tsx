@@ -20,7 +20,7 @@ import {
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,turfLines,
   type HeldList,type RefusalNote,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkScoreMap,type WalkVisit,
 } from '../lib/walk';
-import {DOORS_MIN,clampDoors,idChunks,parseSpansParam,potentialOf,raceWords,readDoors,spansParam,trimFor,trimQuery,turfOf,writeDoors} from '../lib/plan';
+import {DOORS_MAX,DOORS_MIN,clampDoors,idChunks,parseSpansParam,potentialOf,raceWords,readDoors,spansParam,trimFor,trimQuery,turfOf,writeDoors} from '../lib/plan';
 import {readWeights,weightsQuery,writeWeights} from '../lib/untapped';
 import type {UntappedWeights} from '../lib/untapped';
 import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
@@ -719,10 +719,10 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         {LEVELS.map(l=><AreaField key={l.level} level={l.level} label={l.label} aria={l.aria} area={area} value={area[l.level]} onChange={v=>setLevel(l.level,v)}/>)}
         {roi&&area.precinct&&<div className="walk-oneclick">
           <label className="walk-doors"><span>Doors</span>
-            <input type="number" inputMode="numeric" min={DOORS_MIN} step={1} value={doorsText??String(savedDoors)}
+            <input type="number" inputMode="numeric" min={DOORS_MIN} max={DOORS_MAX} step={1} value={doorsText??String(savedDoors)}
               onChange={e=>setDoorsText(e.target.value)} onBlur={commitDoors} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();planTurf();}}}/></label>
           <button type="button" className="walk-button walk-primary" onClick={planTurf} disabled={loading} aria-busy={loading}>Plan walk list</button>
-          <p className="walk-hint">Builds a walk list of connected blocks with the most untapped potential, up to this many doors. Doors with a recorded result are left out. Balance and influence are under Adjust plan.</p>
+          <p className="walk-hint">Builds a walk list of connected blocks with the most untapped potential, up to this many doors ({DOORS_MIN} to {DOORS_MAX.toLocaleString('en-US')}). Doors with a recorded result are left out. Balance and influence are under Adjust plan.</p>
         </div>}
 
         <h2 className="walk-lab">Streets</h2>

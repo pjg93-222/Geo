@@ -4,7 +4,7 @@
   GET  /api/v3/walk/streets      street search by typed text (at most 20) or the busiest streets of an area (at most 100)
   POST /api/v3/walk/match        an uploaded street list (at most 500 rows) matched against the streets
   GET  /api/v3/walk/list         a walk list built now: runs in walking order, doors, voters (at most 40 streets, 200 planned
-                                 streets from the street plan as spans=12,15, 1,500 voters); fresh=1 leaves out the people at
+                                 streets from the street plan as spans=12,15, 10,000 voters); fresh=1 leaves out the people at
                                  doors that already have a recorded result; with spans, fresh=1 and one precinct, doors=N
                                  (and wp, wi) read the spans in the order given and keep N doors of them, the last block cut
                                  to the doors with the most untapped potential, as the turf of GET /walk/plan is (street
@@ -69,7 +69,7 @@ MAX_ROWS = 500              # rows of an uploaded street list
 MAX_ENTRIES = 200           # results in one POST
 MAX_BODY = 256 * 1024       # bytes of a POST body
 MAX_SPANS = 8000            # blocks in one overview
-MIN_DOORS = 1               # doors asked for a one-click turf, or to cut a list to; no more than MAX_VOTERS (a door has a voter)
+MIN_DOORS, MAX_DOORS = 1, 1000   # doors asked for a one-click turf, or to cut a list to (whole-area and street-pick lists have only MAX_VOTERS)
 MAX_TEXT = 60               # characters of street search text
 FOUND_WITH_TEXT, FOUND_WITHOUT_TEXT = 20, 100
 MAX_SEGMENTS = 1200         # distinct (street, parity, precinct, block) in one list; plan_route's cost table grows with runs squared
@@ -192,7 +192,7 @@ def parse_spans(text, ordered=False):
 
 def trim_query(values, area, plain):
     """{'doors', 'wp', 'wi'} of a list cut to a door count (doors and the weights written plainly, the weights only if sent), {}
-    for any other list. Only the planned blocks of one precinct, with fresh=1 and doors=N (10 to 500) take it: the weights mean
+    for any other list. Only the planned blocks of one precinct, with fresh=1 and doors=N (1 to 1,000) take it: the weights mean
     nothing without doors. `plain`: spans and fresh are given (street picks may come with them). Colorado has no street plan
     to trim by."""
     if not {'doors', 'wp', 'wi'} & set(values):
@@ -728,8 +728,7 @@ def rank_plan(spans, preset, weights, roi, pop_density):
 
 
 def parse_doors(text, area):
-    """The door count asked for a one-click turf, None when none is asked: at least 1, from one precinct. More doors than
-    MAX_VOTERS could never fit one list (a door has a voter), so that is refused as too large."""
+    """The door count asked for a one-click turf, None when none is asked: MIN_DOORS to MAX_DOORS, from one precinct."""
     if text is None:
         return None
     if 'precinct' not in area:
@@ -737,8 +736,8 @@ def parse_doors(text, area):
     asked = int(clean(text, r'\d{1,6}'))
     if asked < MIN_DOORS:
         raise Refused('Ask for at least %d door.' % MIN_DOORS)
-    if asked > MAX_VOTERS:
-        raise Refused('That is too many doors to build in one list (at most %s).' % '{:,}'.format(MAX_VOTERS))
+    if asked > MAX_DOORS:
+        raise Refused('Ask for %d to %s doors.' % (MIN_DOORS, '{:,}'.format(MAX_DOORS)))
     return asked
 
 

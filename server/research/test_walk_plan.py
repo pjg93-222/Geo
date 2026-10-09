@@ -421,13 +421,12 @@ class WalkPlanTests(TestCase):
         for good in ('0', '1', '0.5', '0.0001', '1.0'):
             self.plan(wp=good, wi=good)
         self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors='20', status=200)['turf']['asked'], 20)
-        for good in ('1', '5', '501', '1000', '10000'):                             # no door cap short of the people ceiling
+        for good in ('1', '5', '501', '1000'):                                      # a door ask is capped at MAX_DOORS (1,000)
             self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=good)['turf']['asked'], int(good))
         for bad in ('0', '000'):
             self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'], 'Ask for at least 1 door.')
-        for bad in ('10001', '999999'):
-            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'],
-                             'That is too many doors to build in one list (at most 10,000).')
+        for bad in ('1001', '5000', '10000', '999999'):
+            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'], 'Ask for 1 to 1,000 doors.')
         for bad in ('x', '1000000', '', '-20', '2.5'):
             self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)
         self.assertEqual(self.plan(doors='20', status=400)['error'], 'Plan a walk list from one precinct.')      # a district is not a precinct
@@ -906,8 +905,9 @@ class WalkPlanTests(TestCase):
         self.assertEqual(self.list(400, spans='1,6', fresh='1', doors='20')['error'], 'Plan a walk list from one precinct.')
         self.assertEqual(self.list(400, spans='1,6', ss='010', fresh='1', doors='20')['error'], 'Plan a walk list from one precinct.')
         self.assertEqual(self.trimmed(400, doors='0')['error'], 'Ask for at least 1 door.')
-        self.assertEqual(self.trimmed(400, doors='10001')['error'], 'That is too many doors to build in one list (at most 10,000).')
-        for good in ('1', '9', '501', '1000', '10000'):
+        for bad in ('1001', '5000'):
+            self.assertEqual(self.trimmed(400, doors=bad)['error'], 'Ask for 1 to 1,000 doors.')
+        for good in ('1', '9', '501', '1000'):
             self.assertEqual(self.trimmed(doors=good)['query']['doors'], good)
         for bad in ('x', '1000000', '', '-20', '2.5', ' 20', '20 '):
             self.assertEqual(self.trimmed(400, doors=bad)['error'], 'Invalid request.')

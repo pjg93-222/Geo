@@ -1428,8 +1428,8 @@ test('page address: doors, wp and wi ride with planned blocks that are fresh, co
   assert.ok(!('trim' in read('precinct=02012&spans=12,15&fresh=1')), 'no doors in the address: the list is whole blocks, as it was');
   assert.ok(!('trim' in read('precinct=02012&spans=12,15&doors=60&wp=0.5&wi=0.5')), 'the server refuses doors without fresh, so the page does not ask');
   assert.ok(!('trim' in read('precinct=02012&fresh=1&doors=60&wp=0.5&wi=0.5')), 'nor without planned blocks');
-  assert.ok(!('trim' in read('precinct=02012&spans=12&fresh=1&doors=0')) && !('trim' in read('precinct=02012&spans=12&fresh=1&doors=10001')) && !('trim' in read('precinct=02012&spans=12&fresh=1&doors=x')), 'doors 1 to the people ceiling');
-  assert.deepEqual(read('precinct=02012&spans=12&fresh=1&doors=1').trim, {doors: 1}); assert.deepEqual(read('precinct=02012&spans=12&fresh=1&doors=5000').trim, {doors: 5000}, 'no door cap short of the people ceiling');
+  assert.ok(!('trim' in read('precinct=02012&spans=12&fresh=1&doors=0')) && !('trim' in read('precinct=02012&spans=12&fresh=1&doors=1001')) && !('trim' in read('precinct=02012&spans=12&fresh=1&doors=x')), 'doors 1 to 1,000');
+  assert.deepEqual(read('precinct=02012&spans=12&fresh=1&doors=1').trim, {doors: 1}); assert.deepEqual(read('precinct=02012&spans=12&fresh=1&doors=1000').trim, {doors: 1000}, 'the most a one-click list asks for');
   assert.deepEqual(read('spans=12&fresh=1&doors=60&wp=2&wi=0.5').trim, {doors: 60, wi: '0.5'}, 'a weight the server would refuse is left out');
   assert.deepEqual(read('spans=12&fresh=1&doors=60').trim, {doors: 60}, 'without weights the district\'s own apply');
 });
@@ -1473,7 +1473,7 @@ test('an older server: a plan without trim asks for the whole blocks, so a list 
 test('walk screen wiring: Plan walk list and Doors by the precinct field, the click plans then builds fresh, and plan=1 waits for the district settings', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/\{roi&&area\.precinct&&<div className="walk-oneclick">/.test(src) && />Plan walk list<\/button>/.test(src) && /<span>Doors<\/span>/.test(src), 'a visible button and a Doors input, with a precinct chosen and a plan in the district');
-  assert.ok(/min=\{DOORS_MIN\} step=\{1\}/.test(src) && !/max=\{DOORS_MAX\}/.test(src) && !/\{DOORS_MIN\} to \{DOORS_MAX\}/.test(src), 'doors from 1, with no upper limit on the input or in the hint');
+  assert.ok(/min=\{DOORS_MIN\} max=\{DOORS_MAX\} step=\{1\}/.test(src) && /\{DOORS_MIN\} to \{DOORS_MAX\.toLocaleString\('en-US'\)\}/.test(src), 'doors from 1 to 1,000 on the input and in the hint');
   assert.ok(/clampDoors\(doorsText\?\?savedDoors,turfCfg\.doors\)/.test(src) && /writeDoors\(features\.district,doorsNow\)/.test(src), 'doors from the district\'s default, kept per viewer');
   assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
   assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
