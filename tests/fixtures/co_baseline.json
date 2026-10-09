@@ -185,11 +185,11 @@
    "status": 200
   },
   "meta": {
-   "bytes": 3034,
+   "bytes": 3003,
    "content_type": "application/json",
    "method": "GET",
    "path": "/api/v3/meta",
-   "sha256": "bc906a05dd183c041a2abe52919c8ccc5db17a793a78fb4e085e8895b1a01569",
+   "sha256": "e5f16c2b0ebb239ce59a28cb845ea1d704b9e8f907a44ee652c61bb3ec590939",
    "status": 200
   },
   "method_snapshots": {
@@ -198,6 +198,54 @@
    "method": "GET",
    "path": "/api/snapshots",
    "sha256": "59a1ba2e9d614152cdc54ee67ce39e630111e80a28997c9fe1b3050659ccd0b1",
+   "status": 200
+  },
+  "parties_registration_block": {
+   "bytes": 393875,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/parties/{snapshot}/registration/block.json",
+   "sha256": "a2ab594c7599f152b224684bd2794e9ab53604e78c8914375763023c59ea24d2",
+   "status": 200
+  },
+  "parties_registration_precinct": {
+   "bytes": 20762,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/parties/{snapshot}/registration/precinct.json",
+   "sha256": "a5902ba0be91f36a4ad1054c1e2f608d2a1f77090dd7ca1dc311aa965b748aed",
+   "status": 200
+  },
+  "parties_registration_tract": {
+   "bytes": 11580,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/parties/{snapshot}/registration/tract.json",
+   "sha256": "3fb7bd99c14053ebc4344c2a7f113b3e6ef926d303af6f644990a37d18e1d331",
+   "status": 200
+  },
+  "parties_registration_zip": {
+   "bytes": 2776,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/parties/{snapshot}/registration/zip.json",
+   "sha256": "76afb9d57fafb9239f1263c9b65d9c5df8f835c75991b87febbc18d3effeb861",
+   "status": 200
+  },
+  "parties_residence_tract": {
+   "bytes": 13204,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/parties/{snapshot}/residence/tract.json",
+   "sha256": "ea9884e0b0c81c0b311edc5e6c9536bfbe9c51df2040212646d70632e890fba5",
+   "status": 200
+  },
+  "parties_residence_zip": {
+   "bytes": 4191,
+   "content_type": "application/json",
+   "method": "GET",
+   "path": "/api/v3/parties/{snapshot}/residence/zip.json",
+   "sha256": "903f0d2b33cc5e290893de827f84aa53acebc45e5f4c8a150ea422ab5cbb1cae",
    "status": 200
   },
   "people_cursor_page": {
@@ -487,19 +535,19 @@
   "spare-server start retries: none needed",
   "The walk-list PDF is drawn in the browser (frontend/src/v3/lib/walkPdf.ts); the server has no PDF endpoint, so the walk_list_* bodies (its only input) are recorded, not PDF bytes."
  ],
- "recorded_utc": "2026-10-08T23:27:53+00:00",
- "repo_head": "d95f9f404330246539feac267b47bcc805427586",
+ "recorded_utc": "2026-10-09T00:35:23+00:00",
+ "repo_head": "85b5656ba3d01106e80b3187ec250deebfb88463",
  "schema": "co-baseline-1",
  "snapshot": "co-cd005-5fd70b1cb698",
  "spare_server": {
   "pids": [
    {
-    "launcher": 8036,
-    "serving": 64264
+    "launcher": 66640,
+    "serving": 24704
    },
    {
-    "launcher": 40448,
-    "serving": 48688
+    "launcher": 37816,
+    "serving": 37716
    }
   ],
   "port": 8769
