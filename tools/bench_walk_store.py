@@ -2,7 +2,7 @@
 
     set CU_DATA_DIR=<a COPY of a district's stores>  (never the live .local: this holds handles for minutes)
     set CU_DISTRICT=or-05
-    work\\.venv\\Scripts\\python.exe tools\\bench_walk_store.py [--precincts P1,P2] [--n 3] [--check]
+    work\\.venv\\Scripts\\python.exe tools\\bench_walk_store.py [--precincts P1,P2] [--n 3] [--check | --old]
 
 For each precinct (default: the largest, one near 3,200 people and the median) it times span_plan, voters (the area
 list), span_stats + span_parties (the overview's queries) and the plan, list and overview views end to end, in one
@@ -104,10 +104,14 @@ def main():
     parser.add_argument('--precincts')
     parser.add_argument('--n', type=int, default=3)
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--old', action='store_true', help='time OLD_AREA (the before) instead')
     args = parser.parse_args()
-    if 'cu-geography-v3' in str(settings.DATA_DIR) and '.local' in str(settings.DATA_DIR):
+    if '.local' in Path(settings.DATA_DIR).parts:
         sys.exit('Point CU_DATA_DIR at a copy of the stores, not the live .local.')
-    print('district', settings.DISTRICT['id'], 'sqlite', W.sqlite3.sqlite_version)
+    if args.old:
+        global NEW_AREA
+        W._area = NEW_AREA = OLD_AREA
+    print('district', settings.DISTRICT['id'], 'old' if args.old else 'new', 'sqlite', W.sqlite3.sqlite_version)
     precincts = args.precincts.split(',') if args.precincts else pick_precincts()
     failed = False
     for precinct in precincts:
