@@ -99,7 +99,7 @@
 .walk-potential legend{font-size:12px;color:var(--subtle);padding:0;margin-bottom:6px}
 .walk-potential label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;line-height:1.25}
 .walk-potential label span{display:flex;justify-content:space-between;gap:8px}
-.walk-potential output{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.walk-potential output{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .walk-potential input[type=range]{width:100%;accent-color:var(--accent)}
 .walk-potential .walk-hint{margin-top:0}
 /* ---- one click: Doors and Plan walk list by the precinct field, and the note under the totals ------------------------------------------ */
