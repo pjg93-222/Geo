@@ -89,11 +89,28 @@
 .walk-plan-table td.walk-plan-street{grid-column:3/-1;font-size:13px;font-weight:600;overflow-wrap:anywhere}
 .walk-plan-table td.walk-plan-rank{color:var(--muted);font-variant-numeric:tabular-nums}
 .walk-plan-table td[data-label]:nth-child(4){grid-column:3}
+.walk-plan-table td[data-label]:nth-child(8){grid-column:3}   /* the fifth value starts a second line under Doors */
 .walk-plan-table td[data-label]::before{content:attr(data-label);display:block;font-size:10px;line-height:1.3;color:var(--subtle)}
 .walk-plan-pick input{display:block;width:18px;height:18px;margin:0;accent-color:var(--accent)}
 .walk-plan-go{position:sticky;bottom:-26px;z-index:2;margin-top:10px;padding:10px 0 4px;background:var(--surface);border-top:1px solid var(--line)}
 .walk-plan-go p{font-size:12px;line-height:1.45;color:var(--muted);margin-bottom:8px}
 .walk-plan-go .walk-button{width:100%}
+.walk-potential{border:0;padding:0;margin:10px 0 0;display:grid;gap:10px}
+.walk-potential legend{font-size:12px;color:var(--subtle);padding:0;margin-bottom:6px}
+.walk-potential label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;line-height:1.25}
+.walk-potential label span{display:flex;justify-content:space-between;gap:8px}
+.walk-potential output{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.walk-potential input[type=range]{width:100%;accent-color:var(--accent)}
+.walk-potential .walk-hint{margin-top:0}
+/* ---- one click: Doors and Plan walk list by the precinct field, and the note under the totals ------------------------------------------ */
+.walk-oneclick{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px;margin:2px 0 8px}
+.walk-doors{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600}
+.walk-doors input{height:40px;border:1px solid var(--control-line);border-radius:6px;padding:0 10px;font:inherit;font-size:13px;font-weight:400;min-width:0}
+.walk-oneclick .walk-button{height:40px}
+.walk-oneclick .walk-hint{grid-column:1/-1;margin-top:0}
+.walk-turf{margin:-4px 0 12px}
+.walk-turf p{font-size:12px;line-height:1.45;color:var(--muted)}
+.walk-turf p:first-child{color:var(--ink)}
 
 /* ---- main ------------------------------------------------------------------------------------------------------------------------ */
 .walk-main{padding:18px 22px 28px;min-width:0;min-height:0;overflow:auto}

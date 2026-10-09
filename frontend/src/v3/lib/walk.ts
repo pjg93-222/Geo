@@ -1,8 +1,8 @@
 // Walk list text rules: tallies, dates, phones, run headers, totals, result codes and the CSV in and out.
 // Pure, so node --test can load it directly: value imports name the .ts file, types come in with `import type`.
-import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkScores,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkVoter,WalkWindow} from '../api/walkTypes';
+import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkScores,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkTurf,WalkVoter,WalkWindow} from '../api/walkTypes';
 import {csvValue} from './csv.ts';
-import {parseSpansParam} from './plan.ts';
+import {MAX_LIST_PEOPLE,MAX_PLAN_SPANS,parseSpansParam} from './plan.ts';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -571,8 +571,9 @@ export function parseStreetsParam(text:string|null|undefined):PickKey[]{
 }
 
 const addressText=(v:string|null):string=>(v??'').trim().slice(0,40);
-export interface WalkAddress{area:Required<WalkArea>;picks:WalkPick[];list:string;spans?:number[]}
-/** The picker settings and the saved list key the page address carries (ss, sh, precinct, streets, spans, list). `spans` (planned streets) is there only when the address has some. */
+export interface WalkAddress{area:Required<WalkArea>;picks:WalkPick[];list:string;spans?:number[];plan:boolean;fresh:boolean}
+/** The picker settings and the saved list key the page address carries (ss, sh, precinct, streets, spans, list), and the two flags: `plan` (plan=1, from the
+ *  map: plan one click in the precinct) and `fresh` (fresh=1: the list leaves out doors with a recorded result). `spans` (planned blocks) is there only when the address has some. */
 export function readWalkAddress(q:URLSearchParams):WalkAddress{
   const list=(q.get('list')??'').trim(),spans=parseSpansParam(q.get('spans'));
   return {
@@ -580,11 +581,14 @@ export function readWalkAddress(q:URLSearchParams):WalkAddress{
     picks:parseStreetsParam(q.get('streets')).map((p):WalkPick=>({...p,label:'',city:''})),
     list:/^[\w-]{1,64}$/.test(list)?list:'',
     ...spans.length?{spans}:{},
+    plan:q.get('plan')==='1',
+    fresh:q.get('fresh')==='1',
   };
 }
-/** What a page that has just opened builds: the saved list its address names, else a list from the streets, planned streets and area in the address (an area alone is enough, the server builds a list from one), else nothing. */
-export function startPlan(a:Pick<WalkAddress,'area'|'picks'|'list'|'spans'>):'saved'|'build'|'none'{
+/** What a page that has just opened builds: the saved list its address names, else (plan=1 and a precinct) the one-click turf, else a list from the streets, planned blocks and area in the address (an area alone is enough, the server builds a list from one), else nothing. */
+export function startPlan(a:Pick<WalkAddress,'area'|'picks'|'list'|'spans'|'plan'>):'saved'|'turf'|'build'|'none'{
   if(a.list)return 'saved';
+  if(a.plan&&a.area.precinct)return 'turf';
   return a.picks.length>0||!!a.spans?.length||!!(a.area.ss||a.area.sh||a.area.precinct)?'build':'none';
 }
 
@@ -606,12 +610,22 @@ const queryText=(p:Pick<WalkListPayload,'query'>,key:string):string=>{const v=(p
 export const reknockParent=(p:Pick<WalkListPayload,'query'>):string=>queryText(p,'from');
 /** A re-knock list: its kind says so, or its query names the list it came from. */
 export const isReknock=(p:ListKey):boolean=>p.list?.kind==='reknock'||reknockParent(p)!=='';
-export interface PickerState{area:Required<WalkArea>;streets:string;spans?:string}
-/** The area, streets and planned streets (`spans`, only when the list has some) a list was built from, to put back in the picker. Null when it carries none, and always for a re-knock list: its doors come from another list, whatever its query holds. */
+export interface PickerState{area:Required<WalkArea>;streets:string;spans?:string;fresh?:boolean}
+/** The area, streets and planned blocks (`spans`, only when the list has some) a list was built from, and `fresh` (only when it left out doors with a recorded result), to put back in the picker. Null when it carries none, and always for a re-knock list: its doors come from another list, whatever its query holds. */
 export function pickerOf(p:ListKey):PickerState|null{
   const q=p.query??{};
   if(isReknock(p)||!['ss','sh','precinct','streets','spans'].some(k=>Object.hasOwn(q,k)))return null;
-  return {area:{ss:queryText(p,'ss'),sh:queryText(p,'sh'),precinct:queryText(p,'precinct')},streets:queryText(p,'streets'),...queryText(p,'spans')?{spans:queryText(p,'spans')}:{}};
+  return {area:{ss:queryText(p,'ss'),sh:queryText(p,'sh'),precinct:queryText(p,'precinct')},streets:queryText(p,'streets'),...queryText(p,'spans')?{spans:queryText(p,'spans')}:{},...queryText(p,'fresh')==='1'?{fresh:true}:{}};
+}
+
+// --- the note after a one-click build ------------------------------------------------------------------------------------
+/** What the blocks one click picked came to, in the routed list's own numbers (`totals`), then the hops between blocks and, when the precinct ran short, why. */
+export function turfLines(turf:Pick<WalkTurf,'spans'|'jumps'|'stopped'>,totals:Pick<WalkTotals,'doors'|'voters'|'walk_m'>,jumpM=400):string[]{
+  const lines=[`From ${countText(turf.spans.length,'block')} with the most untapped potential in reach: ${countText(totals.doors,'door')}, ${countText(totals.voters,'person','people')}, ${distanceText(totals.walk_m)} of walking.`];
+  if(turf.jumps.length)lines.push(`${countText(turf.jumps.length,'hop')} of up to ${jumpM} m between blocks.`);
+  if(turf.stopped==='far'||turf.stopped==='exhausted')lines.push(`Only ${countText(totals.doors,'door')} without a recorded result ${totals.doors===1?'is':'are'} in reach in this precinct.`);
+  else if(turf.stopped==='cap')lines.push(`One walk list holds up to ${COUNT.format(MAX_LIST_PEOPLE)} people and ${MAX_PLAN_SPANS} blocks.`);
+  return lines;
 }
 /**
  * The line above a saved list: "Saved list · Saturday · 10/2/2026". A re-knock list names the list it came from, by title

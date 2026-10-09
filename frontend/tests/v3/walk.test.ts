@@ -664,7 +664,7 @@ test('page address: an area alone, streets alone or a saved list rebuilds on loa
   for (const qs of ['precinct=02012', 'ss=12', 'sh=45&precinct=02012', 'streets=12:even', 'streets=12:even&precinct=02012']) assert.equal(plan(qs), 'build', qs);
   for (const qs of ['list=ab12cd34ef', 'list=ab12cd34ef&precinct=02012&streets=1:odd']) assert.equal(plan(qs), 'saved', qs);
   for (const qs of ['', 'precinct=%20%20', 'streets=x:y', 'list=bad/key', 'other=1']) assert.equal(plan(qs), 'none', qs);
-  assert.deepEqual(readWalkAddress(new URLSearchParams('ss=12&precinct=02012&streets=3:odd&list=k_1-a')), {area: {ss: '12', sh: '', precinct: '02012'}, picks: [{id: 3, side: 'odd', label: '', city: ''}], list: 'k_1-a'});
+  assert.deepEqual(readWalkAddress(new URLSearchParams('ss=12&precinct=02012&streets=3:odd&list=k_1-a')), {area: {ss: '12', sh: '', precinct: '02012'}, picks: [{id: 3, side: 'odd', label: '', city: ''}], list: 'k_1-a', plan: false, fresh: false});
 });
 
 test('upload identity: an answer for an earlier upload changes nothing (rematch on A, clear, load B, A answers late)', () => {
@@ -1351,9 +1351,64 @@ test('page address: planned streets ride along, are enough to rebuild a list, an
 test('walk screen wiring: the street plan shows only with features.roi, builds with spans, and the print toggle asks for scores only while on', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/features\?\.roi&&<StreetPlan /.test(src), 'no street plan without features.roi (Colorado)');
-  assert.ok(/getWalkList\(streets,where,sig,planned\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
+  assert.ok(/getWalkList\(streets,where,sig,planned,left\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
   assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
   assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
   assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
   assert.ok(/for\(const chunk of idChunks\(ids\)\)/.test(src), 'a list longer than one request is asked for in pieces');
+});
+
+// --- one click: the address flags, the note after the build, and the screen's wiring -------------------------------------------------------------
+import {turfLines} from '../../src/v3/lib/walk.ts';
+import {spansParam} from '../../src/v3/lib/plan.ts';
+
+test('page address: plan=1 and fresh=1 are flags; plan with a precinct is the one click, whatever else the address holds', () => {
+  const read = (qs: string) => readWalkAddress(new URLSearchParams(qs));
+  assert.deepEqual(read('precinct=02012&plan=1'), {area: {ss: '', sh: '', precinct: '02012'}, picks: [], list: '', plan: true, fresh: false});
+  assert.equal(read('precinct=02012&spans=12,15&fresh=1').fresh, true);
+  for (const qs of ['plan=0', 'plan=true', 'plan=', 'plan=2', 'fresh=0', 'fresh=true', 'fresh=2', '']) { assert.equal(read(qs).plan, false, qs); assert.equal(read(qs).fresh, false, qs); }
+  assert.equal(startPlan(read('precinct=02012&plan=1')), 'turf');
+  assert.equal(startPlan(read('ss=12&sh=45&precinct=02012&plan=1')), 'turf');
+  assert.equal(startPlan(read('precinct=02012&plan=1&spans=12&streets=3:odd&fresh=1')), 'turf', 'the click plans afresh, whatever else is in the address');
+  assert.equal(startPlan(read('list=ab12cd34ef&precinct=02012&plan=1')), 'saved', 'a saved list wins');
+  assert.equal(startPlan(read('sh=45&plan=1')), 'build', 'plan needs a precinct: an area alone builds as it did');
+  assert.equal(startPlan(read('plan=1')), 'none'); assert.equal(startPlan(read('precinct=%20&plan=1')), 'none');
+});
+
+test('page address: what the click writes (precinct, spans, fresh) comes back as the same list and does not plan again', () => {
+  const written = new URLSearchParams({precinct: '41005-101', spans: spansParam([812, 790, 815]), fresh: '1'});
+  const back = readWalkAddress(written);
+  assert.deepEqual(back, {area: {ss: '', sh: '', precinct: '41005-101'}, picks: [], list: '', spans: [790, 812, 815], plan: false, fresh: true});
+  assert.equal(startPlan(back), 'build');
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '41005-101', spans: '790,812,815', fresh: '1'})), {area: {ss: '', sh: '', precinct: '41005-101'}, streets: '', spans: '790,812,815', fresh: true});
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', spans: '12', fresh: '0'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '', spans: '12'}, 'only fresh=1 puts it back');
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', streets: '12:even'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '12:even'}, 'a list built without fresh restores as it did');
+});
+
+test('after a one-click build: blocks, doors, people and km of walking, then the hops and why the list is short', () => {
+  const ADVISORY = /\b(prospect|prospects|target|targets|targeting|best|recommend|recommended|priority|priorities|should|ideal|worth|likely to join|persuad|persuasion|convert|opportunity|high[- ]value|insufficient evidence)\b/i;
+  const turf = (over: Record<string, unknown> = {}) => ({spans: [812, 815, 790], jumps: [] as {span: number; metres: number}[], stopped: 'full' as const, ...over});
+  const main = 'From 3 blocks with the most untapped potential in reach: 63 doors, 101 people, 2.9 km of walking.';
+  assert.deepEqual(turfLines(turf(), {doors: 63, voters: 101, walk_m: 2900}), [main], 'a full list adds nothing');
+  assert.deepEqual(turfLines(turf({jumps: [{span: 790, metres: 182.4}, {span: 815, metres: 390}]}), {doors: 63, voters: 101, walk_m: 2900}), [main, '2 hops of up to 400 m between blocks.']);
+  assert.deepEqual(turfLines(turf({jumps: [{span: 790, metres: 182.4}]}), {doors: 63, voters: 101, walk_m: 2900}, 250)[1], '1 hop of up to 250 m between blocks.', 'the hop limit is the server\'s');
+  assert.deepEqual(turfLines(turf({spans: [812], stopped: 'far'}), {doors: 21, voters: 30, walk_m: 800}), [
+    'From 1 block with the most untapped potential in reach: 21 doors, 30 people, 0.8 km of walking.', 'Only 21 doors without a recorded result are in reach in this precinct.']);
+  assert.equal(turfLines(turf({stopped: 'exhausted'}), {doors: 1, voters: 1, walk_m: 40})[1], 'Only 1 door without a recorded result is in reach in this precinct.');
+  assert.deepEqual(turfLines(turf({stopped: 'cap'}), {doors: 480, voters: 1500, walk_m: 9100}).slice(1), ['One walk list holds up to 1,500 people and 200 blocks.']);
+  for (const stopped of ['full', 'exhausted', 'far', 'cap'] as const)
+    for (const text of turfLines(turf({stopped, jumps: [{span: 1, metres: 9}]}), {doors: 2, voters: 3, walk_m: 100})) assert.ok(!ADVISORY.test(text), text);
+});
+
+test('walk screen wiring: Plan walk list and Doors by the precinct field, the click plans then builds fresh, and plan=1 waits for the district settings', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  assert.ok(/\{roi&&area\.precinct&&<div className="walk-oneclick">/.test(src) && />Plan walk list<\/button>/.test(src) && /<span>Doors<\/span>/.test(src), 'a visible button and a Doors input, with a precinct chosen and a plan in the district');
+  assert.ok(/min=\{DOORS_MIN\} max=\{DOORS_MAX\}/.test(src) && /clampDoors\(doorsText\?\?savedDoors,turfCfg\.doors\)/.test(src) && /writeDoors\(features\.district,doorsNow\)/.test(src), 'doors 10 to 500, from the district\'s default, kept per viewer');
+  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.weightsQuery\(w\),doors:asked\},sig\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true\)/.test(src), 'the plan with the weights and the doors, then the list from its blocks, fresh');
+  assert.ok(/putSpans\(got\.turf\?\.spans\?\?\[\],true\);show\(p,false\);setTurf\(got\.turf\?\?null\)/.test(src), 'the blocks go in the address with fresh, and the note is kept for this list');
+  assert.ok(/fresh:fresh\?'1':null,plan:null,list:listKey\|\|null/.test(src), 'the address says spans and fresh=1 and drops plan, so a reload does not plan again');
+  assert.ok(/startPlan\(init\)==='turf'/.test(src) && /if\(!turfWaits\.current\|\|!features\)return;/.test(src) && /if\(features\.roi\)planTurf\(\);else generate\(\);/.test(src), 'plan=1 runs once the settings are here, and a district with no plan builds the precinct as it did');
+  assert.ok(/putSpans\(ids,true\);generate\(ids\)/.test(src) && /putSpans\(parseSpansParam\(from\.spans\),!!from\.fresh\)/.test(src) && /const putSpans=\(next:number\[\],left=false\)/.test(src), 'fresh goes with planned blocks: checked blocks and a saved list bring it, clearing them takes it away');
+  assert.ok(/readWeights\(features\.district,defaults\)/.test(src) && /writeWeights\(features\.district,next\)/.test(src) && /weights=\{weights\} defaults=\{defaults\} onWeights=\{changeWeights\} doors=\{doorsNow\}/.test(src), 'the sliders are shared with the map through the weights helpers');
+  assert.ok(/turfLines\(turf,payload\.totals,turfCfg\.jump_m\)/.test(src), 'the note uses the routed list\'s totals');
 });

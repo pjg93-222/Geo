@@ -29,11 +29,12 @@ export function matchWalkStreets(rows:WalkMatchInput[],area:WalkArea,signal?:Abo
   return postJson(`${BASE}/match`,{rows,...cleanArea(area)},signal);
 }
 /** `streets` is "12:even,15:both"; the area narrows the list the same way as in the picker. `spans` are road-span ids from the street plan
- *  (at most 200); they add those spans' voters, with or without an area. */
-export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[]):Promise<WalkListPayload>{
-  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),...areaOf(area)})}`,signal);
+ *  (at most 200); they add those spans' voters, with or without an area. `fresh` leaves out the people at doors with a recorded result. */
+export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[],fresh?:boolean):Promise<WalkListPayload>{
+  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),fresh:fresh?1:undefined,...areaOf(area)})}`,signal);
 }
-/** Street plan: the road spans of an area ranked by the preset's value per 100 m walked (candidate districts only). */
+/** Block plan: the road spans of an area ranked by the preset's value per 100 m walked; with `doors`, in a precinct, also the blocks one click picks
+ *  (candidate districts only). */
 export function getWalkPlan(area:WalkArea,options:WalkPlanOptions,signal?:AbortSignal):Promise<WalkPlan>{
   return localJson(`${BASE}/plan${query({...areaOf(area),...options})}`,signal);
 }
