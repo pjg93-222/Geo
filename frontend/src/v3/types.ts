@@ -5,8 +5,8 @@ import type {Level} from './lib/format';
 export type Group='ovr'|'cua'|'part'|'soi'|'lean';
 /** Candidate districts add `sup` (Candidate support); Group stays the five Colorado groups so Record<Group,...> maps keep compiling. */
 export type IndexLayer=Group|'sup';
-/** What the map overlay can show: the index layers plus the two density layers from /api/v3/density. */
-export type OverlayLayer=IndexLayer|'pop_density'|'voter_density';
+/** What the map overlay can show: the index layers, the two density layers from /api/v3/density and, in candidate districts, Untapped (/api/v3/untapped). */
+export type OverlayLayer=IndexLayer|'pop_density'|'voter_density'|'untapped';
 export type RaceMode='general'|'primary';
 export type Grade='A'|'B'|'C'|'D';
 export type Source='live'|'fixture';
@@ -127,6 +127,8 @@ export interface FeatureIndustry{id:string;label:string;fields:{name:string;labe
 export interface FeatureRoi{
   presets:{id:string;label:string;formula:string}[];preset:string;p:string;
   weights:Record<'value'|'pop_density'|'voter_density',number>;min_doors:number;min_length_m:number;
+  /** Default weights of the Untapped formula and the one-click walk list. Older servers omit both; the screens then use 0.5/0.5 and 60 doors, 400 m. */
+  potential:{wp:number;wi:number};turf:{doors:number;jump_m:number};
 }
 /** `candidate` and `roi` are null for Colorado. `layers` lists `sup` once the score store holds support and the density layers once density.json is built. */
 export interface Features{

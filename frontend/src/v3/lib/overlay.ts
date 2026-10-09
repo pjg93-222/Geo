@@ -15,7 +15,7 @@ export const BASE_LAYERS:OverlayLayer[]=['ovr','cua','part','soi','lean'];
 export const ALL_LAYERS:OverlayLayer[]=[...BASE_LAYERS,'sup','pop_density','voter_density'];
 export const LAYER_NAME:Record<OverlayLayer,string>={
   ovr:'Overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',lean:'Partisan lean',
-  sup:'Candidate support',pop_density:'Population density',voter_density:'Voter density',
+  sup:'Candidate support',pop_density:'Population density',voter_density:'Voter density',untapped:'Untapped',
 };
 const DENSITY_UNIT={pop_density:'People per km²',voter_density:'Registered voters per km²'} as const;
 
@@ -84,6 +84,7 @@ function densityValues(p:AreasPayload,d:Density|null,layer:'pop_density'|'voter_
 export function layerPct(p:AreasPayload,d:Density|null,layer:OverlayLayer):(number|null)[]{
   if(isDensity(layer))return midrank(densityValues(p,d,layer));
   if(layer==='lean')return midrank(p.groups.lean.mean.map((x,i)=>p.status[i]==='ok'?x:null));
+  if(layer==='untapped')return p.ids.map(()=>null);   // shaded by its own sums (untappedBins), never blended or paired
   const g=p.groups[layer];
   return p.ids.map((_,i)=>g&&p.status[i]==='ok'?g.pct[i]:null);
 }
@@ -140,6 +141,7 @@ export function overlayBins(o:Overlay,p:AreasPayload,d:Density|null,meta:Meta,me
       title:LAYER_NAME[o.layer],sub:`${DENSITY_UNIT[o.layer]} ${MIDDOT} fifths of areas`,ramp:SHARE_RAMP,
       labels:breaks.length?[`Under ${num(breaks[0])}`,...breaks.slice(1).map((x,i)=>`${num(breaks[i])}${ENDASH}${num(x)}`),`${num(breaks[3])}+`]:FIFTH_LABELS}};
   }
+  if(o.layer==='untapped')return {bins:toBins(p,()=>null),palette:SHARE_RAMP,legend:null};   // until the sums arrive
   return {bins:binsFor(p,o.layer,measured?'measured':'share',meta),palette:o.layer==='lean'&&!measured?LEAN_RAMP:SHARE_RAMP,legend:null};
 }
 

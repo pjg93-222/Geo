@@ -13,7 +13,7 @@ import type {Features,Group,Meta,OverlayLayer} from '../types';
 export const INDEX_ITEMS:{id:OverlayLayer;label:string}[]=ALL_LAYERS.map(id=>({id,label:id==='lean'?'Registration':LAYER_NAME[id]}));
 export const INDEX_NAME:Record<OverlayLayer,string>={
   ovr:'Overall standing',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',lean:'Registration',
-  sup:'Candidate support',pop_density:'Population density',voter_density:'Voter density',
+  sup:'Candidate support',pop_density:'Population density',voter_density:'Voter density',untapped:'Untapped',
 };
 export const INDEX_TOP10_NAME:Record<Exclude<Group,'lean'>,string>={
   ovr:'overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',
