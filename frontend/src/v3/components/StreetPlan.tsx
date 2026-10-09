@@ -102,7 +102,7 @@ export function StreetPlan(p:{area:Required<WalkArea>;roi:FeatureRoi;race:string
           </table>
           {plan.spans.length>MAX_PLAN_SPANS&&<p className="walk-hint">The top {MAX_PLAN_SPANS} of {plan.spans.length.toLocaleString('en-US')} blocks are listed; one walk list holds up to {MAX_PLAN_SPANS}.</p>}
           <div className="walk-plan-go">
-            <p role="status">{countText(picked.length,'block')} checked · {countText(people,'person','people')}{over&&`. One walk list holds up to ${MAX_LIST_PEOPLE.toLocaleString('en-US')} people and ${MAX_PLAN_SPANS} blocks.`}</p>
+            <p role="status">{countText(picked.length,'block')} checked · {countText(people,'person','people')}{over&&`. That is too large to build in one list (${MAX_LIST_PEOPLE.toLocaleString('en-US')} people or ${MAX_PLAN_SPANS} blocks); uncheck some.`}</p>
             <button type="button" className="walk-button walk-primary" disabled={!picked.length||over||p.busy} onClick={()=>p.onWalk(picked.map(s=>s.span))}>Walk the checked blocks</button>
           </div>
         </>}

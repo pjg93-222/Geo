@@ -4,22 +4,23 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync, statSync} from 'node:fs';
 import path from 'node:path';
-import {DOORS_DEFAULT, DOORS_MAX, DOORS_MIN, MAX_LIST_PEOPLE, MAX_PLAN_SPANS, POTENTIAL_DEFAULT, PRESET_WORDS, clampDoors, idChunks, parseSpansParam, parseTrim, pickUnderCap, planOptions, potentialOf, raceWords, readDoors, spansParam, trimFor, trimQuery, turfOf, weightValue, writeDoors} from '../../src/v3/lib/plan.ts';
+import {DOORS_DEFAULT, DOORS_MAX, DOORS_MIN, MAX_LIST_PEOPLE, MAX_PLAN_SPANS, MAX_SCORE_IDS, POTENTIAL_DEFAULT, PRESET_WORDS, clampDoors, idChunks, parseSpansParam, parseTrim, pickUnderCap, planOptions, potentialOf, raceWords, readDoors, spansParam, trimFor, trimQuery, turfOf, weightValue, writeDoors} from '../../src/v3/lib/plan.ts';
 import {weightsQuery} from '../../src/v3/lib/untapped.ts';
 
 const rows = (people: number[]) => people.map((n, i) => ({span: 100 + i, rank: i + 1, people: n}));
 
 test('pickUnderCap: the first ranks whose people fit, stopping at the first block that would go over', () => {
-  assert.deepEqual(pickUnderCap(rows([500, 500, 500, 10])), [100, 101, 102], 'exactly the cap is allowed, one person more is not');
-  assert.deepEqual(pickUnderCap(rows([900, 700, 5, 5])), [100], 'a lower rank never takes the place of a higher one');
-  assert.deepEqual(pickUnderCap(rows([1501, 3])), [], 'a first block over the cap leaves nothing');
+  assert.deepEqual(pickUnderCap(rows([5000, 4000, 1000, 10])), [100, 101, 102], 'exactly the cap is allowed, one person more is not');
+  assert.deepEqual(pickUnderCap(rows([6000, 4500, 5, 5])), [100], 'a lower rank never takes the place of a higher one');
+  assert.deepEqual(pickUnderCap(rows([10001, 3])), [], 'a first block over the cap leaves nothing');
+  assert.deepEqual(pickUnderCap(rows([500, 500, 500, 10]), 1500), [100, 101, 102]);
   assert.deepEqual(pickUnderCap(rows([20, 20, 20]), 40), [100, 101]);
   assert.deepEqual(pickUnderCap([]), []);
 });
 
 test('pickUnderCap: at most 200 blocks, and ranks are taken in rank order whatever order they arrive in', () => {
   const many = rows(Array.from({length: 300}, () => 1));
-  assert.equal(pickUnderCap(many).length, MAX_PLAN_SPANS); assert.equal(MAX_LIST_PEOPLE, 1500);
+  assert.equal(pickUnderCap(many).length, MAX_PLAN_SPANS); assert.equal(MAX_LIST_PEOPLE, 10000);
   assert.deepEqual(pickUnderCap(many).slice(0, 3), [100, 101, 102]);
   assert.deepEqual(pickUnderCap([...rows([5, 6, 7])].reverse()), [100, 101, 102]);
   const input = rows([5, 6, 7]).reverse(), order = input.map(r => r.span); pickUnderCap(input); assert.deepEqual(input.map(r => r.span), order, 'the input is not reordered');
@@ -43,7 +44,7 @@ test('planned blocks in the page address: whole numbers, in the order written, o
   assert.deepEqual(parseSpansParam(spansParam([812, 790, 815])), [812, 790, 815]);
 });
 
-test('doors, wp and wi of an address or a saved query: doors 10 to 500, weights the server reads, anything else is left out', () => {
+test('doors, wp and wi of an address or a saved query: doors 1 to the people ceiling, weights the server reads, anything else is left out', () => {
   assert.deepEqual(parseTrim('60', '0.50', '1.00'), {doors: 60, wp: '0.50', wi: '1.00'});
   assert.deepEqual(parseTrim(' 10 ', '0', '1'), {doors: 10, wp: '0', wi: '1'});
   assert.deepEqual(parseTrim('500', '0.3', '0.0005'), {doors: 500, wp: '0.3', wi: '0.0005'});
@@ -51,7 +52,8 @@ test('doors, wp and wi of an address or a saved query: doors 10 to 500, weights 
   assert.deepEqual(parseTrim('60', '1.5', 'x'), {doors: 60}, 'a weight the server would refuse is left out, the doors stay');
   assert.deepEqual(parseTrim('60', '-0.1', '0.12345'), {doors: 60});
   assert.deepEqual(parseTrim('60', '1.0001', '1.0'), {doors: 60, wi: '1.0'});
-  for (const bad of ['9', '501', '0', '-60', '6.5', '1e2', '060x', '', 'abc', ' ', '0060', '1000']) assert.equal(parseTrim(bad, '0.5', '0.5'), null, bad);
+  for (const [good, n] of [['1', 1], ['9', 9], ['501', 501], ['1000', 1000], ['10000', 10000], ['0060', 60]] as const) assert.deepEqual(parseTrim(good), {doors: n}, good);
+  for (const bad of ['0', '000', '10001', '1000000', '-60', '6.5', '1e2', '060x', '', 'abc', ' ']) assert.equal(parseTrim(bad, '0.5', '0.5'), null, bad);
   assert.equal(parseTrim(null, '0.5', '0.5'), null); assert.equal(parseTrim(undefined), null);
 });
 
@@ -67,7 +69,8 @@ test('the list is cut only when the plan says it can: trim present (null or set)
   assert.deepEqual(parseTrim(written.doors, written.wp, written.wi), {doors: 75, wp: '0.30', wi: '1.00'}, 'what is written is read back');
 });
 
-test('scores come in requests of at most 1,500 ids', () => {
+test('scores come in requests of at most 1,500 ids, apart from the people one list can hold', () => {
+  assert.equal(MAX_SCORE_IDS, 1500);
   const ids = Array.from({length: 3200}, (_, i) => 'p' + i);
   assert.deepEqual(idChunks(ids).map(c => c.length), [1500, 1500, 200]);
   assert.deepEqual(idChunks(['a']), [['a']]); assert.deepEqual(idChunks([]), []);
@@ -108,11 +111,11 @@ test('block plan screen: ranks only on request, shows nothing it did not rank fo
 });
 
 // --- one click: doors, the settings an older server leaves out, the request, and the words of the plan --------------------------------------
-test('doors: whole numbers from 10 to 500, blank or unreadable text takes the default, and the default is held to the range too', () => {
-  for (const [v, want] of [[60, 60], ['75', 75], [' 75 ', 75], [9, 10], ['9', 10], [0, 10], [-5, 10], [501, 500], ['100000', 500], [74.6, 75], ['74.4', 74], ['1e2', 100],
+test('doors: whole numbers from 1 to the people one list can hold, blank or unreadable text takes the default, and the default is held to the range too', () => {
+  for (const [v, want] of [[60, 60], ['75', 75], [' 75 ', 75], [9, 9], ['1', 1], [0, 1], [-5, 1], [501, 501], ['5000', 5000], ['100000', 10000], [74.6, 75], ['74.4', 74], ['1e2', 100],
     ['', 60], ['abc', 60], [NaN, 60], [Infinity, 60], [null, 60], [undefined, 60]] as const) assert.equal(clampDoors(v), want, String(v));
-  assert.equal(clampDoors('', 80), 80); assert.equal(clampDoors('x', 5), 10); assert.equal(clampDoors('', 900), 500); assert.equal(clampDoors('', NaN), 60);
-  assert.deepEqual([DOORS_MIN, DOORS_MAX, DOORS_DEFAULT], [10, 500, 60]);
+  assert.equal(clampDoors('', 80), 80); assert.equal(clampDoors('x', 5), 5); assert.equal(clampDoors('x', 0), 1); assert.equal(clampDoors('', 900), 900); assert.equal(clampDoors('', 20000), 10000); assert.equal(clampDoors('', NaN), 60);
+  assert.deepEqual([DOORS_MIN, DOORS_MAX, DOORS_DEFAULT], [1, MAX_LIST_PEOPLE, 60]);
 });
 
 test('doors are kept per viewer and district, and a storage that throws changes nothing', () => {
@@ -122,7 +125,7 @@ test('doors are kept per viewer and district, and a storage that throws changes 
   writeDoors('or-05', 120, store); writeDoors('ct-01', 25, store);
   assert.equal(readDoors('or-05', 60, store), 120); assert.equal(readDoors('ct-01', 60, store), 25);
   assert.deepEqual([...kept.keys()].sort(), ['terrier.untapped.doors.ct-01', 'terrier.untapped.doors.or-05']);
-  writeDoors('or-05', 9999, store); assert.equal(readDoors('or-05', 60, store), 500, 'what is written is held to the range');
+  writeDoors('or-05', 99999, store); assert.equal(readDoors('or-05', 60, store), 10000, 'what is written is held to the range');
   kept.set('terrier.untapped.doors.or-05', 'junk'); assert.equal(readDoors('or-05', 80, store), 80, 'unreadable text gives the default');
   const broken = {getItem: (): string | null => { throw new Error('blocked'); }, setItem: (): void => { throw new Error('blocked'); }};
   assert.equal(readDoors('or-05', 80, broken), 80); assert.doesNotThrow(() => writeDoors('or-05', 80, broken));

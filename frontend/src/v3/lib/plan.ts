@@ -5,7 +5,8 @@ import type {FeatureRoi} from '../types';
 import type {UntappedWeights} from './untapped';
 
 export const MAX_PLAN_SPANS=200;     // planned blocks in one walk list (walk_views.MAX_PICK_SPANS)
-export const MAX_LIST_PEOPLE=1500;   // people on one walk list, and in one scores request (walk_views.MAX_VOTERS)
+export const MAX_LIST_PEOPLE=10000;  // people on one walk list: a size safety ceiling (walk_views.MAX_VOTERS)
+export const MAX_SCORE_IDS=1500;     // voter ids in one scores request (walk_views.MAX_SCORE_IDS)
 
 /** What each preset counts, in plain words. A preset this page does not know falls back to the formula the server sends. */
 export const PRESET_WORDS:Record<string,string>={
@@ -28,13 +29,13 @@ export function pickUnderCap(spans:readonly Pick<WalkPlanSpan,'span'|'people'|'r
 }
 
 // --- one click: the doors asked for and the settings an older server does not send -----------------------------------------
-export const DOORS_MIN=10,DOORS_MAX=500,DOORS_DEFAULT=60,JUMP_DEFAULT=400;
+export const DOORS_MIN=1,DOORS_MAX=MAX_LIST_PEOPLE,DOORS_DEFAULT=60,JUMP_DEFAULT=400;   // no more doors than one list can hold people
 export const POTENTIAL_DEFAULT:UntappedWeights={wp:0.5,wi:0.5};
 /** The balance and influence defaults of the district, and the turf settings (doors, hop limit in metres); a server without them gets the agent defaults. */
 export const potentialOf=(roi:Partial<Pick<FeatureRoi,'potential'>>|null|undefined):UntappedWeights=>roi?.potential??POTENTIAL_DEFAULT;
 export const turfOf=(roi:Partial<Pick<FeatureRoi,'turf'>>|null|undefined):{doors:number;jump_m:number}=>({doors:roi?.turf?.doors??DOORS_DEFAULT,jump_m:roi?.turf?.jump_m??JUMP_DEFAULT});
 const fitDoors=(n:number)=>Math.min(DOORS_MAX,Math.max(DOORS_MIN,Math.round(n)));
-/** The doors asked for: a whole number from 10 to 500. Blank or unreadable text takes `d` (itself held to that range). */
+/** The doors asked for: a whole number from 1 up to the people one list can hold. Blank or unreadable text takes `d` (itself held to that range). */
 export function clampDoors(v:unknown,d:number=DOORS_DEFAULT):number{
   const text=typeof v==='number'?String(v):typeof v==='string'?v.trim():'';
   const n=text===''?NaN:Number(text);
@@ -70,10 +71,10 @@ export const spansParam=(ids:readonly number[]):string=>ids.join(',');
 
 // --- the one-click list cut to the doors asked for ------------------------------------------------------------------------------
 const WEIGHT_TEXT=/^(0(\.\d{1,4})?|1(\.0{1,4})?)$/;   // the weights the server reads: 0 to 1, up to four decimals
-/** The doors, wp and wi of a page address or a saved list's query. Null unless doors is a whole number from 10 to 500; a weight the server would refuse is left out. */
+/** The doors, wp and wi of a page address or a saved list's query. Null unless doors is a whole number from 1 up to the people one list can hold; a weight the server would refuse is left out. */
 export function parseTrim(doors:string|null|undefined,wp?:string|null,wi?:string|null):WalkListTrim|null{
   const d=(doors??'').trim();
-  if(!/^\d{1,3}$/.test(d)||+d<DOORS_MIN||+d>DOORS_MAX)return null;
+  if(!/^\d{1,6}$/.test(d)||+d<DOORS_MIN||+d>DOORS_MAX)return null;
   const weight=(w:string|null|undefined)=>{const x=(w??'').trim();return WEIGHT_TEXT.test(x)?x:undefined;};
   const p=weight(wp),i=weight(wi);
   return {doors:+d,...p!==undefined?{wp:p}:{},...i!==undefined?{wi:i}:{}};
@@ -84,7 +85,7 @@ export const trimFor=(turf:Pick<WalkTurf,'trim'>,doors:number,w:{wp:string;wi:st
 export const trimQuery=(t:WalkListTrim|null):Record<'doors'|'wp'|'wi',string|null>=>({doors:t?String(t.doors):null,wp:t?.wp??null,wi:t?.wi??null});
 
 /** The ids split into requests of at most one scores request each (1,500). */
-export function idChunks(ids:readonly string[],size=MAX_LIST_PEOPLE):string[][]{
+export function idChunks(ids:readonly string[],size=MAX_SCORE_IDS):string[][]{
   const out:string[][]=[];
   for(let i=0;i<ids.length;i+=size)out.push(ids.slice(i,i+size));
   return out;

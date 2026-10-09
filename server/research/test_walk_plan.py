@@ -421,9 +421,14 @@ class WalkPlanTests(TestCase):
         for good in ('0', '1', '0.5', '0.0001', '1.0'):
             self.plan(wp=good, wi=good)
         self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors='20', status=200)['turf']['asked'], 20)
-        for bad in ('9', '501', '0', '5'):
-            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'], 'Ask for 10 to 500 doors.')
-        for bad in ('x', '1000', '', '-20', '2.5'):
+        for good in ('1', '5', '501', '1000', '10000'):                             # no door cap short of the people ceiling
+            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=good)['turf']['asked'], int(good))
+        for bad in ('0', '000'):
+            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'], 'Ask for at least 1 door.')
+        for bad in ('10001', '999999'):
+            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'],
+                             'That is too many doors to build in one list (at most 10,000).')
+        for bad in ('x', '1000000', '', '-20', '2.5'):
             self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)
         self.assertEqual(self.plan(doors='20', status=400)['error'], 'Plan a walk list from one precinct.')      # a district is not a precinct
         self.assertEqual(self.plan(ss=None, sh='018', doors='20', status=400)['error'], 'Plan a walk list from one precinct.')
@@ -638,8 +643,8 @@ class WalkPlanTests(TestCase):
         self.assertEqual(turf['jumps'], [])
 
     def test_the_turf_is_stopped_by_the_list_limits(self):
-        with mock.patch.object(V, 'MAX_VOTERS', 14):
-            turf = self.turf(17)
+        with mock.patch.object(V, 'MAX_VOTERS', 14):                               # 14 doors asked: no more than the people ceiling
+            turf = self.turf(14)
         self.assertEqual((turf['spans'], turf['people'], turf['stopped']), ([1], 12, 'cap'))              # chd2's four would make 16
         with mock.patch.object(V, 'MAX_PICK_SPANS', 3):
             turf = self.turf(17)
@@ -675,7 +680,7 @@ class WalkPlanTests(TestCase):
     def test_the_cap_counts_a_person_once(self):
         with mock.patch.object(V, 'MAX_VOTERS', 10):
             message = self.list(400, streets='%d:both' % self.cedar(), spans='1,7')['error']
-            self.assertIn('That is 28 voters, and a walk list holds up to 10.', message)
+            self.assertIn('That is 28 voters, too large to build in one list (at most 10).', message)
             self.assertIn('That is 12 voters', self.list(400, spans='1')['error'])
 
     def test_bad_picks_are_refused(self):
@@ -750,9 +755,9 @@ class WalkPlanTests(TestCase):
         self.knock('p03')                                    # 16 people in precinct W on blocks 1 and 6, 13 once p03, p04, p05 are left out
         with mock.patch.object(V, 'MAX_VOTERS', 13):
             self.assertEqual(self.list(spans='1,6', precinct=PRECINCT_W, fresh='1')['totals']['voters'], 13)
-            self.assertIn('That is 16 voters, and a walk list holds up to 13.', self.list(400, spans='1,6', precinct=PRECINCT_W)['error'])
+            self.assertIn('That is 16 voters, too large to build in one list (at most 13).', self.list(400, spans='1,6', precinct=PRECINCT_W)['error'])
         with mock.patch.object(V, 'MAX_VOTERS', 10):
-            self.assertIn('That is 13 voters, and a walk list holds up to 10.',
+            self.assertIn('That is 13 voters, too large to build in one list (at most 10).',
                           self.list(400, spans='1,6', precinct=PRECINCT_W, fresh='1')['error'])
 
     def test_fresh_takes_the_value_1_and_nothing_else(self):
@@ -807,8 +812,7 @@ class WalkPlanTests(TestCase):
         self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (7, 12))
         self.assertEqual(self.voters(self.trimmed(spans='1', doors='10', wp='0.5', wi='0.5')), self.voters(listed))
         for keep in (6, 3, 1):
-            with mock.patch.object(V, 'MIN_DOORS', 1):                              # the floor of ten is more doors than this world has
-                turf, listed = self.turf(keep), self.trimmed(spans='1', doors=str(keep))
+            turf, listed = self.turf(keep), self.trimmed(spans='1', doors=str(keep))
             kept = self.best_doors('chd1', keep)
             self.assertEqual((turf['spans'], turf['doors'], turf['trim']), ([1], keep, {'span': 1, 'kept': keep, 'of': 7}))
             self.assertEqual(self.voters(listed), self.people_at(kept), keep)
@@ -901,9 +905,11 @@ class WalkPlanTests(TestCase):
         self.assertEqual(self.list(400, streets='%d:both' % self.cedar(), precinct=PRECINCT_W, fresh='1', doors='20')['error'], needs)   # streets alone
         self.assertEqual(self.list(400, spans='1,6', fresh='1', doors='20')['error'], 'Plan a walk list from one precinct.')
         self.assertEqual(self.list(400, spans='1,6', ss='010', fresh='1', doors='20')['error'], 'Plan a walk list from one precinct.')
-        for bad in ('9', '501', '0', '5'):
-            self.assertEqual(self.trimmed(400, doors=bad)['error'], 'Ask for 10 to 500 doors.')
-        for bad in ('x', '1000', '', '-20', '2.5', ' 20', '20 '):
+        self.assertEqual(self.trimmed(400, doors='0')['error'], 'Ask for at least 1 door.')
+        self.assertEqual(self.trimmed(400, doors='10001')['error'], 'That is too many doors to build in one list (at most 10,000).')
+        for good in ('1', '9', '501', '1000', '10000'):
+            self.assertEqual(self.trimmed(doors=good)['query']['doors'], good)
+        for bad in ('x', '1000000', '', '-20', '2.5', ' 20', '20 '):
             self.assertEqual(self.trimmed(400, doors=bad)['error'], 'Invalid request.')
         for name, bad in (('wp', '1.5'), ('wi', '-1'), ('wp', ''), ('wi', 'x'), ('wp', '0.12345'), ('wi', '1e0'), ('wp', '2')):
             self.assertEqual(self.trimmed(400, doors='20', **{name: bad})['error'], 'Invalid request.')
@@ -919,7 +925,7 @@ class WalkPlanTests(TestCase):
         shown = self.trimmed(spans='1,6')
         base = {'spans': '1,6', 'precinct': PRECINCT_W, 'fresh': '1'}
         for query in ({'spans': '1,6', 'precinct': PRECINCT_W, 'doors': '20'}, {**base, 'doors': 20}, {**base, 'doors': None},
-                      {**base, 'doors': '9'}, {**base, 'doors': '20', 'extra': '1'}):
+                      {**base, 'doors': '0'}, {**base, 'doors': '10001'}, {**base, 'doors': '20', 'extra': '1'}):
             self.post('/api/v3/walk/lists', {'title': 'x', 'query': query, 'fingerprint': shown['fingerprint']}, 400)
 
     def test_a_list_cut_to_a_door_count_needs_the_support_scores(self):
@@ -973,8 +979,9 @@ class WalkPlanTests(TestCase):
         for bad in ({}, {'ids': []}, {'ids': 'p_1'}, {'ids': [1]}, {'ids': ['a b']}, {'ids': [None]}, {'ids': ['x' * 81]},
                     {'ids': ['p_1'], 'extra': 1}):
             self.post('/api/v3/walk/scores', bad, 400)
-        self.post('/api/v3/walk/scores', {'ids': ['p_%d' % i for i in range(V.MAX_VOTERS)]})
-        self.post('/api/v3/walk/scores', {'ids': ['p_%d' % i for i in range(V.MAX_VOTERS + 1)]}, 400)
+        self.assertEqual(V.MAX_SCORE_IDS, 1500)                                       # a batch size, apart from the list's ceiling
+        self.post('/api/v3/walk/scores', {'ids': ['p_%d' % i for i in range(V.MAX_SCORE_IDS)]})
+        self.post('/api/v3/walk/scores', {'ids': ['p_%d' % i for i in range(V.MAX_SCORE_IDS + 1)]}, 400)
         self.assertEqual(self.client.get('/api/v3/walk/scores').status_code, 405)
 
     def test_without_the_score_store_there_are_no_scores(self):

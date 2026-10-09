@@ -863,13 +863,13 @@ class WalkListTests(WalkCase):
     def test_too_many_street_segments_are_refused_before_planning(self):
         with mock.patch.object(V, 'MAX_SEGMENTS', 3), mock.patch.object(V.walk_route, 'plan_route') as plan:
             message = self.error(self.get('/api/v3/walk/list?streets=' + self.cedar_juniper()), 400)
-            self.assertEqual(message, 'This selection splits into too many separate street segments. Narrow the area or streets.')
+            self.assertEqual(message, 'This area is too spread out to route as one walk list. Split it into smaller lists by street or block.')
             plan.assert_not_called()
         self.assertEqual(self.get('/api/v3/walk/list?streets=' + self.cedar_juniper()).status_code, 200)
 
     def test_too_many_runs_in_one_group_are_refused_before_ordering(self):
         with mock.patch.object(V, 'MAX_GROUP_RUNS', 1):
-            self.assertIn('too many separate street segments', self.error(self.get('/api/v3/walk/list?streets=' + self.cedar_juniper()), 400))
+            self.assertIn('too spread out to route as one walk list', self.error(self.get('/api/v3/walk/list?streets=' + self.cedar_juniper()), 400))
         self.assertEqual(self.get('/api/v3/walk/list?streets=' + self.cedar_juniper()).status_code, 200)
 
     def test_overview_blocks_with_door_and_party_counts(self):

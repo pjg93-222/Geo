@@ -63,12 +63,13 @@ log = logging.getLogger(__name__)
 
 MAX_STREETS = 40            # streets in one list
 MAX_PICK_SPANS = 200        # planned streets (road spans) picked for one list
-MAX_VOTERS = 1500           # voters in one list
+MAX_VOTERS = 10000          # voters in one list: a size safety ceiling (the route, the PDF), not a product limit
+MAX_SCORE_IDS = 1500        # voter ids in one scores POST (the client sends a long list in pieces)
 MAX_ROWS = 500              # rows of an uploaded street list
 MAX_ENTRIES = 200           # results in one POST
 MAX_BODY = 256 * 1024       # bytes of a POST body
 MAX_SPANS = 8000            # blocks in one overview
-MIN_DOORS, MAX_DOORS = 10, 500   # doors asked for a one-click turf, or to cut a list to
+MIN_DOORS = 1               # doors asked for a one-click turf, or to cut a list to; no more than MAX_VOTERS (a door has a voter)
 MAX_TEXT = 60               # characters of street search text
 FOUND_WITH_TEXT, FOUND_WITHOUT_TEXT = 20, 100
 MAX_SEGMENTS = 1200         # distinct (street, parity, precinct, block) in one list; plan_route's cost table grows with runs squared
@@ -87,6 +88,7 @@ NO_CANDIDATE = 'No candidate is set for this district.'
 TRIM_NEEDS_BLOCKS = 'Trim needs planned blocks.'
 SUPPORT_NOT_BUILT = 'Support is not built yet.'
 SCORES_NOT_BUILT = 'Scores are not built yet.'
+TOO_SPREAD = 'This area is too spread out to route as one walk list. Split it into smaller lists by street or block.'
 WEIGHT = r'\d{1,6}(\.\d{1,6})?'
 KEY = re.compile(r'[0-9a-f]{10}')
 PRIVATE = '_voter_keys'     # {person id: voter key}, kept in the stored payload and never sent out
@@ -200,7 +202,7 @@ def trim_query(values, area, plain):
     if 'doors' not in values or not plain:
         raise Refused(TRIM_NEEDS_BLOCKS)
     wp, wi = U.parse_weights(values)
-    return {'doors': str(parse_doors(clean(values['doors'], r'\d{1,3}'), area)),
+    return {'doors': str(parse_doors(clean(values['doors'], r'\d{1,6}'), area)),
             **{name: format(weight, 'g') for name, weight in (('wp', wp), ('wi', wi)) if name in values}}
 
 
@@ -446,11 +448,11 @@ def plan_payload(store, rows, query):
     contacts = store.contacts(row['person_id'] for row in rows)
     at_stop, stops = route_stops(rows, store.directory().by_id)
     if len({(s['street_id'], s['parity'], s['precinct'], s['span_id']) for s in stops}) > MAX_SEGMENTS:
-        raise Refused('This selection splits into too many separate street segments. Narrow the area or streets.')
+        raise Refused(TOO_SPREAD)
     try:
         plan = walk_route.plan_route(store.conn, stops, max_runs=MAX_GROUP_RUNS)
     except walk_route.RouteTooLarge:
-        raise Refused('This selection splits into too many separate street segments. Narrow the area or streets.') from None
+        raise Refused(TOO_SPREAD) from None
     runs, seq = [], 0
     for number, run in enumerate(plan.runs, 1):
         doors = []
@@ -521,7 +523,7 @@ def standard_payload(store, picks, spans, area, query):
     cut = left_out_to_fit(store, spans, area, query, knocked) if 'doors' in query else None      # more doors the blocks do not add
     rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut)
     if len(rows) > MAX_VOTERS:
-        raise Refused('That is %s voters, and a walk list holds up to %s. Choose a smaller area or fewer streets.'
+        raise Refused('That is %s voters, too large to build in one list (at most %s). Choose a smaller area or fewer streets.'
                       % ('{:,}'.format(store.count_voters(picks, area, spans, skip, cut)), '{:,}'.format(MAX_VOTERS)))
     if not rows:
         if skip and store.voters(picks, area, 1, spans):
@@ -726,14 +728,17 @@ def rank_plan(spans, preset, weights, roi, pop_density):
 
 
 def parse_doors(text, area):
-    """The door count asked for a one-click turf, None when none is asked: 10 to 500, from one precinct."""
+    """The door count asked for a one-click turf, None when none is asked: at least 1, from one precinct. More doors than
+    MAX_VOTERS could never fit one list (a door has a voter), so that is refused as too large."""
     if text is None:
         return None
     if 'precinct' not in area:
         raise Refused('Plan a walk list from one precinct.')
-    asked = int(clean(text, r'\d{1,3}'))
-    if not MIN_DOORS <= asked <= MAX_DOORS:
-        raise Refused('Ask for %d to %d doors.' % (MIN_DOORS, MAX_DOORS))
+    asked = int(clean(text, r'\d{1,6}'))
+    if asked < MIN_DOORS:
+        raise Refused('Ask for at least %d door.' % MIN_DOORS)
+    if asked > MAX_VOTERS:
+        raise Refused('That is too many doors to build in one list (at most %s).' % '{:,}'.format(MAX_VOTERS))
     return asked
 
 
@@ -787,8 +792,8 @@ def plan(request):
 def voter_scores(request):
     params(request, set())
     ids = json_body(request, {'ids'}).get('ids')
-    if not isinstance(ids, list) or not 1 <= len(ids) <= MAX_VOTERS:
-        raise Refused('Send between 1 and %s voter ids.' % '{:,}'.format(MAX_VOTERS))
+    if not isinstance(ids, list) or not 1 <= len(ids) <= MAX_SCORE_IDS:
+        raise Refused('Send between 1 and %s voter ids.' % '{:,}'.format(MAX_SCORE_IDS))
     wanted = {clean(ident, r'[0-9A-Za-z_-]{1,80}') for ident in ids}
     with W.walk_store() as store:
         if not store.attach_scores():
