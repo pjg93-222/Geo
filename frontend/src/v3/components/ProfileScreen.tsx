@@ -147,7 +147,7 @@ function SupportPanel({card,push,candidate}:{card:{score:number;pct:number};push
     <div className="panel-pct">{ordinal(card.pct)} percentile</div>
     <div className="panel-range">Support score {round(card.score)} of 100</div>
     {candidate&&<div className="support-mode">{raceModeText(candidate.race_mode)}</div>}
-    {push&&<div className="support-mode support-push"><b>Needs a push {round(push.value)}</b> of 100: {round(push.undecided)} undecided and likely to vote, {round(push.supporter)} supporter who may not vote</div>}
+    {push&&<div className="support-mode support-push"><b>Needs a push {round(push.value)}</b>: {round(push.undecided)} undecided and usually votes, {round(push.supporter)} supporter who may not vote; sphere of influence counts up to 1.5 times.</div>}
   </section>;
 }
 

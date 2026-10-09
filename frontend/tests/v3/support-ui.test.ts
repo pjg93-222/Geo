@@ -62,7 +62,7 @@ test('Needs a push on the People and Profile screens: a column and a sort for ca
   const people = read('PeopleScreen.tsx'), profile = read('ProfileScreen.tsx');
   assert.ok(/\{id:'push',label:'Needs a push'\}/.test(people) && /\{sup&&<Select label="Sort"/.test(people), 'the sort is offered with the other candidate sort');
   assert.ok(/\{sup&&<span className="r" title=\{PRESET_WORDS\.push\}>Needs a push<\/span>\}/.test(people) && /\{sup&&<span className="c-num r">\{r\.push==null\?'':round\(r\.push\)\}<\/span>\}/.test(people), 'the column shows only where candidate support does');
-  assert.ok(/undecided and likely to vote, \{round\(push\.supporter\)\} supporter who may not vote/.test(profile), 'the profile gives both parts in words');
-  const strings = ['Needs a push', 'Sorted by Needs a push', PRESET_WORDS.push, 'undecided and likely to vote', 'supporter who may not vote'];
+  assert.ok(/undecided and usually votes, \{round\(push\.supporter\)\} supporter who may not vote; sphere of influence counts up to 1\.5 times\./.test(profile) && !/of 100: \{round\(push/.test(profile), 'the profile gives both parts in words, without "of 100"');
+  const strings = ['Needs a push', 'Sorted by Needs a push', PRESET_WORDS.push, 'undecided and usually votes', 'supporter who may not vote; sphere of influence counts up to 1.5 times.'];
   for (const text of strings) assert.ok(!ADVISORY.test(text), text);
 });
