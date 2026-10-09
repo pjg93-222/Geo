@@ -17,9 +17,11 @@ attach_scores() attaches scores.sqlite3 for the street plan and the printed scor
 import json
 import re
 import sqlite3
+import sys
 import threading
 from collections import defaultdict
 from contextlib import closing, contextmanager
+from itertools import islice
 from pathlib import Path
 
 from django.conf import settings
@@ -37,8 +39,6 @@ SOURCES = ('walk', 'contacts', 'scores', 'street')
 AREA_COLUMNS = ('ss', 'sh', 'precinct')
 SUGGEST_MIN = 0.6               # a street this similar to the typed one is close enough to offer
 CHUNK = 900                     # ids per IN (...)
-# field_labels.push of one person in 0..1 (the tests compare the two): s = sup_pct / 100, p = part_pct / 100
-PUSH_SQL = '(1 - ABS(2 * sp.sup_pct / 100.0 - 1)) * sc.part_pct / 100.0 + sp.sup_pct / 100.0 * (1 - sc.part_pct / 100.0)'
 
 _lock = threading.Lock()
 _checked = None                 # ((data dir, stamps of the four files), Info)
@@ -366,26 +366,34 @@ class Store:
                     count['odd'] += doors
         return out
 
-    def voters(self, picks, area, limit, spans=None):
+    def voters(self, picks, area, limit, spans=None, skip=None):
         """Rows of the people at the picked street sides ([(street id, 'even'|'odd'|'both')]) and on the picked road
-        spans (ids from the street plan) or, with neither, of everyone in `area` who has a stop: at most `limit`."""
+        spans (ids from the street plan) or, with neither, of everyone in `area` who has a stop: at most `limit`. `skip`:
+        doors ({(stop id, unit '')}) whose people are left out; they do not count towards the limit."""
         clause, args = _area(area, 'p')
+
+        def run(sql, sql_args, room):
+            if skip is None:
+                return self.conn.execute(sql + ' LIMIT ?', [*sql_args, room]).fetchall()
+            return list(islice((r for r in self.conn.execute(sql, sql_args) if (r['stop_id'], r['unit'] or '') not in skip), room))
+
         if not picks and not spans:
-            return self.conn.execute(VOTER_SQL + ' WHERE 1=1' + clause + ' LIMIT ?', [*args, limit]).fetchall()
+            return run(VOTER_SQL + ' WHERE 1=1' + clause, args, limit)
         rows = []
         for street, side in picks:
-            rows.extend(self.conn.execute(VOTER_SQL + ' WHERE p.street_id=?' + PARITY[side] + clause + ' LIMIT ?',
-                                          [street, *args, limit - len(rows)]))
+            rows.extend(run(VOTER_SQL + ' WHERE p.street_id=?' + PARITY[side] + clause, [street, *args], limit - len(rows)))
             if len(rows) >= limit:
                 break
         if spans:
-            skip, skip_args = _picked(picks)
-            rows.extend(self.conn.execute(
-                VOTER_SQL + ' WHERE s.span_id IN (%s)%s%s LIMIT ?' % (','.join('?' * len(spans)), clause, skip),
-                [*spans, *args, *skip_args, max(limit - len(rows), 0)]))
+            left_out, left_out_args = _picked(picks)
+            rows.extend(run(VOTER_SQL + ' WHERE s.span_id IN (%s)%s%s' % (','.join('?' * len(spans)), clause, left_out),
+                            [*spans, *args, *left_out_args], max(limit - len(rows), 0)))
         return rows
 
-    def count_voters(self, picks, area, spans=None):
+    def count_voters(self, picks, area, spans=None, skip=None):
+        """How many people `voters` would list (without a limit); with `skip`, the doors it leaves out are not counted."""
+        if skip is not None:                  # person by person: the doors left out are not in the combo table
+            return len(self.voters(picks, area, sys.maxsize, spans, skip))
         clause, args = _area(area, 'p')
         if not picks and not spans:
             plain, plain_args = _area(area)
@@ -455,25 +463,30 @@ class Store:
         self.support = self.conn.execute("SELECT 1 FROM scores.sqlite_master WHERE type = 'table' AND name = 'support'").fetchone() is not None
         return True
 
-    def span_plan(self, area):
-        """(rows, blocks) for the street plan of `area` (attach_scores first, and the support table must be there). rows:
-        one per (placed block, street) with people in `area`: span_id, street_id, len_m, doors, people, scored (people
-        with a score row), the sums of the four presets (push, mixed, turnout, identify) and of s and p with their counts
-        (s_sum, s_n, p_sum, p_n); s = sup_score / 100 and p = part_pct / 100, except in `push` (field_labels.push): s =
-        sup_pct / 100. A person with no score row or no support counts in `identify` and in nothing else.
-        blocks: {span id: its commonest census block}."""
+    def span_people(self, area):
+        """One row per person at a placed block in `area` (attach_scores first), by block then person id: span_id,
+        street_id, len_m, a, b (the block's end nodes), stop_id, unit ('' for none) and pos (the score store's row; None
+        when the person has no score row). The sums the street plan needs are taken over these rows (walk_views.fold_plan)."""
         clause, args = _area(area, 'p')
-        rows = self.conn.execute(
-            "SELECT s.span_id, p.street_id, r.len_m, COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) AS doors, "
-            "COUNT(*) AS people, COUNT(sc.person_id) AS scored, "
-            "SUM((1 - ABS(2 * sp.sup_score / 100.0 - 1)) * sc.part_pct / 100.0) AS mixed, "
-            "SUM(sp.sup_score / 100.0 * (1 - sc.part_pct / 100.0)) AS turnout, "
-            "SUM(%s) AS push, "
-            "SUM(sp.sup_score IS NULL OR sp.sup_score BETWEEN 100 / 3.0 AND 200 / 3.0) AS identify, "
-            "SUM(sp.sup_score) AS s_sum, COUNT(sp.sup_score) AS s_n, SUM(sc.part_pct) AS p_sum, COUNT(sc.part_pct) AS p_n "
+        return self.conn.execute(
+            "SELECT s.span_id, p.street_id, r.len_m, r.a, r.b, p.stop_id, IFNULL(p.unit, '') AS unit, sc.pos "
             "FROM person p JOIN stop s ON s.id = p.stop_id JOIN road_span r ON r.id = s.span_id "
-            "LEFT JOIN scores.person sc ON sc.person_id = p.person_id LEFT JOIN scores.support sp ON sp.pos = sc.pos "
-            "WHERE s.span_id IS NOT NULL%s GROUP BY s.span_id, p.street_id" % (PUSH_SQL, clause), args).fetchall()
+            "LEFT JOIN scores.person sc ON sc.person_id = p.person_id "
+            "WHERE s.span_id IS NOT NULL%s ORDER BY s.span_id, p.person_id" % clause, args).fetchall()
+
+    def node_xy(self, ids):
+        """{road node id: (x, y)} in metres of these road nodes."""
+        out = {}
+        for chunk in _chunks(sorted(set(ids))):
+            for node, x, y in self.conn.execute('SELECT id, x, y FROM road_node WHERE id IN (%s)' % ','.join('?' * len(chunk)), chunk):
+                out[node] = (x, y)
+        return out
+
+    def span_plan(self, area):
+        """(rows, blocks) for the street plan of `area` (attach_scores first). rows: span_people. blocks: {span id: its
+        commonest census block}."""
+        clause, args = _area(area, 'p')
+        rows = self.span_people(area)
         blocks = {}
         for span_id, block in self.conn.execute(      # most people first, then the lower id: one block per span
                 "SELECT s.span_id, sc.reg_block FROM person p JOIN stop s ON s.id = p.stop_id "
@@ -484,12 +497,12 @@ class Store:
         return rows, blocks
 
     def scores(self, ids):
-        """{person id: (ovr_pct, part_pct, sup_pct or None)} of the listed people the score store holds (attach_scores
-        first); sup_pct is None for everyone when the store has no support table."""
+        """{person id: (ovr_pct, part_pct, sup_pct or None, pos)} of the listed people the score store holds (attach_scores
+        first); sup_pct is None for everyone when the store has no support table. pos is the person's row in the store."""
         join, column = (' LEFT JOIN scores.support sp ON sp.pos = sc.pos', 'sp.sup_pct') if self.support else ('', 'NULL')
         out = {}
         for chunk in _chunks(sorted(set(ids))):
-            for row in self.conn.execute('SELECT sc.person_id, sc.ovr_pct, sc.part_pct, %s FROM scores.person sc%s '
+            for row in self.conn.execute('SELECT sc.person_id, sc.ovr_pct, sc.part_pct, %s, sc.pos FROM scores.person sc%s '
                                          'WHERE sc.person_id IN (%s)' % (column, join, ','.join('?' * len(chunk))), chunk):
-                out[row[0]] = (row[1], row[2], row[3])
+                out[row[0]] = (row[1], row[2], row[3], row[4])
         return out

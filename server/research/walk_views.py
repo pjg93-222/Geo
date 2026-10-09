@@ -4,10 +4,14 @@
   GET  /api/v3/walk/streets      street search by typed text (at most 20) or the busiest streets of an area (at most 100)
   POST /api/v3/walk/match        an uploaded street list (at most 500 rows) matched against the streets
   GET  /api/v3/walk/list         a walk list built now: runs in walking order, doors, voters (at most 40 streets, 200 planned
-                                 streets from the street plan as spans=12,15, 1,500 voters)
+                                 streets from the street plan as spans=12,15, 1,500 voters); fresh=1 leaves out the people at
+                                 doors that already have a recorded result
   GET  /api/v3/walk/overview     the blocks of an area with door and party counts, for map shading
-  GET  /api/v3/walk/plan         street plan (candidate districts): the blocks of an area ranked by a preset's value per 100 m
-  POST /api/v3/walk/scores       overall, participation and support standings of up to 1,500 listed people, for the printed list
+  GET  /api/v3/walk/plan         street plan (candidate districts): the blocks of an area ranked by a preset's value per 100 m,
+                                 doors with a recorded result left out; with doors=N, for one precinct, also the turf of
+                                 about N doors to walk (walk_turf)
+  POST /api/v3/walk/scores       overall, participation and support standings and the untapped potential of up to 1,500
+                                 listed people, for the printed list
   GET  /api/v3/walk/lists        the 50 newest saved lists
   POST /api/v3/walk/lists        freeze a list {title, query, fingerprint}, answered with `changed` when the list built to save
                                  differs from the one shown; or make a re-knock list {title, from, reknock: true}, answered
@@ -31,6 +35,7 @@ from datetime import date, timedelta
 from functools import lru_cache, wraps
 from pathlib import Path
 
+import numpy as np
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.db import DatabaseError, IntegrityError, transaction
@@ -40,10 +45,12 @@ from django.utils import timezone
 from tools import districts as D
 from tools import field_labels as FL
 
+from . import untapped as U
 from . import walk_context as C
 from . import walk_names as N
 from . import walk_route
 from . import walk_store as W
+from . import walk_turf
 from .models import Disposition, WalkList
 from .street_views import local_denied, local_only, local_only_post, response
 from .terrier_contacts import SourceStoreError
@@ -71,7 +78,7 @@ LISTS_SHOWN = 50
 CODES = ('S', 'U', 'O', 'NH', 'MV')
 # an area id as the store holds it: at most 24 characters, but a CT precinct key is the code and the name (build_walk caps it at 64)
 AREA = r'[0-9A-Za-z._-]{1,%d}' % (64 if settings.DISTRICT['precinct_key'] == 'code-name' else 24)
-QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct'}
+QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh'}
 NO_CANDIDATE = 'No candidate is set for this district.'
 SUPPORT_NOT_BUILT = 'Support is not built yet.'
 SCORES_NOT_BUILT = 'Scores are not built yet.'
@@ -176,16 +183,18 @@ def parse_spans(text):
 
 
 def list_query(values):
-    """(picks, spans, area, normalised query) of a list request: the GET parameters, or the query of a list to save."""
+    """(picks, spans, area, normalised query) of a list request: the GET parameters, or the query of a list to save.
+    fresh=1 (the only value) leaves out the people at doors that already have a recorded result."""
     area = area_of(values)
     picks = parse_picks(values['streets']) if 'streets' in values else []
     spans = parse_spans(values['spans']) if 'spans' in values else []
+    fresh = clean(values['fresh'], '1') if 'fresh' in values else None
     if not picks and not spans and not area:
         raise Refused('Pick an area or add a street first.')
     query = {'streets': ','.join('%d:%s' % pick for pick in picks)} if picks else {}
     if spans:
         query['spans'] = ','.join(map(str, spans))
-    return picks, spans, area, {**query, **area}
+    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {})}
 
 
 CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
@@ -463,11 +472,14 @@ def standard_payload(store, picks, spans, area, query):
     directory = store.directory()
     if any(street not in directory.by_id for street, _ in picks):
         raise Refused('One of those streets is not in the walk list data. Search for it again.')
-    rows = store.voters(picks, area, MAX_VOTERS + 1, spans)
+    skip = U.knocked().doors if 'fresh' in query else None          # the doors with a recorded result, for a fresh list
+    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip)
     if len(rows) > MAX_VOTERS:
         raise Refused('That is %s voters, and a walk list holds up to %s. Choose a smaller area or fewer streets.'
-                      % ('{:,}'.format(store.count_voters(picks, area, spans)), '{:,}'.format(MAX_VOTERS)))
+                      % ('{:,}'.format(store.count_voters(picks, area, spans, skip)), '{:,}'.format(MAX_VOTERS)))
     if not rows:
+        if skip and store.voters(picks, area, 1, spans):
+            raise Refused('Everyone on those blocks already has a recorded result.')
         raise Refused('No voters live on those streets in this area.')
     return plan_payload(store, rows, query)
 
@@ -543,7 +555,10 @@ def overview(request):
 
 # ---- the street plan and the printed scores ------------------------------------------------------------------------
 
-SUMS = ('doors', 'people', 'scored', 'push', 'mixed', 'turnout', 'identify', 's_sum', 's_n', 'p_sum', 'p_n')
+# per block: doors and people (without the doors that have a recorded result), people with a score row, the sums of the presets
+# (push, mixed, turnout, identify), the two weighted parts of push, and s and t with their counts
+SUMS = ('doors', 'people', 'scored', 'push', 'mixed', 'turnout', 'identify', 'undecided', 'supporter', 's_sum', 's_n', 't_sum', 't_n')
+MIDDLE = 1e-9               # the middle third of support, edges included, is judged to this much (s is score / 100 in floating point)
 MEASURE = {'value': 'value_per_100m', 'pop_density': 'pop_density', 'voter_density': 'voter_density'}   # weight -> plan column
 
 
@@ -570,21 +585,60 @@ def percentile(values):
             for key, v in values.items() if v is not None}
 
 
-def fold_plan(store, rows, blocks):
-    """{span id: sums over its streets, len_m, street label, commonest block} from Store.span_plan rows. The label is the
-    street with most doors on the block, then the first by name (as the overview)."""
+def fold_plan(store, rows, blocks, terms, knocked, wp, wi):
+    """({span id: sums over its people, a, b, len_m, street label, commonest block}, {'people', 'doors'} left out) from the
+    Store.span_plan rows, with the untapped terms (untapped.terms()) and the doors that have a recorded result (untapped.
+    knocked()). Those doors are left out of every sum and counted in the second answer. A person with a score row adds to
+    all the presets (push at weights wp, wi: untapped potential; mixed and turnout: the two terms, undecided (1 - |2s - 1|) t
+    and supporter s (1 - t), unweighted; identify: s in the middle third, no support counting as 0.5) and to the means of s
+    and t; one without adds to identify alone. The label is the street with most doors on the block, then the first by name
+    (as the overview), counting every door, so a block keeps its name as results come in."""
     names = store.directory().by_id
-    spans, best = {}, {}
-    for row in rows:
-        span = spans.setdefault(row['span_id'], {**dict.fromkeys(SUMS, 0), 'len_m': row['len_m'], 'block': blocks.get(row['span_id'])})
-        for key in SUMS:
-            span[key] += row[key] or 0
-        label = (-row['doors'], street_label(names, row['street_id']))
-        if row['span_id'] not in best or label < best[row['span_id']]:
-            best[row['span_id']] = label
+    pos = np.array([row['pos'] or 0 for row in rows], dtype=np.int64)
+    at = np.maximum(pos - 1, 0)
+    s, t, i = terms.s[at], terms.t[at], terms.i[at]
+    undecided, supporter = (part.tolist() for part in FL.potential_parts(s, t, i, wp, wi))
+    mixed, turnout = terms.undecided[at].tolist(), terms.supporter[at].tolist()
+    middle = ((s >= 1 / 3 - MIDDLE) & (s <= 2 / 3 + MIDDLE)).tolist()
+    s, t, scored = s.tolist(), t.tolist(), (pos > 0).tolist()
+    spans, doors, streets, gone_people, gone_doors = {}, {}, {}, 0, set()
+    for k, row in enumerate(rows):
+        door = row['stop_id'], row['unit']
+        span = spans.get(row['span_id'])
+        if span is None:
+            span = spans[row['span_id']] = {**dict.fromkeys(SUMS, 0), 'len_m': row['len_m'], 'a': row['a'], 'b': row['b'],
+                                            'block': blocks.get(row['span_id'])}
+            doors[row['span_id']] = set()
+        streets.setdefault((row['span_id'], row['street_id']), set()).add(door)
+        if door in knocked.doors:
+            gone_people += 1
+            gone_doors.add(door)
+            continue
+        span['people'] += 1
+        doors[row['span_id']].add(door)
+        if not scored[k]:
+            span['identify'] += 1
+            continue
+        span['scored'] += 1
+        span['undecided'] += undecided[k]
+        span['supporter'] += supporter[k]
+        span['push'] += undecided[k] + supporter[k]
+        span['mixed'] += mixed[k]
+        span['turnout'] += turnout[k]
+        span['identify'] += middle[k]
+        span['s_sum'] += s[k]
+        span['t_sum'] += t[k]
+        span['s_n'] += 1
+        span['t_n'] += 1
+    best = {}
+    for (span_id, street_id), at_door in streets.items():
+        label = (-len(at_door), street_label(names, street_id))
+        if span_id not in best or label < best[span_id]:
+            best[span_id] = label
     for span_id, span in spans.items():
+        span['doors'] = len(doors[span_id])
         span['street'] = best[span_id][1]
-    return spans
+    return spans, {'people': gone_people, 'doors': len(gone_doors)}
 
 
 def rank_plan(spans, preset, weights, roi, pop_density):
@@ -602,8 +656,8 @@ def rank_plan(spans, preset, weights, roi, pop_density):
             continue
         length = max(s['len_m'] or 0.0, roi['min_length_m'])
         rows.append({'span': span_id, 'street': s['street'], 'doors': s['doors'], 'people': s['people'], 'len_m': length,
-                     's_mean': s['s_sum'] / s['s_n'] / 100.0 if s['s_n'] else None,
-                     'p_mean': s['p_sum'] / s['p_n'] / 100.0 if s['p_n'] else None,
+                     's_mean': s['s_sum'] / s['s_n'] if s['s_n'] else None,
+                     't_mean': s['t_sum'] / s['t_n'] if s['t_n'] else None,
                      'pop_density': pop_density.get(s['block']) if pop_density else None,
                      'voter_density': s['people'] / (length / 100.0), 'value': s[preset],
                      'value_per_100m': s[preset] / (length / 100.0)})
@@ -613,9 +667,21 @@ def rank_plan(spans, preset, weights, roi, pop_density):
     rows.sort(key=lambda r: (-r['score'], -r['value_per_100m'], r['span']))
     for rank, r in enumerate(rows, 1):
         r['rank'] = rank
-        for key, digits in (('len_m', 1), ('s_mean', 4), ('p_mean', 4), ('voter_density', 3), ('value', 4), ('value_per_100m', 4), ('score', 4)):
+        for key, digits in (('len_m', 1), ('s_mean', 4), ('t_mean', 4), ('voter_density', 3), ('value', 4), ('value_per_100m', 4), ('score', 4)):
             r[key] = None if r[key] is None else round(r[key], digits)
     return rows, skipped
+
+
+def parse_doors(text, area):
+    """The door count asked for a one-click turf, None when none is asked: 10 to 500, from one precinct."""
+    if text is None:
+        return None
+    if 'precinct' not in area:
+        raise Refused('Plan a walk list from one precinct.')
+    asked = int(clean(text, r'\d{1,3}'))
+    if not 10 <= asked <= 500:
+        raise Refused('Ask for 10 to 500 doors.')
+    return asked
 
 
 @read
@@ -623,13 +689,15 @@ def plan(request):
     roi = settings.DISTRICT['roi']
     if roi is None:
         raise Refused(NO_CANDIDATE, 404)
-    q = params(request, {*W.AREA_COLUMNS, 'preset', 'w_value', 'w_pop', 'w_voter'})
+    q = params(request, {*W.AREA_COLUMNS, 'preset', 'w_value', 'w_pop', 'w_voter', 'wp', 'wi', 'doors'})
     area = area_of(q)
     if not area:
         raise Refused('Choose a district or precinct first.')
     preset = clean(q.get('preset', roi['preset']), r'[a-z]{1,16}')
     if preset not in roi['presets']:
         raise Refused('That street plan is not offered.')
+    wp, wi = U.parse_weights(q)                    # the untapped potential's balance and influence weight (push, and the turf)
+    asked = parse_doors(q.get('doors'), area)
     given = {'value': q.get('w_value'), 'pop_density': q.get('w_pop'), 'voter_density': q.get('w_voter')}
     if all(text is None for text in given.values()):
         weights = dict(roi['weights'])
@@ -646,13 +714,20 @@ def plan(request):
         if not (store.attach_scores() and store.support):
             raise Refused(SUPPORT_NOT_BUILT, 503)
         rows, blocks = store.span_plan(area)
-        spans = fold_plan(store, rows, blocks)
-    if len(spans) > MAX_SPANS:
-        raise Refused('That area has %s blocks; choose a house district or a precinct to rank them.' % '{:,}'.format(len(spans)))
+        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi)
+        if len(spans) > MAX_SPANS:
+            raise Refused('That area has %s blocks; choose a house district or a precinct to rank them.' % '{:,}'.format(len(spans)))
+        xy = store.node_xy({node for s in spans.values() for node in (s['a'], s['b'])}) if asked else None
     ranked, skipped = rank_plan(spans, preset, weights, roi, density)
-    return response({'schema': 'walk-plan-1', 'preset': preset, 'weights': {key: round(w, 6) for key, w in weights.items()},
-                     'p': roi['p'], 'race_mode': settings.DISTRICT['race_mode'], 'spans': ranked, 'not_ranked': skipped,
-                     'matched': {'people': sum(s['people'] for s in spans.values()), 'scored': sum(s['scored'] for s in spans.values())}})
+    body = {'schema': 'walk-plan-2', 'preset': preset, 'weights': {key: round(w, 6) for key, w in weights.items()},
+            'potential': {'wp': wp, 'wi': wi}, 'p': roi['p'], 'race_mode': settings.DISTRICT['race_mode'], 'spans': ranked,
+            'not_ranked': skipped, 'knocked': left_out,
+            'matched': {'people': sum(s['people'] for s in spans.values()), 'scored': sum(s['scored'] for s in spans.values())}}
+    if asked:           # a turf is worth the untapped potential at wp, wi, whatever the preset that ranks the blocks
+        pool = {span_id: {'a': s['a'], 'b': s['b'], 'doors': s['doors'], 'people': s['people'], 'value': s['push'],
+                          'undecided': s['undecided'], 'supporter': s['supporter']} for span_id, s in spans.items()}
+        body['turf'] = walk_turf.turf(pool, xy, asked, roi['turf']['jump_m'], MAX_VOTERS, MAX_PICK_SPANS)
+    return response(body)
 
 
 @write
@@ -667,10 +742,16 @@ def voter_scores(request):
             raise Refused(SCORES_NOT_BUILT, 503)
         found = store.scores(wanted)
     candidate = bool(settings.DISTRICT['candidate'])
-    return response({'scores': {ident: {'ovr': FL.display_round(ovr), 'part': FL.display_round(part),
-                                        **({'sup': FL.display_round(sup), 'push': FL.display_round(FL.push(sup, part))}
-                                           if candidate and sup is not None and part is not None else {})}
-                                for ident, (ovr, part, sup) in found.items()}})
+    if candidate:           # push is the untapped potential at the district's default weights, shown 0..100 (75 at most)
+        terms, (wp, wi) = U.terms(), U.parse_weights({})
+    scores = {}
+    for ident, (ovr, part, sup, pos) in found.items():
+        scores[ident] = {'ovr': FL.display_round(ovr), 'part': FL.display_round(part)}
+        if candidate and sup is not None and part is not None:
+            at = pos - 1
+            scores[ident]['sup'] = FL.display_round(sup)
+            scores[ident]['push'] = FL.display_round(100 * float(FL.potential(terms.s[at], terms.t[at], terms.i[at], wp, wi)))
+    return response({'scores': scores})
 
 
 # ---- saved lists and results ---------------------------------------------------------------------------------------

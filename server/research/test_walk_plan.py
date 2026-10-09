@@ -1,32 +1,36 @@
-"""Street plan (GET /api/v3/walk/plan), the road-span pick of the walk list (spans=) and the printed scores (POST
-/api/v3/walk/scores): hand-computed presets, the 5-door and 50 m rules, the weights, refusals, and the pick feeding a walk
-list. The world is walk_testkit's invented neighbourhood with invented scores and a support table added to its score store.
+"""Street plan (GET /api/v3/walk/plan), the one-click turf (doors=), the road-span pick of the walk list (spans=, fresh=1) and the
+printed scores (POST /api/v3/walk/scores): hand-computed presets, the 5-door and 50 m rules, the weights, doors with a recorded
+result, refusals, and the pick feeding a walk list. The world is walk_testkit's invented neighbourhood with invented scores and a
+support table added to its score store. The untapped terms (untapped.terms) and the doors with a result (untapped.knocked) are
+set by the tests, so the sums here do not depend on how they are read (test_untapped.py covers that).
 
-Hand-checked scores of the three blocks that matter (s = support score / 100, p = participation / 100):
+Hand-checked terms of the three blocks that matter (s = support score / 100, 0.5 with none; t = the invented participation / 100,
+the chance of voting; undecided (1 - |2s - 1|) t; supporter s (1 - t)):
 
   Cedar Heights Dr, first block (chd1, span 1, 200 m, 7 doors, 12 people)
-    p01-p04  s 0.5, p 0.8 0.6 0.4 0.2    mixed (1 - |2s - 1|) p = 0.8 + 0.6 + 0.4 + 0.2 = 2.0     turnout s (1 - p) = 0.5 x 2.0 = 1.0
-    p05-p08  s 1.0, p 0.5                mixed 0                                                    turnout 4 x 0.5 = 2.0
-    p09-p12  s 0.0, p 0.9                mixed 0                                                    turnout 0
-    mixed 2.0   turnout 3.0   identify 4 (the four with s 0.5)   mean s 0.5   mean p 0.6333
+    p01-p04  s 0.5, t 0.8 0.6 0.4 0.2    undecided 0.8 + 0.6 + 0.4 + 0.2 = 2.0     supporter 0.5 x (0.2 + 0.4 + 0.6 + 0.8) = 1.0
+    p05-p08  s 1.0, t 0.5                undecided 0                                supporter 4 x 0.5 = 2.0
+    p09-p12  s 0.0, t 0.9                undecided 0                                supporter 0
+    undecided 2.0   supporter 3.0   identify 4 (the four with s 0.5)   mean s 0.5   mean t 0.6333
   Cedar Heights Dr, second block (chd2, span 6, 200 m, 6 doors, 8 people)
-    p13-p15  s 0.4, p 0.5   mixed 0.8 x 0.5 = 0.4 each (1.2)     turnout 0.4 x 0.5 = 0.2 each (0.6)
-    p16-p17  s 0.2, p 1.0   mixed 0.4 x 1.0 = 0.4 each (0.8)     turnout 0
-    p18      s 2/3, p 0.5   mixed 2/3 x 0.5 = 1/3                 turnout 2/3 x 0.5 = 1/3      (2/3 is inside the middle third)
-    p19-p20  no support score, p 0.5   in nothing but identify
-    mixed 2.3333   turnout 0.9333   identify 6 (three at 0.4, the 2/3, the two with none)   mean s 0.3778   mean p 0.625
+    p13-p15  s 0.4, t 0.5   undecided 0.8 x 0.5 = 0.4 each (1.2)     supporter 0.4 x 0.5 = 0.2 each (0.6)
+    p16-p17  s 0.2, t 1.0   undecided 0.4 x 1.0 = 0.4 each (0.8)     supporter 0
+    p18      s 2/3, t 0.5   undecided 2/3 x 0.5 = 1/3                 supporter 2/3 x 0.5 = 1/3      (2/3 is inside the middle third)
+    p19-p20  no support score, so s 0.5, t 0.5   undecided 0.5 each (1.0)   supporter 0.25 each (0.5)
+    undecided 3.3333   supporter 1.4333   identify 6 (three at 0.4, the 2/3, the two with none)   mean s 0.4083   mean t 0.625
   Ridgeview Ct (rdg, span 7, 100 m, 4 doors, 5 people): only ranked when the door floor is lowered to 4
-    p27 s 1/3 (inside), p28 s 0.329 (outside), p29 s 0.67 (outside), p30 s 0.5 (inside), p31 none    identify 3
+    p27 s 1/3 (inside), p28 s 0.329 (outside), p29 s 0.67 (outside), p30 s 0.5 (inside), p31 none, so 0.5 (inside)   identify 3
 
-Everyone else has s 0.5, p 0.5. The blocks are 200 m, 200 m and 100 m long, so value per 100 m is half the value.
+Everyone else has s 0.5, t 0.5. The blocks are 200 m, 200 m and 100 m long, so value per 100 m is half the value.
 
-Needs a push (Paul 2026-10-08) per person = (1 - |2s - 1|) p + s (1 - p) with s = support STANDING / 100 (only p01 has a standing, 62.5,
-that is not its score, 50) and p as above:
-  chd1  p01 s 0.625 p 0.8: 0.75 x 0.8 + 0.625 x 0.2 = 0.725     p02 0.6 + 0.5 x 0.4 = 0.8     p03 0.4 + 0.5 x 0.6 = 0.7
-        p04 0.2 + 0.5 x 0.8 = 0.6    p05-p08 (s 1, p 0.5) 0 + 0.5 = 0.5 each = 2.0    p09-p12 (s 0, a sure opponent) 0
-        push 0.725 + 0.8 + 0.7 + 0.6 + 2.0 = 4.825, per 100 m 2.4125
-  chd2  p13-p15 (s 0.4, p 0.5) 0.8 x 0.5 + 0.4 x 0.5 = 0.6 each = 1.8    p16-p17 (s 0.2, p 1) 0.4 each = 0.8    p18 (s 2/3, p 0.5) 1/3 + 1/3
-        p19-p20 have no support: nothing.   push 1.8 + 0.8 + 2/3 = 3.2667, per 100 m 1.6333  (so push puts chd1 first; mixed puts chd2 first)
+Untapped potential ("Needs a push"), per person = (wP undecided + wR supporter) (1 + wI i), at the defaults wP = wR = wI = 0.5. The
+sphere of influence standing i is 0 except p01 0.8, p05 0.4 and p17 0.6:
+  chd1  p01 0.5 x (0.8 + 0.1) x 1.4 = 0.63      p02 0.5 x (0.6 + 0.2) = 0.4      p03 0.5 x (0.4 + 0.3) = 0.35      p04 0.5 x (0.2 + 0.4) = 0.3
+        p05 0.5 x (0 + 0.5) x 1.2 = 0.3         p06-p08 0.5 x 0.5 = 0.25 each = 0.75       p09-p12 (s 0, a sure opponent) 0
+        potential 2.73, per 100 m 1.365
+  chd2  p13-p15 0.5 x (0.4 + 0.2) = 0.3 each = 0.9      p16 0.5 x 0.4 = 0.2      p17 0.2 x 1.3 = 0.26      p18 0.5 x 2/3 = 1/3
+        p19-p20 0.5 x (0.5 + 0.25) = 0.375 each = 0.75       potential 2.4433, per 100 m 1.2217
+        (so the potential puts chd1 first; undecided alone puts chd2 first)
 """
 import copy
 import hashlib
@@ -36,6 +40,7 @@ import sqlite3
 import tempfile
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import urlencode
 
@@ -70,9 +75,11 @@ SCORES = {                                # person key -> (support score or None
     'p18': (200 / 3.0, 50.0), 'p19': (None, 50.0), 'p20': (None, 50.0),
     'p27': (100 / 3.0, 50.0), 'p28': (32.9, 50.0), 'p29': (67.0, 50.0), 'p30': (50.0, 50.0), 'p31': (None, 50.0),
 }
+INFLUENCE = {'p01': 0.8, 'p05': 0.4, 'p17': 0.6}      # sphere of influence standing; everyone else 0
 OVR = {'p01': 71.5, 'p02': 40.4}          # overall standings that exercise the rounding (half goes up)
 SUP_PCT = {'p01': 62.5}                   # a support standing that is not the support score
 PRECINCT_W = '5200021301'
+PRECINCT_F = '5200021417'                 # Fountain's Pine St alone, 3 km from everything else
 
 
 def lowered(**roi):
@@ -81,19 +88,35 @@ def lowered(**roi):
 
 
 def add_scores(stores):
-    """Give the testkit's score store the columns and the support table the street plan reads."""
+    """Give the testkit's score store the columns and the support table the street plan reads; {person key: pos}."""
     census = {r['person_id']: r['csv']['svi_registration_censusid'] for r in stores.case.rows}
+    positions = {}
     with closing(sqlite3.connect(stores.directory / 'scores.sqlite3')) as db, db:
         for column in ('ovr_pct REAL', 'part_pct REAL', 'reg_block TEXT'):
             db.execute('ALTER TABLE person ADD COLUMN ' + column)
         db.execute(SUPPORT_DDL)
         for key, person in stores.expected['keys'].items():
-            pos = db.execute('SELECT pos FROM person WHERE person_id = ?', (person,)).fetchone()[0]
+            pos = positions[key] = db.execute('SELECT pos FROM person WHERE person_id = ?', (person,)).fetchone()[0]
             sup, part = SCORES.get(key, PLAIN)
             db.execute('UPDATE person SET ovr_pct = ?, part_pct = ?, reg_block = ? WHERE pos = ?',
                        (OVR.get(key, 50.0), part, census[person], pos))
             if sup is not None:
                 db.execute('INSERT INTO support VALUES (?, ?, ?, 1, 1, 1)', (pos, sup, SUP_PCT.get(key, sup)))
+    return positions
+
+
+def fake_terms(positions):
+    """What untapped.terms() gives for the world: s = support score / 100 (0.5 with none), t = participation / 100, i = INFLUENCE."""
+    n = len(positions)
+    s, t, i = np.full(n, 0.5), np.full(n, 0.5), np.zeros(n)
+    for key, pos in positions.items():
+        sup, part = SCORES.get(key, PLAIN)
+        if sup is not None:
+            s[pos - 1] = sup / 100.0
+        t[pos - 1] = part / 100.0
+        i[pos - 1] = INFLUENCE.get(key, 0.0)
+    return SimpleNamespace(n=n, s=s, t=t, i=i, undecided=(1 - np.abs(2 * s - 1)) * t, supporter=s * (1 - t),
+                           t_source={'sai': n, 'record': 0, 'even': 0}, stamp=None)
 
 
 @override_settings(LOCAL_ADMIN_ACCESS=True, HOSTED=False, DEMO_MODE=False, DISTRICT=CANDIDATE)
@@ -107,7 +130,8 @@ class WalkPlanTests(TestCase):
         cls.stores = T.write_minimal_stores(Path(cls.temporary.name) / 'world')
         if not B.build(cls.stores.source_csv, cls.stores.directory, force=True)['replaced']:
             raise AssertionError('The synthetic walk store was not written.')
-        add_scores(cls.stores)                  # after the build, so the walk store is the testkit's own
+        cls.positions = add_scores(cls.stores)                  # after the build, so the walk store is the testkit's own
+        cls.terms = fake_terms(cls.positions)
         cls.expected = cls.stores.expected
         census = {r['person_id']: r['csv']['svi_registration_censusid'] for r in cls.stores.case.rows}
         cls.block_id = {b['id']: census[cls.expected['doors'][b['doors'][0]]['people'][0]] for b in cls.expected['blocks'] if b['doors']}
@@ -124,6 +148,12 @@ class WalkPlanTests(TestCase):
 
     def setUp(self):
         self.client = Client(**LOOPBACK)
+        self.doors = set()                          # doors with a recorded result: (stop id, unit)
+        for name, value in (('terms', lambda: self.terms),
+                            ('knocked', lambda: SimpleNamespace(version='0-0', doors=frozenset(self.doors), pos=None, people=0))):
+            patch = mock.patch.object(V.U, name, side_effect=value)
+            patch.start()
+            self.addCleanup(patch.stop)
 
     # ---- helpers ---------------------------------------------------------------------------------------------
     def get(self, url, status=200):
@@ -160,6 +190,18 @@ class WalkPlanTests(TestCase):
     def cedar(self):
         return self.get('/api/v3/walk/streets?q=cedar')['streets'][0]['id']
 
+    def span_of(self, block):
+        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+            (span,) = {db.execute('SELECT s.span_id FROM person p JOIN stop s ON s.id = p.stop_id WHERE p.person_id = ?',
+                                  (p,)).fetchone()[0] for p in self.people_in(block)}
+        return span
+
+    def knock(self, *keys):
+        """A result is recorded at the doors of these people: everyone at those doors is left out."""
+        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+            for person in self.ids(*keys):
+                self.doors.add(db.execute("SELECT stop_id, IFNULL(unit, '') FROM person WHERE person_id = ?", (person,)).fetchone())
+
     def world_without_support(self, name):
         copy_dir = Path(self.temporary.name) / name
         shutil.copytree(self.stores.directory, copy_dir)
@@ -185,41 +227,59 @@ class WalkPlanTests(TestCase):
                              [(200.0,), (200.0,), (100.0,)])
 
     # ---- the street plan -------------------------------------------------------------------------------------
-    def test_mixed_support_streets_by_hand(self):
+    def test_undecided_voters_who_usually_vote_by_hand(self):
         plan = self.plan()
-        self.assertEqual({k: plan[k] for k in ('schema', 'preset', 'p', 'race_mode')},
-                         {'schema': 'walk-plan-1', 'preset': 'mixed', 'p': 'turnout', 'race_mode': 'general'})
+        self.assertEqual({k: plan[k] for k in ('schema', 'preset', 'p', 'race_mode', 'potential', 'knocked')},
+                         {'schema': 'walk-plan-2', 'preset': 'mixed', 'p': 'turnout', 'race_mode': 'general',
+                          'potential': {'wp': 0.5, 'wi': 0.5}, 'knocked': {'people': 0, 'doors': 0}})
         self.assertEqual(plan['weights'], {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0})
         self.assertEqual(plan['spans'], [
-            {'span': 6, 'street': 'Cedar Heights Dr', 'doors': 6, 'people': 8, 'len_m': 200.0, 's_mean': 0.3778, 'p_mean': 0.625,
-             'pop_density': None, 'voter_density': 4.0, 'value': 2.3333, 'value_per_100m': 1.1667, 'score': 0.75, 'rank': 1},
-            {'span': 1, 'street': 'Cedar Heights Dr', 'doors': 7, 'people': 12, 'len_m': 200.0, 's_mean': 0.5, 'p_mean': 0.6333,
+            {'span': 6, 'street': 'Cedar Heights Dr', 'doors': 6, 'people': 8, 'len_m': 200.0, 's_mean': 0.4083, 't_mean': 0.625,
+             'pop_density': None, 'voter_density': 4.0, 'value': 3.3333, 'value_per_100m': 1.6667, 'score': 0.75, 'rank': 1},
+            {'span': 1, 'street': 'Cedar Heights Dr', 'doors': 7, 'people': 12, 'len_m': 200.0, 's_mean': 0.5, 't_mean': 0.6333,
              'pop_density': None, 'voter_density': 6.0, 'value': 2.0, 'value_per_100m': 1.0, 'score': 0.25, 'rank': 2}])
+        self.assertNotIn('turf', plan)
 
-    def test_needs_a_push_by_hand_and_is_the_default_of_a_real_district(self):
+    def test_untapped_potential_by_hand_and_is_the_default_of_a_real_district(self):
         with override_settings(DISTRICT={**CANDIDATE, 'roi': ROI_PUSH}):
             plan = self.plan()
-        self.assertEqual({k: plan[k] for k in ('schema', 'preset')}, {'schema': 'walk-plan-1', 'preset': 'push'})
+        self.assertEqual({k: plan[k] for k in ('schema', 'preset')}, {'schema': 'walk-plan-2', 'preset': 'push'})
         self.assertEqual(plan['spans'], [
-            {'span': 1, 'street': 'Cedar Heights Dr', 'doors': 7, 'people': 12, 'len_m': 200.0, 's_mean': 0.5, 'p_mean': 0.6333,
-             'pop_density': None, 'voter_density': 6.0, 'value': 4.825, 'value_per_100m': 2.4125, 'score': 0.75, 'rank': 1},
-            {'span': 6, 'street': 'Cedar Heights Dr', 'doors': 6, 'people': 8, 'len_m': 200.0, 's_mean': 0.3778, 'p_mean': 0.625,
-             'pop_density': None, 'voter_density': 4.0, 'value': 3.2667, 'value_per_100m': 1.6333, 'score': 0.25, 'rank': 2}])
+            {'span': 1, 'street': 'Cedar Heights Dr', 'doors': 7, 'people': 12, 'len_m': 200.0, 's_mean': 0.5, 't_mean': 0.6333,
+             'pop_density': None, 'voter_density': 6.0, 'value': 2.73, 'value_per_100m': 1.365, 'score': 0.75, 'rank': 1},
+            {'span': 6, 'street': 'Cedar Heights Dr', 'doors': 6, 'people': 8, 'len_m': 200.0, 's_mean': 0.4083, 't_mean': 0.625,
+             'pop_density': None, 'voter_density': 4.0, 'value': 2.4433, 'value_per_100m': 1.2217, 'score': 0.25, 'rank': 2}])
         self.assertEqual(plan, self.plan(preset='push'))
 
-    def test_push_ranks_the_streets_differently_from_the_alternatives_it_leaves_in_place(self):
+    def test_the_balance_and_influence_weights_move_the_potential(self):
+        def values(**query):
+            plan = self.plan(preset='push', **query)
+            return plan['potential'], {r['span']: r['value'] for r in plan['spans']}
+        self.assertEqual(values(wp='1', wi='0'), ({'wp': 1.0, 'wi': 0.0}, {1: 2.0, 6: 3.3333}))        # undecided alone: the older 'mixed'
+        self.assertEqual(values(wp='0', wi='0'), ({'wp': 0.0, 'wi': 0.0}, {1: 3.0, 6: 1.4333}))        # supporters alone: the older 'turnout'
+        self.assertEqual(values(wp='0.5', wi='0')[1], {1: 2.5, 6: 2.3833})                             # no influence: half of undecided + supporter
+        # undecided alone with influence 1: p01 0.8 x 1.8, p02-p04 1.2; p13-p15 1.2, p16 0.4, p17 0.4 x 1.6, p18 1/3, p19-p20 1.0
+        self.assertEqual(values(wp='1', wi='1'), ({'wp': 1.0, 'wi': 1.0}, {1: 2.64, 6: 3.5733}))
+        self.assertEqual(values(wp='0.3', wi='0.0001')[0], {'wp': 0.3, 'wi': 0.0001})
+        self.assertEqual(self.plan(preset='push', wp='1.0')['potential'], {'wp': 1.0, 'wi': 0.5})        # one weight sent, the other default
+
+    def test_the_weights_leave_the_other_presets_alone(self):
+        self.assertEqual(self.plan(preset='mixed', wp='0', wi='1')['spans'], self.plan(preset='mixed')['spans'])
+        self.assertEqual(self.plan(preset='identify', wp='0', wi='1')['spans'], self.plan(preset='identify')['spans'])
+
+    def test_potential_ranks_the_streets_differently_from_the_alternatives_it_leaves_in_place(self):
         self.assertEqual([r['span'] for r in self.plan(preset='push')['spans']], [1, 6])
         self.assertEqual([r['span'] for r in self.plan(preset='mixed')['spans']], [6, 1])
         self.assertEqual([r['span'] for r in self.plan(preset='turnout')['spans']], [1, 6])
         self.assertEqual([r['span'] for r in self.plan(preset='identify')['spans']], [6, 1])
         self.assertEqual(ROI_PUSH['presets'], ('push', 'mixed', 'turnout', 'identify'))
 
-    def test_push_follows_the_same_span_rules_and_weights(self):
+    def test_potential_follows_the_same_span_rules_and_weights(self):
         with override_settings(DISTRICT=lowered(min_doors=4)):
             self.assertEqual(sorted(self.by_span(self.plan(preset='push'))), [1, 6, 7])
         with override_settings(DISTRICT=lowered(min_length_m=250)):
             rows = self.by_span(self.plan(preset='push'))
-        self.assertEqual((rows[1]['len_m'], rows[1]['value_per_100m'], rows[6]['value_per_100m']), (250.0, 1.93, 1.3067))
+        self.assertEqual((rows[1]['len_m'], rows[1]['value_per_100m'], rows[6]['value_per_100m']), (250.0, 1.092, 0.9773))
         self.write_density(chd1=900.0, chd2=100.0)
         self.assertEqual([(r['span'], r['score']) for r in self.plan(preset='push', w_value='0', w_pop='1', w_voter='0')['spans']],
                          [(1, 0.75), (6, 0.25)])
@@ -230,7 +290,7 @@ class WalkPlanTests(TestCase):
         rows = self.by_span(plan)
         self.assertEqual([r['span'] for r in plan['spans']], [1, 6])
         self.assertEqual((rows[1]['value'], rows[1]['value_per_100m'], rows[1]['rank']), (3.0, 1.5, 1))
-        self.assertEqual((rows[6]['value'], rows[6]['value_per_100m'], rows[6]['rank']), (0.9333, 0.4667, 2))
+        self.assertEqual((rows[6]['value'], rows[6]['value_per_100m'], rows[6]['rank']), (1.4333, 0.7167, 2))
 
     def test_voter_identification_counts_the_middle_third_and_the_missing(self):
         plan = self.plan(preset='identify')
@@ -261,7 +321,7 @@ class WalkPlanTests(TestCase):
     def test_a_short_block_counts_as_fifty_metres_and_the_floor_can_be_raised(self):
         with override_settings(DISTRICT=lowered(min_length_m=250)):
             rows = self.by_span(self.plan())
-        self.assertEqual((rows[6]['len_m'], rows[6]['value_per_100m'], rows[6]['voter_density']), (250.0, 0.9333, 3.2))
+        self.assertEqual((rows[6]['len_m'], rows[6]['value_per_100m'], rows[6]['voter_density']), (250.0, 1.3333, 3.2))
         self.assertEqual((rows[1]['len_m'], rows[1]['value_per_100m']), (250.0, 0.8))
 
     def test_the_weights_blend_the_standings_of_value_population_and_voters(self):
@@ -294,9 +354,24 @@ class WalkPlanTests(TestCase):
         with mock.patch.object(V, 'MAX_SPANS', 3):
             self.assertIn('blocks', self.plan(status=400)['error'])
 
+    def test_the_potential_weights_and_the_doors_are_checked(self):
+        for name, bad in (('wp', '1.5'), ('wi', '-1'), ('wp', ''), ('wi', 'x'), ('wp', '0.12345'), ('wi', '1e0'), ('wp', '2')):
+            self.plan(status=400, **{name: bad})
+        for good in ('0', '1', '0.5', '0.0001', '1.0'):
+            self.plan(wp=good, wi=good)
+        self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors='20', status=200)['turf']['asked'], 20)
+        for bad in ('9', '501', '0', '5'):
+            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)['error'], 'Ask for 10 to 500 doors.')
+        for bad in ('x', '1000', '', '-20', '2.5'):
+            self.plan(ss=None, precinct=PRECINCT_W, doors=bad, status=400)
+        self.assertEqual(self.plan(doors='20', status=400)['error'], 'Plan a walk list from one precinct.')      # a district is not a precinct
+        self.assertEqual(self.plan(ss=None, sh='018', doors='20', status=400)['error'], 'Plan a walk list from one precinct.')
+        self.assertEqual(self.plan(ss='010', precinct=PRECINCT_W, doors='10')['turf']['asked'], 10)           # a precinct inside a district is
+
     def test_a_district_without_a_candidate_has_no_street_plan(self):
         with override_settings(DISTRICT=CO):
             self.assertEqual(self.plan(status=404)['error'], 'No candidate is set for this district.')
+            self.assertEqual(self.plan(ss=None, precinct=PRECINCT_W, doors='20', status=404)['error'], 'No candidate is set for this district.')
             self.assertEqual(self.get('/api/v3/walk/plan', 404)['error'], 'No candidate is set for this district.')
 
     def test_without_support_there_is_no_plan(self):
@@ -308,6 +383,7 @@ class WalkPlanTests(TestCase):
     def test_the_plan_reads_the_score_store_and_never_writes_it(self):
         before = hashlib.sha256((self.stores.directory / 'scores.sqlite3').read_bytes()).hexdigest()
         self.plan()
+        self.plan(ss=None, precinct=PRECINCT_W, doors='10')
         self.assertEqual(hashlib.sha256((self.stores.directory / 'scores.sqlite3').read_bytes()).hexdigest(), before)
 
     def test_a_score_store_from_another_source_file_is_refused(self):
@@ -317,6 +393,147 @@ class WalkPlanTests(TestCase):
             with self.assertRaises(SourceStoreError) as caught:
                 store.attach_scores()
         self.assertEqual(caught.exception.status, 409)
+
+    def test_a_block_carries_its_end_nodes_and_blocks_that_meet_share_one(self):
+        with W.walk_store() as store:
+            store.attach_scores()
+            rows, blocks = store.span_plan({'ss': '010'})
+            spans, gone = V.fold_plan(store, rows, blocks, self.terms, SimpleNamespace(doors=frozenset()), 0.5, 0.5)
+            with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+                ends = dict((i, (a, b)) for i, a, b in db.execute('SELECT id, a, b FROM road_span'))
+            xy = store.node_xy([n for span in spans.values() for n in (span['a'], span['b'])])
+        self.assertEqual(gone, {'people': 0, 'doors': 0})
+        self.assertEqual({k: (v['a'], v['b']) for k, v in spans.items()}, {k: ends[k] for k in spans})
+        chd1, chd2 = spans[1], spans[6]
+        self.assertEqual(len({chd1['a'], chd1['b']} & {chd2['a'], chd2['b']}), 1)            # Cedar Heights Dr meets itself at Juniper Ln
+        self.assertTrue(all(isinstance(x, float) and isinstance(y, float) for x, y in xy.values()))
+        self.assertEqual(set(xy), {n for span in spans.values() for n in (span['a'], span['b'])})
+        node = chd1['a'] if chd1['a'] in (chd2['a'], chd2['b']) else chd1['b']
+        far = chd1['b'] if node == chd1['a'] else chd1['a']
+        self.assertAlmostEqual(((xy[node][0] - xy[far][0]) ** 2 + (xy[node][1] - xy[far][1]) ** 2) ** 0.5, 200.0, delta=0.5)
+
+    # ---- doors with a recorded result ------------------------------------------------------------------------
+    def test_a_door_with_a_recorded_result_leaves_the_sums_and_is_counted(self):
+        self.knock('p03')                                    # the door at 1132 holds p03, p04 and p05
+        mixed = self.plan()
+        self.assertEqual(mixed['knocked'], {'people': 3, 'doors': 1})
+        self.assertEqual(mixed['matched'], {'people': 31, 'scored': 31})
+        row = self.by_span(mixed)[1]
+        self.assertEqual((row['doors'], row['people'], row['value'], row['value_per_100m'], row['voter_density']), (6, 9, 1.4, 0.7, 4.5))
+        self.assertEqual((row['s_mean'], row['t_mean']), (0.4444, 0.7222))
+        self.assertEqual(self.by_span(mixed)[6]['value'], 3.3333)                            # the other block is as it was
+        rows = self.by_span(self.plan(preset='push'))
+        self.assertEqual((rows[1]['value'], rows[1]['doors'], rows[1]['people']), (1.78, 6, 9))     # 2.73 less 0.35 + 0.3 + 0.3
+        self.assertEqual(self.by_span(self.plan(preset='turnout'))[1]['value'], 1.8)
+        self.assertEqual(self.by_span(self.plan(preset='identify'))[1]['value'], 2)
+
+    def test_only_the_unit_with_a_result_leaves_when_a_house_has_two(self):
+        self.knock('p19')                                    # 1285 unit A; p20 at unit B of the same stop stays
+        plan = self.plan()
+        self.assertEqual(plan['knocked'], {'people': 1, 'doors': 1})
+        row = self.by_span(plan)[6]
+        self.assertEqual((row['doors'], row['people'], row['value']), (5, 7, 2.8333))
+
+    def test_two_people_at_one_door_leave_together(self):
+        self.knock('p13')                                    # p14 lives at the same door
+        self.assertEqual(self.plan()['knocked'], {'people': 2, 'doors': 1})
+
+    def test_a_block_with_every_door_done_is_not_ranked_and_the_others_are_unchanged(self):
+        self.knock(*(f'p{n:02d}' for n in range(1, 13)))
+        plan = self.plan()
+        self.assertEqual(plan['knocked'], {'people': 12, 'doors': 7})
+        self.assertEqual([r['span'] for r in plan['spans']], [6])
+        self.assertEqual(plan['not_ranked'], {'spans': 6, 'people': 14})
+        self.assertEqual(plan['matched'], {'people': 22, 'scored': 22})
+        self.assertEqual(self.by_span(self.plan(preset='push'))[6]['value'], 2.4433)
+
+    def test_doors_with_a_result_elsewhere_are_not_counted_in_this_area(self):
+        self.knock('p35')                                    # Fountain's Pine St, outside this senate district
+        self.assertEqual(self.plan()['knocked'], {'people': 0, 'doors': 0})
+        self.assertEqual(self.plan(ss='011')['knocked'], {'people': 2, 'doors': 1})
+
+    # ---- the one-click turf ----------------------------------------------------------------------------------
+    def turf(self, doors, precinct=PRECINCT_W, **query):
+        return self.plan(ss=None, precinct=precinct, doors=str(doors), **query)['turf']
+
+    def test_the_turf_starts_at_the_most_untapped_block_and_grows_along_connected_streets(self):
+        # blocks of precinct W by potential: chd1 2.73 (7 doors), rdg 1.5793, chd2 1.1 (3 doors), jun_s 0.75, jun_n1 0.375
+        jun_s, jun_n1 = self.span_of('jun_s'), self.span_of('jun_n1')
+        self.assertEqual(self.turf(10), {'asked': 10, 'spans': [1, 6], 'doors': 10, 'people': 16, 'value': 3.83,
+                                         'undecided': 1.96, 'supporter': 1.87, 'jumps': [], 'stopped': 'full'})
+        # rdg, the second best block of all, waits: it meets none of the blocks taken until Juniper Ln is
+        self.assertEqual(self.turf(11)['spans'], [1, 6, jun_s])
+        self.assertEqual(self.turf(13)['spans'], [1, 6, jun_s, jun_n1])
+        full = self.turf(14)
+        self.assertEqual((full['spans'], full['doors'], full['stopped']), ([1, 6, jun_s, jun_n1, 7], 17, 'full'))
+        everything = self.turf(18)
+        self.assertEqual((everything['spans'], everything['doors'], everything['people'], everything['stopped']),
+                         ([1, 6, jun_s, jun_n1, 7], 17, 24, 'exhausted'))
+        self.assertEqual(everything['jumps'], [])
+
+    def test_the_turf_is_worth_the_potential_at_the_weights_whatever_the_preset(self):
+        self.assertEqual(self.turf(10, preset='identify'), self.turf(10))
+        self.assertEqual(self.turf(10, preset='mixed'), self.turf(10, preset='push'))
+        turf = self.turf(10, wp='1', wi='0')                       # undecided alone: chd1 2.0 + chd2's four 1.6
+        self.assertEqual((turf['spans'], turf['value'], turf['undecided'], turf['supporter']), ([1, 6], 3.6, 3.6, 0))
+        turf = self.turf(10, wp='0', wi='0')                       # supporters alone: chd1 3.0 + chd2's four 0.6
+        self.assertEqual((turf['spans'], turf['value'], turf['undecided'], turf['supporter']), ([1, 6], 3.6, 0, 3.6))
+
+    def test_the_turf_overshoots_the_asked_doors_by_less_than_its_last_block(self):
+        with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
+            for asked in range(10, 18):
+                turf = self.turf(asked)
+                (last,) = db.execute("SELECT COUNT(DISTINCT p.stop_id || ':' || IFNULL(p.unit, '')) FROM person p JOIN stop s ON s.id = p.stop_id "
+                                     "WHERE s.span_id = ? AND p.precinct = ?", (turf['spans'][-1], PRECINCT_W)).fetchone()
+                self.assertEqual(turf['stopped'], 'full', asked)
+                self.assertGreaterEqual(turf['doors'], asked)
+                self.assertLess(turf['doors'] - last, asked)
+
+    def test_a_block_whose_doors_are_all_done_is_not_in_the_turf(self):
+        self.knock(*(f'p{n:02d}' for n in range(1, 13)))          # all of chd1, the best block of the precinct
+        turf = self.turf(10)
+        # Ridgeview Ct is best now (1.5793); Juniper Ln north meets it, then Cedar Heights Dr (1.1), then Juniper Ln south
+        self.assertEqual((turf['spans'], turf['doors'], turf['stopped']),
+                         ([7, self.span_of('jun_n1'), 6, self.span_of('jun_s')], 10, 'full'))
+
+    def test_a_door_with_a_result_changes_the_turf_and_the_list_built_from_it_is_the_same_size(self):
+        self.knock('p03')
+        turf = self.turf(10)
+        jun_s = self.span_of('jun_s')
+        self.assertEqual((turf['spans'], turf['doors'], turf['people']), ([1, 6, jun_s], 11, 15))      # chd1 6 doors, chd2 3, Juniper 2
+        listed = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W, fresh='1')
+        self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (turf['doors'], turf['people']))
+        self.assertGreater(listed['totals']['walk_m'], 0)
+        self.assertEqual(listed['query'], {'spans': ','.join(map(str, sorted(turf['spans']))), 'precinct': PRECINCT_W, 'fresh': '1'})
+        stale = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W)           # without fresh the done doors come back
+        self.assertEqual((stale['totals']['doors'], stale['totals']['voters']), (turf['doors'] + 1, turf['people'] + 3))
+
+    def test_the_list_built_from_a_turf_matches_its_doors_and_people(self):
+        for asked in (10, 12, 14, 17):
+            turf = self.turf(asked)
+            listed = self.list(spans=','.join(map(str, turf['spans'])), precinct=PRECINCT_W, fresh='1')
+            self.assertEqual((listed['totals']['doors'], listed['totals']['voters']), (turf['doors'], turf['people']), asked)
+            self.assertGreater(listed['totals']['walk_m'], 0)
+
+    def test_a_precinct_with_less_than_the_asked_doors_gives_all_it_has(self):
+        spans = {self.span_of('pine_f')}
+        turf = self.turf(10, precinct=PRECINCT_F)
+        self.assertEqual((set(turf['spans']), turf['doors'], turf['people'], turf['stopped']), (spans, 2, 4, 'exhausted'))
+        self.assertEqual(turf['jumps'], [])
+
+    def test_the_turf_is_stopped_by_the_list_limits(self):
+        with mock.patch.object(V, 'MAX_VOTERS', 14):
+            turf = self.turf(17)
+        self.assertEqual((turf['spans'], turf['people'], turf['stopped']), ([1], 12, 'cap'))              # chd2's four would make 16
+        with mock.patch.object(V, 'MAX_PICK_SPANS', 3):
+            turf = self.turf(17)
+        self.assertEqual((len(turf['spans']), turf['stopped']), (3, 'cap'))
+
+    def test_the_reach_of_a_jump_is_the_districts_setting(self):
+        with override_settings(DISTRICT=lowered(turf={'doors': 60, 'jump_m': 123.0})), \
+                mock.patch.object(V.walk_turf, 'turf', wraps=V.walk_turf.turf) as spy:
+            self.turf(10)
+        self.assertEqual(spy.call_args.args[3:], (123.0, V.MAX_VOTERS, V.MAX_PICK_SPANS))
 
     # ---- the road-span pick of the walk list -----------------------------------------------------------------
     def test_spans_alone_list_exactly_those_blocks(self):
@@ -373,18 +590,96 @@ class WalkPlanTests(TestCase):
         self.assertEqual(self.list(ss='010')['query'], {'ss': '010'})
         self.assertEqual(self.list(streets='%d:odd' % cedar, precinct=PRECINCT_W)['query'],
                          {'streets': '%d:odd' % cedar, 'precinct': PRECINCT_W})
+        self.knock('p03')                                    # doors with a result change nothing in a list that does not ask for fresh
+        self.assertEqual(self.voters(self.list(spans='1,6', precinct=PRECINCT_W)), self.people_in('chd1', 'chd2', precinct=PRECINCT_W))
+
+    # ---- fresh lists -----------------------------------------------------------------------------------------
+    def test_a_fresh_list_leaves_out_the_people_at_doors_with_a_result(self):
+        self.knock('p03')                                    # p03, p04 and p05 live at that door
+        payload = self.list(spans='1,6', precinct=PRECINCT_W, fresh='1')
+        self.assertEqual(self.voters(payload), self.people_in('chd1', 'chd2', precinct=PRECINCT_W) - set(self.ids('p03', 'p04', 'p05')))
+        self.assertEqual(payload['query'], {'spans': '1,6', 'precinct': PRECINCT_W, 'fresh': '1'})
+        self.assertEqual((payload['totals']['voters'], payload['totals']['doors']), (13, 9))
+        plain = self.list(spans='1,6', precinct=PRECINCT_W)
+        self.assertEqual((plain['totals']['voters'], plain['totals']['doors']), (16, 10))
+        self.assertNotEqual(payload['fingerprint'], plain['fingerprint'])
+
+    def test_a_fresh_list_with_nothing_to_leave_out_is_the_list_with_fresh_in_its_query(self):
+        plain = self.list(spans='1,6')
+        fresh = self.list(spans='1,6', fresh='1')
+        self.assertEqual(fresh['query'], {'spans': '1,6', 'fresh': '1'})
+        self.assertEqual(self.voters(fresh), self.voters(plain))
+        self.assertEqual((fresh['totals'], fresh['runs']), (plain['totals'], plain['runs']))
+
+    def test_fresh_works_for_streets_and_areas_too(self):
+        self.knock('p01')                                    # the door at 1112: p01 and p02
+        cedar = self.cedar()
+        payload = self.list(streets='%d:both' % cedar, fresh='1')
+        self.assertEqual(self.voters(payload), self.people_in('chd1', 'chd2', 'chd3') - set(self.ids('p01', 'p02')))
+        self.assertEqual(payload['query'], {'streets': '%d:both' % cedar, 'fresh': '1'})
+        area = self.list(ss='010', fresh='1')
+        self.assertEqual(area['totals']['voters'], self.list(ss='010')['totals']['voters'] - 2)
+        self.assertEqual(area['query'], {'ss': '010', 'fresh': '1'})
+
+    def test_everyone_having_a_result_is_said_in_words(self):
+        self.knock(*(f'p{n:02d}' for n in range(1, 13)))
+        self.assertEqual(self.list(400, spans='1', fresh='1')['error'], 'Everyone on those blocks already has a recorded result.')
+        self.assertEqual(self.list(400, spans='1', precinct=PRECINCT_W, fresh='1')['error'],
+                         'Everyone on those blocks already has a recorded result.')
+        self.assertEqual(self.list(spans='1')['totals']['voters'], 12)                     # without fresh they are all there
+        self.assertEqual(self.list(400, ss='011', streets='%d:both' % self.cedar(), fresh='1')['error'],
+                         'No voters live on those streets in this area.')                  # no one there at all: the older words
+
+    def test_the_cap_counts_the_people_a_fresh_list_keeps(self):
+        self.knock('p03')                                    # 16 people in precinct W on blocks 1 and 6, 13 once p03, p04, p05 are left out
+        with mock.patch.object(V, 'MAX_VOTERS', 13):
+            self.assertEqual(self.list(spans='1,6', precinct=PRECINCT_W, fresh='1')['totals']['voters'], 13)
+            self.assertIn('That is 16 voters, and a walk list holds up to 13.', self.list(400, spans='1,6', precinct=PRECINCT_W)['error'])
+        with mock.patch.object(V, 'MAX_VOTERS', 10):
+            self.assertIn('That is 13 voters, and a walk list holds up to 10.',
+                          self.list(400, spans='1,6', precinct=PRECINCT_W, fresh='1')['error'])
+
+    def test_fresh_takes_the_value_1_and_nothing_else(self):
+        for bad in ('0', '2', '', 'true', '1 ', '11'):
+            self.list(400, spans='1', fresh=bad)
+        self.get('/api/v3/walk/list?spans=1&fresh=1&fresh=1', 400)
+
+    def test_a_fresh_list_saves_with_its_query_and_reloads_as_it_was_frozen(self):
+        self.knock('p03')
+        shown = self.list(spans='6,1', precinct=PRECINCT_W, fresh='1')
+        saved = self.post('/api/v3/walk/lists', {'title': 'Fresh', 'query': {'spans': '6,1', 'precinct': PRECINCT_W, 'fresh': '1'},
+                                                 'fingerprint': shown['fingerprint']}, 201)
+        self.assertEqual((saved['query'], saved['changed']), ({'spans': '1,6', 'precinct': PRECINCT_W, 'fresh': '1'}, False))
+        self.knock('p01')                                    # another door is done after the list was frozen: the saved list is as it was
+        again = self.get('/api/v3/walk/lists/' + saved['list']['key'])
+        self.assertEqual(self.voters(again), self.voters(shown))
+        rebuilt = self.post('/api/v3/walk/lists', {'title': 'Again', 'query': saved['query'], 'fingerprint': shown['fingerprint']}, 201)
+        self.assertTrue(rebuilt['changed'])                    # built again today without p01 and p02: not the list that was shown
+        self.assertEqual(self.voters(rebuilt), self.voters(shown) - set(self.ids('p01', 'p02')))
+
+    def test_a_query_to_save_may_carry_only_known_keys_and_fresh_is_one(self):
+        shown = self.list(spans='1')
+        for query in ({'spans': '1', 'fresh': '0'}, {'spans': '1', 'extra': '1'}, {'fresh': '1'}):
+            self.post('/api/v3/walk/lists', {'title': 'x', 'query': query, 'fingerprint': shown['fingerprint']}, 400)
 
     # ---- the printed scores ----------------------------------------------------------------------------------
-    def test_a_candidate_district_gets_overall_participation_and_support_as_whole_numbers(self):
+    def test_a_candidate_district_gets_overall_participation_support_and_potential_as_whole_numbers(self):
         p01, p02, p05 = self.ids('p01', 'p02', 'p05')
         self.assertEqual(self.post('/api/v3/walk/scores', {'ids': [p01, p02, p05]}),
-                         {'scores': {p01: {'ovr': 72, 'part': 80, 'sup': 63, 'push': 73},   # 71.5, 62.5 and 72.5 round up
-                                     p02: {'ovr': 40, 'part': 60, 'sup': 50, 'push': 80},   # 0.6 + 0.5 x 0.4
-                                     p05: {'ovr': 50, 'part': 50, 'sup': 100, 'push': 50}}})   # a supporter who may not vote: 1 x 0.5
+                         {'scores': {p01: {'ovr': 72, 'part': 80, 'sup': 63, 'push': 63},   # 71.5, 62.5 round up; push 0.5 x (0.8 + 0.1) x 1.4
+                                     p02: {'ovr': 40, 'part': 60, 'sup': 50, 'push': 40},   # 0.5 x (0.6 + 0.2)
+                                     p05: {'ovr': 50, 'part': 50, 'sup': 100, 'push': 30}}})   # a supporter who may not vote: 0.5 x 0.5 x 1.2
+
+    def test_the_printed_potential_is_at_the_districts_default_weights_and_leaves_out_nobody(self):
+        (p01,) = self.ids('p01')
+        self.knock('p01')                                    # a person's own value is a property of the person
+        self.assertEqual(self.post('/api/v3/walk/scores', {'ids': [p01]})['scores'][p01]['push'], 63)
+        with override_settings(DISTRICT=lowered(potential={'wp': 1.0, 'wi': 0.0})):
+            self.assertEqual(self.post('/api/v3/walk/scores', {'ids': [p01]})['scores'][p01]['push'], 80)   # undecided alone: 0.8
 
     def test_a_district_without_a_candidate_has_no_support_number(self):
         (p01,) = self.ids('p01')
-        with override_settings(DISTRICT=CO):
+        with override_settings(DISTRICT=CO), mock.patch.object(V.U, 'terms', side_effect=AssertionError('not read for Colorado')):
             self.assertEqual(self.post('/api/v3/walk/scores', {'ids': [p01]}), {'scores': {p01: {'ovr': 72, 'part': 80}}})
 
     def test_only_the_people_asked_for_and_known_come_back(self):
@@ -415,8 +710,8 @@ class RankTests(SimpleTestCase):
     VALUE = {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0}
 
     def span(self, doors=5, people=5, mixed=1.0, len_m=200.0, block=None, push=0):
-        return {'doors': doors, 'people': people, 'scored': people, 'push': push, 'mixed': mixed, 'turnout': 0, 'identify': 0, 's_sum': 0,
-                's_n': 0, 'p_sum': 0, 'p_n': 0, 'len_m': len_m, 'street': 'Main St', 'block': block}
+        return {'doors': doors, 'people': people, 'scored': people, 'push': push, 'mixed': mixed, 'turnout': 0, 'identify': 0, 'undecided': 0,
+                'supporter': 0, 's_sum': 0, 's_n': 0, 't_sum': 0, 't_n': 0, 'len_m': len_m, 'street': 'Main St', 'block': block}
 
     def test_a_short_block_is_measured_over_fifty_metres(self):
         spans = {1: self.span(len_m=30.0), 2: self.span(len_m=0.0), 3: self.span(len_m=None), 4: self.span(len_m=50.0)}
@@ -451,55 +746,21 @@ class RankTests(SimpleTestCase):
         rows, _ = V.rank_plan(spans, 'mixed', {'value': 0.0, 'pop_density': 1.0, 'voter_density': 0.0}, self.ROI, {'a': 5.0})
         self.assertEqual([(r['span'], r['score'], r['pop_density']) for r in rows], [(1, 0.5, 5.0), (2, 0.0, None)])
 
+    def test_the_means_are_of_the_people_with_a_score_and_empty_without_any(self):
+        spans = {1: {**self.span(), 's_sum': 1.5, 's_n': 3, 't_sum': 2.25, 't_n': 3}, 2: self.span()}
+        rows, _ = V.rank_plan(spans, 'mixed', self.VALUE, self.ROI, None)
+        by_span = {r['span']: r for r in rows}
+        self.assertEqual((by_span[1]['s_mean'], by_span[1]['t_mean']), (0.5, 0.75))
+        self.assertEqual((by_span[2]['s_mean'], by_span[2]['t_mean']), (None, None))
+        self.assertNotIn('p_mean', by_span[1])
+
     def test_percentile_is_the_midrank_and_skips_missing(self):
         self.assertEqual(V.percentile({'a': 1, 'b': 2, 'c': 2, 'd': 3, 'e': None}), {'a': 0.125, 'b': 0.5, 'c': 0.5, 'd': 0.875})
         self.assertEqual(V.percentile({'a': None}), {})
         self.assertEqual(V.percentile({}), {})
 
 
-class PushFormulaTests(SimpleTestCase):
-    """Needs a push (Paul 2026-10-08): push = (1 - |2s - 1|) p + s (1 - p), shown 0..100, s = support standing / 100, p = participation / 100."""
-
-    def test_a_hand_checked_example_in_its_two_parts(self):
-        # s 0.625, p 0.8: undecided and likely to vote (1 - |1.25 - 1|) x 0.8 = 0.6; supporter who may not vote 0.625 x 0.2 = 0.125
-        undecided, supporter = FL.push_parts(62.5, 80.0)
-        self.assertAlmostEqual(undecided, 60.0, places=9)
-        self.assertAlmostEqual(supporter, 12.5, places=9)
-        self.assertAlmostEqual(FL.push(62.5, 80.0), 72.5, places=9)
-        # a split voter who rarely votes: s 0.5, p 0.2 -> 0.2 + 0.5 x 0.8 = 0.6
-        self.assertAlmostEqual(FL.push(50.0, 20.0), 60.0, places=9)
-
-    def test_sure_supporters_who_always_vote_and_sure_opponents_score_nothing(self):
-        self.assertEqual(FL.push(100.0, 100.0), 0.0)
-        self.assertEqual([FL.push(0.0, p) for p in (0.0, 25.0, 50.0, 100.0)], [0.0] * 4)         # a sure opponent, whatever the turnout
-        self.assertAlmostEqual(FL.push(99.0, 100.0), 2.0, places=9)                              # nearly sure: nearly nothing
-        self.assertAlmostEqual(FL.push(1.0, 100.0), 2.0, places=9)
-
-    def test_the_most_a_person_can_score_is_100_and_it_is_reached_two_ways(self):
-        self.assertAlmostEqual(FL.push(50.0, 100.0), 100.0, places=9)        # undecided and certain to vote
-        self.assertAlmostEqual(FL.push(100.0, 0.0), 100.0, places=9)         # a sure supporter who will not vote
-        self.assertAlmostEqual(FL.push(50.0, 0.0), 50.0, places=9)
-        self.assertAlmostEqual(FL.push(0.0, 0.0), 0.0, places=9)
-
-    def test_it_stays_inside_0_to_100_and_the_parts_add_up(self):
-        grid = [(s / 2.0, p / 2.0) for s in range(0, 201) for p in range(0, 201)]               # steps of half a point
-        for s, p in grid:
-            undecided, supporter = FL.push_parts(s, p)
-            self.assertGreaterEqual(undecided, 0.0)
-            self.assertGreaterEqual(supporter, 0.0)
-            self.assertLessEqual(FL.push(s, p), 100.0 + 1e-9, (s, p))
-            self.assertAlmostEqual(undecided + supporter, FL.push(s, p), places=9)
-
-    def test_arrays_give_the_same_numbers_as_single_values(self):
-        s, p = np.array([0.0, 50.0, 62.5, 100.0, 33.3]), np.array([100.0, 100.0, 80.0, 0.0, 47.0])
-        np.testing.assert_allclose(FL.push(s, p), [FL.push(a, b) for a, b in zip(s, p)], rtol=0, atol=1e-12)
-
-    def test_the_sql_of_the_street_plan_is_the_same_formula(self):
-        with closing(sqlite3.connect(':memory:')) as db:
-            for s, p in [(s, p) for s in (0, 1, 12.5, 33.3, 50, 62.5, 66.7, 99, 100) for p in (0, 7, 20, 50, 80, 100)]:
-                (sql,) = db.execute('SELECT ' + W.PUSH_SQL + ' FROM (SELECT ? AS sup_pct) sp, (SELECT ? AS part_pct) sc', (s, p)).fetchone()
-                self.assertAlmostEqual(100.0 * sql, FL.push(s, p), places=9, msg=(s, p))
-
+class WordingTests(SimpleTestCase):
     def test_the_wording_passes_the_advisory_gate_and_the_preset_is_listed_first(self):
         self.assertGreater(FL.self_check(), 0)
         self.assertEqual(list(FL.ROI_PRESETS)[:2], ['push', 'mixed'])
