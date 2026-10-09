@@ -1,8 +1,8 @@
 // Walk list endpoints (contract: ./walkTypes.ts). Reads use localJson, writes use postJson with the session's CSRF token.
 // Every call takes an optional AbortSignal.
-import {localJson,postJson} from './client';
+import {localJson,postJson} from './client.ts';
 import type {
-  WalkArea,WalkDispositionEntry,WalkDispositionsResult,WalkLevel,WalkListPayload,WalkListsPayload,WalkMatchInput,WalkMatchPayload,
+  WalkArea,WalkDispositionEntry,WalkDispositionsResult,WalkLevel,WalkListPayload,WalkListsPayload,WalkListTrim,WalkMatchInput,WalkMatchPayload,
   WalkOptionsPayload,WalkOverviewProps,WalkPlan,WalkPlanOptions,WalkReknockPayload,WalkSavedPayload,WalkScores,WalkStreetsPayload,
 } from './walkTypes';
 
@@ -29,9 +29,10 @@ export function matchWalkStreets(rows:WalkMatchInput[],area:WalkArea,signal?:Abo
   return postJson(`${BASE}/match`,{rows,...cleanArea(area)},signal);
 }
 /** `streets` is "12:even,15:both"; the area narrows the list the same way as in the picker. `spans` are road-span ids from the street plan
- *  (at most 200); they add those spans' voters, with or without an area. `fresh` leaves out the people at doors with a recorded result. */
-export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[],fresh?:boolean):Promise<WalkListPayload>{
-  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),fresh:fresh?1:undefined,...areaOf(area)})}`,signal);
+ *  (at most 200, in the order given); they add those spans' voters, with or without an area. `fresh` leaves out the people at doors with a recorded result.
+ *  `trim` (the one-click list: needs spans and fresh) keeps the blocks whole until the last one, which is cut to reach that many doors; a server without it refuses the name. */
+export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[],fresh?:boolean,trim?:WalkListTrim):Promise<WalkListPayload>{
+  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),fresh:fresh?1:undefined,doors:trim?.doors,wp:trim?.wp,wi:trim?.wi,...areaOf(area)})}`,signal);
 }
 /** Block plan: the road spans of an area ranked by the preset's value per 100 m walked; with `doors`, in a precinct, also the blocks one click picks
  *  (candidate districts only). */

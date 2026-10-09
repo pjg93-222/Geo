@@ -2,9 +2,9 @@
 // Run with: node --test tests/v3/plan.test.ts
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync, readdirSync, statSync} from 'node:fs';
 import path from 'node:path';
-import {DOORS_DEFAULT, DOORS_MAX, DOORS_MIN, MAX_LIST_PEOPLE, MAX_PLAN_SPANS, POTENTIAL_DEFAULT, PRESET_WORDS, clampDoors, idChunks, parseSpansParam, pickUnderCap, planOptions, potentialOf, raceWords, readDoors, spansParam, turfOf, weightValue, writeDoors} from '../../src/v3/lib/plan.ts';
+import {DOORS_DEFAULT, DOORS_MAX, DOORS_MIN, MAX_LIST_PEOPLE, MAX_PLAN_SPANS, POTENTIAL_DEFAULT, PRESET_WORDS, clampDoors, idChunks, parseSpansParam, parseTrim, pickUnderCap, planOptions, potentialOf, raceWords, readDoors, spansParam, trimFor, trimQuery, turfOf, weightValue, writeDoors} from '../../src/v3/lib/plan.ts';
 import {weightsQuery} from '../../src/v3/lib/untapped.ts';
 
 const rows = (people: number[]) => people.map((n, i) => ({span: 100 + i, rank: i + 1, people: n}));
@@ -33,12 +33,38 @@ test('weights: what the server reads (six digits, four decimals kept, no sign), 
   assert.deepEqual(planOptions('identify', {value: 'x', pop: '2', voter: '-1'}), {preset: 'identify', w_value: 0, w_pop: 2, w_voter: 0});
 });
 
-test('planned blocks in the page address: whole numbers, sorted, once each, junk skipped, at most 200', () => {
-  assert.deepEqual(parseSpansParam('15,12,15, 7 ,x,,-4,1.5,1234567890'), [7, 12, 15]);
+test('planned blocks in the page address: whole numbers, in the order written, once each, junk skipped, at most 200', () => {
+  assert.deepEqual(parseSpansParam('15,12,15, 7 ,x,,-4,1.5,1234567890'), [15, 12, 7], 'pick order is kept: the one-click list is cut at its last block');
   assert.deepEqual(parseSpansParam(''), []); assert.deepEqual(parseSpansParam(null), []); assert.deepEqual(parseSpansParam(undefined), []);
   assert.equal(parseSpansParam(Array.from({length: 250}, (_, i) => i + 1).join(',')).length, 200);
-  assert.equal(spansParam([15, 12]), '12,15'); assert.equal(spansParam([]), '');
-  assert.deepEqual(parseSpansParam(spansParam([9, 3, 3])), [3, 9], 'what is written is read back');
+  assert.deepEqual(parseSpansParam(Array.from({length: 250}, (_, i) => 250 - i).join(',')).slice(0, 2), [250, 249], 'the first 200 in the order written');
+  assert.equal(spansParam([15, 12]), '15,12'); assert.equal(spansParam([]), '');
+  assert.deepEqual(parseSpansParam(spansParam([9, 3, 3])), [9, 3], 'what is written is read back, once each');
+  assert.deepEqual(parseSpansParam(spansParam([812, 790, 815])), [812, 790, 815]);
+});
+
+test('doors, wp and wi of an address or a saved query: doors 10 to 500, weights the server reads, anything else is left out', () => {
+  assert.deepEqual(parseTrim('60', '0.50', '1.00'), {doors: 60, wp: '0.50', wi: '1.00'});
+  assert.deepEqual(parseTrim(' 10 ', '0', '1'), {doors: 10, wp: '0', wi: '1'});
+  assert.deepEqual(parseTrim('500', '0.3', '0.0005'), {doors: 500, wp: '0.3', wi: '0.0005'});
+  assert.deepEqual(parseTrim('60'), {doors: 60}, 'no weights: the district\'s own');
+  assert.deepEqual(parseTrim('60', '1.5', 'x'), {doors: 60}, 'a weight the server would refuse is left out, the doors stay');
+  assert.deepEqual(parseTrim('60', '-0.1', '0.12345'), {doors: 60});
+  assert.deepEqual(parseTrim('60', '1.0001', '1.0'), {doors: 60, wi: '1.0'});
+  for (const bad of ['9', '501', '0', '-60', '6.5', '1e2', '060x', '', 'abc', ' ', '0060', '1000']) assert.equal(parseTrim(bad, '0.5', '0.5'), null, bad);
+  assert.equal(parseTrim(null, '0.5', '0.5'), null); assert.equal(parseTrim(undefined), null);
+});
+
+test('the list is cut only when the plan says it can: trim present (null or set) sends doors, wp and wi; absent sends none', () => {
+  const q = weightsQuery({wp: 0.3, wi: 1});
+  assert.deepEqual(trimFor({trim: {span: 790, kept: 36, of: 144}}, 60, q), {doors: 60, wp: '0.30', wi: '1.00'});
+  assert.deepEqual(trimFor({trim: null}, 60, q), {doors: 60, wp: '0.30', wi: '1.00'}, 'nothing cut still asks for the doors, so a saved list rebuilds the same');
+  assert.equal(trimFor({}, 60, q), null, 'an older server has no trim and refuses doors on the list');
+  assert.deepEqual(trimQuery(null), {doors: null, wp: null, wi: null});
+  assert.deepEqual(trimQuery({doors: 60, wp: '0.30', wi: '1.00'}), {doors: '60', wp: '0.30', wi: '1.00'});
+  assert.deepEqual(trimQuery({doors: 60}), {doors: '60', wp: null, wi: null});
+  const written = trimQuery(trimFor({trim: null}, 75, q));
+  assert.deepEqual(parseTrim(written.doors, written.wp, written.wi), {doors: 75, wp: '0.30', wi: '1.00'}, 'what is written is read back');
 });
 
 test('scores come in requests of at most 1,500 ids', () => {
@@ -53,12 +79,23 @@ test('wording: the race, and a plain explanation for each preset the server offe
   assert.equal(raceWords('general'), 'General election'); assert.equal(raceWords('primary'), 'Primary election'); assert.equal(raceWords(undefined), 'General election');
   assert.deepEqual(Object.keys(PRESET_WORDS).sort(), ['identify', 'mixed', 'push', 'turnout']);
   assert.equal(PRESET_WORDS.push, 'Untapped potential: undecided people who usually vote and supporters who may not vote, each counted up to 1.5 times by sphere of influence. Doors with a recorded result are left out.');
-  assert.ok(PRESET_WORDS.mixed.endsWith('times their chance of voting (the mean of five turnout scores).'), 'chance of voting is the mean of the five turnout scores');
-  assert.ok(PRESET_WORDS.turnout.endsWith('times their chance of not voting (one minus the mean of five turnout scores).'));
+  const LINED_UP = 'five turnout scores, lined up against people\'s own voting record';
+  assert.ok(PRESET_WORDS.mixed.endsWith(`times their chance of voting (${LINED_UP}).`), 'chance of voting: five turnout scores lined up against the voting record');
+  assert.ok(PRESET_WORDS.turnout.endsWith(`times their chance of not voting (one minus their chance of voting: ${LINED_UP}).`));
+  assert.ok(Object.values(PRESET_WORDS).every(t => !/mean of five/.test(t)), 'no text calls the chance of voting a plain mean');
   for (const [id, text] of Object.entries(PRESET_WORDS)) assert.ok(text.length > 40 && !ADVISORY.test(text), id);
   const screen = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/StreetPlan.tsx'), 'utf8');
   const words = [...screen.matchAll(/'([^'\n]{12,})'|>([^<>{}]{12,})</g)].map(m => m[1] ?? m[2]);
   assert.ok(words.length > 5 && words.every(w => !ADVISORY.test(w)), 'the block plan screen uses neutral words');
+});
+
+test('wording: no screen calls the chance of voting a plain mean of turnout scores', () => {
+  const root = path.join(import.meta.dirname, '../../src/v3');
+  const files: string[] = [];
+  (function walk(d: string) { for (const n of readdirSync(d)) { const p = path.join(d, n); if (statSync(p).isDirectory()) walk(p); else if (/\.(ts|tsx)$/.test(n)) files.push(p); } })(root);
+  assert.ok(files.length > 10);
+  const stale = files.filter(f => /mean of (the )?five turnout|mean chance of voting/i.test(readFileSync(f, 'utf8'))).map(f => path.relative(root, f));
+  assert.deepEqual(stale, [], 'five turnout scores, lined up against people\'s own voting record');
 });
 
 test('block plan screen: ranks only on request, shows nothing it did not rank for this area, and the walk button needs a list that fits', () => {
@@ -103,10 +140,12 @@ test('the plan request carries the weights as text, and the walk list request ca
   assert.deepEqual(weightsQuery({wp: 0.5, wi: 1}), {wp: '0.50', wi: '1.00'});
   assert.deepEqual({preset: 'push', ...weightsQuery({wp: 0.3, wi: 0.25}), doors: 80}, {preset: 'push', wp: '0.30', wi: '0.25', doors: 80});
   const api = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/walk.ts'), 'utf8');
-  assert.ok(/spans\?:number\[\],fresh\?:boolean\)/.test(api) && /fresh:fresh\?1:undefined/.test(api), 'fresh is sent as fresh=1, and left out otherwise');
+  assert.ok(/spans\?:number\[\],fresh\?:boolean,trim\?:WalkListTrim\)/.test(api) && /fresh:fresh\?1:undefined/.test(api), 'fresh is sent as fresh=1, and left out otherwise');
+  assert.ok(/doors:trim\?\.doors,wp:trim\?\.wp,wi:trim\?\.wi/.test(api), 'doors, wp and wi go on the list request, and only from a trim');
   const types = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/walkTypes.ts'), 'utf8');
   assert.ok(/t_mean\?: number \| null/.test(types) && !/p_mean/.test(types), 'rows carry t_mean, the mean chance of voting');
   assert.ok(/stopped: 'full' \| 'exhausted' \| 'far' \| 'cap'/.test(types) && /asked: number/.test(types), 'the turf names its own words');
+  assert.ok(/trim\?: \{span: number; kept: number; of: number\} \| null/.test(types), 'the last block cut to the doors asked for: absent from an older server, null when nothing was cut');
 });
 
 test('the block plan says blocks, never streets, in its own words, and the walk screen says planned blocks', () => {

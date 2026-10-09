@@ -1,6 +1,6 @@
 // Block plan helpers: which ranked blocks fit one walk list, the request the plan screen sends, the doors asked for, the planned blocks in the page
 // address and the printed-scores batches. Pure, so node --test can load it directly (types come in with `import type`).
-import type {WalkPlanOptions,WalkPlanSpan} from '../api/walkTypes';
+import type {WalkListTrim,WalkPlanOptions,WalkPlanSpan,WalkTurf} from '../api/walkTypes';
 import type {FeatureRoi} from '../types';
 import type {UntappedWeights} from './untapped';
 
@@ -10,8 +10,8 @@ export const MAX_LIST_PEOPLE=1500;   // people on one walk list, and in one scor
 /** What each preset counts, in plain words. A preset this page does not know falls back to the formula the server sends. */
 export const PRESET_WORDS:Record<string,string>={
   push:'Untapped potential: undecided people who usually vote and supporters who may not vote, each counted up to 1.5 times by sphere of influence. Doors with a recorded result are left out.',
-  mixed:'Many people whose support is split between the two sides and who vote often. A person counts most when their support is halfway, times their chance of voting (the mean of five turnout scores).',
-  turnout:'Many supporters who vote less often. A person counts their support times their chance of not voting (one minus the mean of five turnout scores).',
+  mixed:'Many people whose support is split between the two sides and who vote often. A person counts most when their support is halfway, times their chance of voting (five turnout scores, lined up against people\'s own voting record).',
+  turnout:'Many supporters who vote less often. A person counts their support times their chance of not voting (one minus their chance of voting: five turnout scores, lined up against people\'s own voting record).',
   identify:'Many people whose support is unknown or in the middle third. Each of them counts once.',
 };
 export const raceWords=(mode:string|null|undefined):string=>mode==='primary'?'Primary election':'General election';
@@ -59,13 +59,29 @@ export function weightValue(text:string):number{
 export const planOptions=(preset:string,w:{value:string;pop:string;voter:string}):WalkPlanOptions=>
   ({preset,w_value:weightValue(w.value),w_pop:weightValue(w.pop),w_voter:weightValue(w.voter)});
 
-/** "12,15" from the page address or a saved list's query: whole numbers, each once and in order, junk skipped, at most 200. */
+/** "12,15" from the page address or a saved list's query: whole numbers, each once, junk skipped, at most 200. The order stays as written:
+ *  the one-click list is cut at the last of its blocks in pick order. */
 export function parseSpansParam(text:string|null|undefined):number[]{
   const ids=new Set<number>();
   for(const part of (text??'').split(','))if(/^\d{1,9}$/.test(part.trim()))ids.add(+part);
-  return [...ids].sort((a,b)=>a-b).slice(0,MAX_PLAN_SPANS);
+  return [...ids].slice(0,MAX_PLAN_SPANS);
 }
-export const spansParam=(ids:readonly number[]):string=>[...ids].sort((a,b)=>a-b).join(',');
+export const spansParam=(ids:readonly number[]):string=>ids.join(',');
+
+// --- the one-click list cut to the doors asked for ------------------------------------------------------------------------------
+const WEIGHT_TEXT=/^(0(\.\d{1,4})?|1(\.0{1,4})?)$/;   // the weights the server reads: 0 to 1, up to four decimals
+/** The doors, wp and wi of a page address or a saved list's query. Null unless doors is a whole number from 10 to 500; a weight the server would refuse is left out. */
+export function parseTrim(doors:string|null|undefined,wp?:string|null,wi?:string|null):WalkListTrim|null{
+  const d=(doors??'').trim();
+  if(!/^\d{1,3}$/.test(d)||+d<DOORS_MIN||+d>DOORS_MAX)return null;
+  const weight=(w:string|null|undefined)=>{const x=(w??'').trim();return WEIGHT_TEXT.test(x)?x:undefined;};
+  const p=weight(wp),i=weight(wi);
+  return {doors:+d,...p!==undefined?{wp:p}:{},...i!==undefined?{wi:i}:{}};
+}
+/** What the one-click list asks for, once the plan has answered: the doors and weights it was planned with, when the server cuts the last block (its turf says `trim`, null or not). */
+export const trimFor=(turf:Pick<WalkTurf,'trim'>,doors:number,w:{wp:string;wi:string}):WalkListTrim|null=>turf.trim===undefined?null:{doors,wp:w.wp,wi:w.wi};
+/** The address and saved-query names for a cut list, each null when there is none. */
+export const trimQuery=(t:WalkListTrim|null):Record<'doors'|'wp'|'wi',string|null>=>({doors:t?String(t.doors):null,wp:t?.wp??null,wi:t?.wi??null});
 
 /** The ids split into requests of at most one scores request each (1,500). */
 export function idChunks(ids:readonly string[],size=MAX_LIST_PEOPLE):string[][]{

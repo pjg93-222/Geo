@@ -1340,7 +1340,7 @@ test('CSV with scores: Overall, Candidate support and Participation after Result
 
 test('page address: planned streets ride along, are enough to rebuild a list, and come back from a saved list', () => {
   const read = (qs: string) => readWalkAddress(new URLSearchParams(qs));
-  assert.deepEqual(read('precinct=02012&spans=15,12,15,x,99999999999').spans, [12, 15], 'sorted, once each, junk skipped');
+  assert.deepEqual(read('precinct=02012&spans=15,12,15,x,99999999999').spans, [15, 12], 'in the order written, once each, junk skipped');
   assert.ok(!('spans' in read('precinct=02012')), 'no planned streets: the address is read as it always was');
   assert.equal(startPlan(read('spans=12,15')), 'build'); assert.equal(startPlan(read('spans=x')), 'none'); assert.equal(startPlan(read('spans=12&list=k1')), 'saved');
   assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', spans: '12,15'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '', spans: '12,15'});
@@ -1351,7 +1351,7 @@ test('page address: planned streets ride along, are enough to rebuild a list, an
 test('walk screen wiring: the street plan shows only with features.roi, builds with spans, and the print toggle asks for scores only while on', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/features\?\.roi&&<StreetPlan /.test(src), 'no street plan without features.roi (Colorado)');
-  assert.ok(/getWalkList\(streets,where,sig,planned,left\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
+  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
   assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
   assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
   assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
@@ -1360,7 +1360,9 @@ test('walk screen wiring: the street plan shows only with features.roi, builds w
 
 // --- one click: the address flags, the note after the build, and the screen's wiring -------------------------------------------------------------
 import {turfLines} from '../../src/v3/lib/walk.ts';
-import {spansParam} from '../../src/v3/lib/plan.ts';
+import {spansParam, trimFor, trimQuery} from '../../src/v3/lib/plan.ts';
+import {weightsQuery} from '../../src/v3/lib/untapped.ts';
+import {getWalkList} from '../../src/v3/api/walk.ts';
 
 test('page address: plan=1 and fresh=1 are flags; plan with a precinct is the one click, whatever else the address holds', () => {
   const read = (qs: string) => readWalkAddress(new URLSearchParams(qs));
@@ -1378,9 +1380,9 @@ test('page address: plan=1 and fresh=1 are flags; plan with a precinct is the on
 test('page address: what the click writes (precinct, spans, fresh) comes back as the same list and does not plan again', () => {
   const written = new URLSearchParams({precinct: '41005-101', spans: spansParam([812, 790, 815]), fresh: '1'});
   const back = readWalkAddress(written);
-  assert.deepEqual(back, {area: {ss: '', sh: '', precinct: '41005-101'}, picks: [], list: '', spans: [790, 812, 815], plan: false, fresh: true});
+  assert.deepEqual(back, {area: {ss: '', sh: '', precinct: '41005-101'}, picks: [], list: '', spans: [812, 790, 815], plan: false, fresh: true}, 'the blocks keep their pick order');
   assert.equal(startPlan(back), 'build');
-  assert.deepEqual(pickerOf(listOf({}, {precinct: '41005-101', spans: '790,812,815', fresh: '1'})), {area: {ss: '', sh: '', precinct: '41005-101'}, streets: '', spans: '790,812,815', fresh: true});
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '41005-101', spans: '812,790,815', fresh: '1'})), {area: {ss: '', sh: '', precinct: '41005-101'}, streets: '', spans: '812,790,815', fresh: true});
   assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', spans: '12', fresh: '0'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '', spans: '12'}, 'only fresh=1 puts it back');
   assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', streets: '12:even'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '12:even'}, 'a list built without fresh restores as it did');
 });
@@ -1397,18 +1399,86 @@ test('after a one-click build: blocks, doors, people and km of walking, then the
   assert.equal(turfLines(turf({stopped: 'exhausted'}), {doors: 1, voters: 1, walk_m: 40})[1], 'Only 1 door without a recorded result is in reach in this precinct.');
   assert.deepEqual(turfLines(turf({stopped: 'cap'}), {doors: 480, voters: 1500, walk_m: 9100}).slice(1), ['One walk list holds up to 1,500 people and 200 blocks.']);
   for (const stopped of ['full', 'exhausted', 'far', 'cap'] as const)
-    for (const text of turfLines(turf({stopped, jumps: [{span: 1, metres: 9}]}), {doors: 2, voters: 3, walk_m: 100})) assert.ok(!ADVISORY.test(text), text);
+    for (const text of turfLines(turf({stopped, jumps: [{span: 1, metres: 9}], trim: {span: 790, kept: 6, of: 40}}), {doors: 2, voters: 3, walk_m: 100})) assert.ok(!ADVISORY.test(text), text);
+});
+
+test('after a one-click build: the cut to the last block is told right after the totals, and only when the server cut one', () => {
+  const turf = (over: Record<string, unknown> = {}) => ({spans: [812, 815, 790], jumps: [] as {span: number; metres: number}[], stopped: 'full' as const, ...over});
+  const totals = {doors: 60, voters: 98, walk_m: 2900};
+  const main = 'From 3 blocks with the most untapped potential in reach: 60 doors, 98 people, 2.9 km of walking.';
+  const cut = 'Took the 36 doors with the most untapped people from the last block (of its 144).';
+  assert.deepEqual(turfLines(turf({trim: {span: 790, kept: 36, of: 144}}), totals), [main, cut]);
+  assert.deepEqual(turfLines(turf({trim: {span: 790, kept: 1, of: 144}}), totals)[1], 'Took the 1 door with the most untapped people from the last block (of its 144).', 'one door is singular');
+  assert.deepEqual(turfLines(turf({spans: [790], trim: {span: 790, kept: 60, of: 144}}), totals)[0], 'From 1 block with the most untapped potential in reach: 60 doors, 98 people, 2.9 km of walking.', 'a single big block trimmed to the doors asked for');
+  assert.deepEqual(turfLines(turf({trim: null}), totals), [main], 'nothing cut: no line');
+  assert.deepEqual(turfLines(turf(), totals), [main], 'an older server sends no trim: no line, and nothing breaks');
+  assert.deepEqual(turfLines(turf({trim: {span: 790, kept: 36, of: 144}, jumps: [{span: 790, metres: 182.4}]}), totals), [main, cut, '1 hop of up to 400 m between blocks.'], 'the cut comes before the hops');
+});
+
+test('page address: doors, wp and wi ride with planned blocks that are fresh, come back in the same order, and are dropped otherwise', () => {
+  const read = (qs: string) => readWalkAddress(new URLSearchParams(qs));
+  const q = trimQuery(trimFor({trim: null}, 75, weightsQuery({wp: 0.3, wi: 1})));
+  const written = new URLSearchParams({precinct: '41005-101', spans: spansParam([812, 790, 815]), fresh: '1', ...Object.fromEntries(Object.entries(q).filter(([, v]) => v !== null) as [string, string][])});
+  assert.equal(written.toString(), 'precinct=41005-101&spans=812%2C790%2C815&fresh=1&doors=75&wp=0.30&wi=1.00', 'the address the click writes, blocks in pick order');
+  const back = read(written.toString());
+  assert.deepEqual(back, {area: {ss: '', sh: '', precinct: '41005-101'}, picks: [], list: '', spans: [812, 790, 815], plan: false, fresh: true, trim: {doors: 75, wp: '0.30', wi: '1.00'}});
+  assert.equal(startPlan(back), 'build', 'a reload rebuilds the list, and does not plan again');
+  assert.ok(!('trim' in read('precinct=02012&spans=12,15&fresh=1')), 'no doors in the address: the list is whole blocks, as it was');
+  assert.ok(!('trim' in read('precinct=02012&spans=12,15&doors=60&wp=0.5&wi=0.5')), 'the server refuses doors without fresh, so the page does not ask');
+  assert.ok(!('trim' in read('precinct=02012&fresh=1&doors=60&wp=0.5&wi=0.5')), 'nor without planned blocks');
+  assert.ok(!('trim' in read('precinct=02012&spans=12&fresh=1&doors=9')) && !('trim' in read('precinct=02012&spans=12&fresh=1&doors=501')) && !('trim' in read('precinct=02012&spans=12&fresh=1&doors=x')), 'doors 10 to 500');
+  assert.deepEqual(read('spans=12&fresh=1&doors=60&wp=2&wi=0.5').trim, {doors: 60, wi: '0.5'}, 'a weight the server would refuse is left out');
+  assert.deepEqual(read('spans=12&fresh=1&doors=60').trim, {doors: 60}, 'without weights the district\'s own apply');
+});
+
+test('saved lists bring the cut back: doors, wp and wi from the query, only with spans and fresh=1, never from a re-knock list', () => {
+  const saved = {precinct: '41005-101', spans: '812,790,815', fresh: '1', doors: '75', wp: '0.30', wi: '1.00'};
+  assert.deepEqual(pickerOf(listOf({}, saved)), {area: {ss: '', sh: '', precinct: '41005-101'}, streets: '', spans: '812,790,815', fresh: true, trim: {doors: 75, wp: '0.30', wi: '1.00'}});
+  assert.ok(!('trim' in pickerOf(listOf({}, {...saved, fresh: '0'}))!), 'no fresh, no cut');
+  assert.ok(!('trim' in pickerOf(listOf({}, {precinct: '41005-101', streets: '12:even', doors: '75', wp: '0.3', wi: '0.5'}))!), 'no planned blocks, no cut');
+  assert.ok(!('trim' in pickerOf(listOf({}, {...saved, doors: '9'}))!) && !('trim' in pickerOf(listOf({}, {...saved, doors: ''}))!));
+  assert.equal(pickerOf(listOf({kind: 'reknock'}, {from: 'abc', ...saved})), null);
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '41005-101', spans: '812,790,815', fresh: '1'})), {area: {ss: '', sh: '', precinct: '41005-101'}, streets: '', spans: '812,790,815', fresh: true}, 'a list saved before the cut restores as it was');
+  assert.deepEqual(trimQuery(pickerOf(listOf({}, saved))!.trim ?? null), {doors: '75', wp: '0.30', wi: '1.00'}, 'what is restored is what the address writes');
+});
+
+test('the list request: doors, wp and wi only from a cut; the checked blocks of the block plan go whole, in the order given', async () => {
+  const original = globalThis.fetch; const urls: string[] = [];
+  globalThis.fetch = async (input) => { urls.push(String(input)); return new Response('{}', {status: 200}); };
+  try {
+    const area = {precinct: '41005-101'};
+    await getWalkList('', area, undefined, [812, 790, 815], true, {doors: 75, wp: '0.30', wi: '1.00'});   // the one click
+    await getWalkList('', area, undefined, [815, 812], true);                                               // Walk the checked blocks
+    await getWalkList('12:even', area);                                                                     // streets, as before
+    await getWalkList('', area, undefined, [812], true, {doors: 60});                                       // a cut with the district's own weights
+  } finally { globalThis.fetch = original; }
+  assert.deepEqual(urls, [
+    '/api/v3/walk/list?spans=812%2C790%2C815&fresh=1&doors=75&wp=0.30&wi=1.00&precinct=41005-101',
+    '/api/v3/walk/list?spans=815%2C812&fresh=1&precinct=41005-101',
+    '/api/v3/walk/list?streets=12%3Aeven&precinct=41005-101',
+    '/api/v3/walk/list?spans=812&fresh=1&doors=60&precinct=41005-101',
+  ]);
+});
+
+test('an older server: a plan without trim asks for the whole blocks, so a list that refuses the names is never sent them', () => {
+  const q = weightsQuery({wp: 0.5, wi: 0.5});
+  assert.equal(trimFor({}, 60, q), null);
+  assert.deepEqual(trimQuery(trimFor({}, 60, q)), {doors: null, wp: null, wi: null}, 'and the address carries none');
+  assert.deepEqual(turfLines({spans: [812], jumps: [], stopped: 'full'}, {doors: 144, voters: 200, walk_m: 900}).length, 1, 'the note is the totals alone');
 });
 
 test('walk screen wiring: Plan walk list and Doors by the precinct field, the click plans then builds fresh, and plan=1 waits for the district settings', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/\{roi&&area\.precinct&&<div className="walk-oneclick">/.test(src) && />Plan walk list<\/button>/.test(src) && /<span>Doors<\/span>/.test(src), 'a visible button and a Doors input, with a precinct chosen and a plan in the district');
   assert.ok(/min=\{DOORS_MIN\} max=\{DOORS_MAX\}/.test(src) && /clampDoors\(doorsText\?\?savedDoors,turfCfg\.doors\)/.test(src) && /writeDoors\(features\.district,doorsNow\)/.test(src), 'doors 10 to 500, from the district\'s default, kept per viewer');
-  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.weightsQuery\(w\),doors:asked\},sig\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true\)/.test(src), 'the plan with the weights and the doors, then the list from its blocks, fresh');
-  assert.ok(/putSpans\(got\.turf\?\.spans\?\?\[\],true\);show\(p,false\);setTurf\(got\.turf\?\?null\)/.test(src), 'the blocks go in the address with fresh, and the note is kept for this list');
-  assert.ok(/fresh:fresh\?'1':null,plan:null,list:listKey\|\|null/.test(src), 'the address says spans and fresh=1 and drops plan, so a reload does not plan again');
+  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
+  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
+  assert.ok(/putSpans\(got\.turf\?\.spans\?\?\[\],true,got\.cut\?\?null\);show\(p,false\);setTurf\(got\.turf\?\?null\)/.test(src), 'the blocks and the cut go in the address with fresh, and the note is kept for this list');
+  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey\]/.test(src), 'the address says spans, fresh=1, doors, wp and wi and drops plan, so a reload does not plan again');
   assert.ok(/startPlan\(init\)==='turf'/.test(src) && /if\(!turfWaits\.current\|\|!features\)return;/.test(src) && /if\(features\.roi\)planTurf\(\);else generate\(\);/.test(src), 'plan=1 runs once the settings are here, and a district with no plan builds the precinct as it did');
-  assert.ok(/putSpans\(ids,true\);generate\(ids\)/.test(src) && /putSpans\(parseSpansParam\(from\.spans\),!!from\.fresh\)/.test(src) && /const putSpans=\(next:number\[\],left=false\)/.test(src), 'fresh goes with planned blocks: checked blocks and a saved list bring it, clearing them takes it away');
+  assert.ok(/putSpans\(ids,true\);generate\(ids\)/.test(src) && /putSpans\(parseSpansParam\(from\.spans\),!!from\.fresh,from\.trim\?\?null\)/.test(src) && /const putSpans=\(next:number\[\],left=false,cut:WalkListTrim\|null=null\)/.test(src), 'fresh goes with planned blocks: checked blocks (whole, no doors) and a saved list (with its doors) bring it, clearing them takes it away');
+  assert.ok(/const kept=next\.length>0&&left\?cut:null;trimRef\.current=kept;setTrim\(kept\)/.test(src), 'doors ride only with planned blocks that are fresh, as the server wants');
+  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
   assert.ok(/readWeights\(features\.district,defaults\)/.test(src) && /writeWeights\(features\.district,next\)/.test(src) && /weights=\{weights\} defaults=\{defaults\} onWeights=\{changeWeights\} doors=\{doorsNow\}/.test(src), 'the sliders are shared with the map through the weights helpers');
   assert.ok(/turfLines\(turf,payload\.totals,turfCfg\.jump_m\)/.test(src), 'the note uses the routed list\'s totals');
 });

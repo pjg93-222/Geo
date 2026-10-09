@@ -24,7 +24,9 @@ export type WalkMatchStatus = 'matched' | 'pick' | 'none';
 export interface WalkMatchRow { row: number; input: string; side: WalkSidePick; status: WalkMatchStatus; candidates: WalkStreet[]; suggestions: string[] }
 export interface WalkMatchPayload { rows: WalkMatchRow[] }
 
-// GET /api/v3/walk/list?streets=12:even,15:both&ss=&sh=&precinct=&spans=&fresh=1 (`fresh` leaves out the people at doors with a recorded result)
+// GET /api/v3/walk/list?streets=12:even,15:both&ss=&sh=&precinct=&spans=&fresh=1&doors=&wp=&wi= (`fresh` leaves out the people at doors with a recorded result;
+// `doors`, with `wp` and `wi`, needs `spans` and `fresh`: the blocks are taken in the order given and the last one is cut to reach that many doors)
+export interface WalkListTrim { doors: number; wp?: string; wi?: string }
 export interface WalkTally { voted: number; eligible: number }
 // A voter's latest result across all lists: its code, the day of the visit, and the key of the saved list it was recorded on
 // (a result with `list` equal to the open list's key is a mark on that list; any other is history from another list).
@@ -77,18 +79,19 @@ export interface WalkDispositionsResult { saved: number }
 export interface WalkOverviewProps { span: number; street: string; doors: number; parties: Record<string, number> }
 
 // GET /api/v3/walk/plan?ss=&sh=&precinct=&preset=&w_value=&w_pop=&w_voter=&wp=&wi=&doors= (candidate districts; 404 without a candidate, 503 until support is built)
-// Each row is a block (a road span). Doors and people leave out the doors with a recorded result. `t_mean` is the mean chance of voting, 0 to 1
-// (a server before walk-plan-2 sends no `t_mean`).
+// Each row is a block (a road span). Doors and people leave out the doors with a recorded result. `t_mean` is the block's average chance of voting, 0 to 1
+// (five turnout scores, lined up against people's own voting record; a server before walk-plan-2 sends no `t_mean`).
 export interface WalkPlanSpan {
   span: number; street: string; doors: number; people: number; len_m: number; s_mean: number | null; t_mean?: number | null;
   pop_density: number | null; voter_density: number | null; value: number; value_per_100m: number; score: number; rank: number;
 }
 // The blocks one click picks in a precinct (`doors` in the request): `asked` is the door count asked for, `spans` the blocks in the order picked,
 // `jumps` the blocks reached by a straight-line hop from the blocks before them. `stopped`: full (the doors asked for), exhausted (no block left),
-// far (the next block is beyond the hop limit), cap (one walk list is full).
+// far (the next block is beyond the hop limit), cap (one walk list is full). `trim` says the last block was cut to the doors asked for (`kept` of its
+// `of` doors); it is null when nothing was cut and absent from a server that cannot cut (and cannot take `doors` on the list either).
 export interface WalkTurf {
   asked: number; spans: number[]; doors: number; people: number; value: number; undecided: number; supporter: number;
-  jumps: {span: number; metres: number}[]; stopped: 'full' | 'exhausted' | 'far' | 'cap';
+  jumps: {span: number; metres: number}[]; stopped: 'full' | 'exhausted' | 'far' | 'cap'; trim?: {span: number; kept: number; of: number} | null;
 }
 export interface WalkPlan {
   schema: 'walk-plan-1' | 'walk-plan-2'; preset: string; weights: Record<'value' | 'pop_density' | 'voter_density', number>; p: string;

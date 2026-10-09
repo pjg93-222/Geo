@@ -12,7 +12,7 @@ import type {Meta} from '../types';
 import {downloadFile} from '../lib/download';
 import {ApiError} from '../api/client';
 import {getWalkList,getWalkLists,getWalkOptions,getWalkPlan,getWalkSavedList,getWalkScores,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,searchWalkStreets} from '../api/walk';
-import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkTurf,WalkVoter} from '../api/walkTypes';
+import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkTurf,WalkVoter} from '../api/walkTypes';
 import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
   lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
@@ -20,7 +20,7 @@ import {
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,turfLines,
   type HeldList,type RefusalNote,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkScoreMap,type WalkVisit,
 } from '../lib/walk';
-import {DOORS_MAX,DOORS_MIN,clampDoors,idChunks,parseSpansParam,potentialOf,raceWords,readDoors,spansParam,turfOf,writeDoors} from '../lib/plan';
+import {DOORS_MAX,DOORS_MIN,clampDoors,idChunks,parseSpansParam,potentialOf,raceWords,readDoors,spansParam,trimFor,trimQuery,turfOf,writeDoors} from '../lib/plan';
 import {readWeights,weightsQuery,writeWeights} from '../lib/untapped';
 import type {UntappedWeights} from '../lib/untapped';
 import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
@@ -328,7 +328,11 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [picks,setPicks]=useState<WalkPick[]>(init.picks);const picksRef=useRef(picks);picksRef.current=picks;
   const [spans,setSpans]=useState<number[]>(init.spans??[]);const spansRef=useRef(spans);   // planned blocks (road spans from the block plan)
   const [fresh,setFresh]=useState(init.fresh);const freshRef=useRef(fresh);   // the list leaves out the doors with a recorded result; it goes with planned blocks
-  const putSpans=(next:number[],left=false)=>{spansRef.current=next;setSpans(next);freshRef.current=left;setFresh(left);};
+  const [trim,setTrim]=useState<WalkListTrim|null>(init.trim??null);const trimRef=useRef(trim);   // the one-click list cut to a door count (doors, wp, wi); it goes with fresh planned blocks
+  const putSpans=(next:number[],left=false,cut:WalkListTrim|null=null)=>{
+    spansRef.current=next;setSpans(next);freshRef.current=left;setFresh(left);
+    const kept=next.length>0&&left?cut:null;trimRef.current=kept;setTrim(kept);
+  };
   const features=useFeatures();
   // One click (Plan walk list) and the sliders and doors it uses. A server without these settings gets the agent defaults.
   const roi=features?.roi??null;
@@ -472,7 +476,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(from){
       setArea(from.area);
       const next=parseStreetsParam(from.streets).map((s):WalkPick=>({...s,label:names.get(s.id)??'',city:''}));picksRef.current=next;setPicks(next);
-      putSpans(parseSpansParam(from.spans),!!from.fresh);
+      putSpans(parseSpansParam(from.spans),!!from.fresh,from.trim??null);
       putUpload(null);setSkipped([]);
     }else{
       const next=picksRef.current.map(s=>s.label?s:{...s,label:names.get(s.id)??''});picksRef.current=next;setPicks(next);
@@ -513,25 +517,26 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       setNote(`Choose a place for ${names}, or leave ${waiting.length===1?'it':'them'} out.`);return;
     }
     if(!picks.length&&!planned.length&&noArea(area)){setNote('Pick an area or add a street first.');return;}
-    const streets=streetsParam(picks),where={...area},left=freshRef.current;
-    void load(sig=>getWalkList(streets,where,sig,planned,left),p=>show(p,false));
+    const streets=streetsParam(picks),where={...area},left=freshRef.current,cut=trimRef.current??undefined;
+    void load(sig=>getWalkList(streets,where,sig,planned,left,cut),p=>show(p,false));
   }
-  function walkPlanned(ids:number[]){putSpans(ids,true);generate(ids);}   // the checked blocks of the block plan; their counts leave out doors with a recorded result
+  function walkPlanned(ids:number[]){putSpans(ids,true);generate(ids);}   // the checked blocks of the block plan, whole (no doors); their counts leave out doors with a recorded result
   const commitDoors=():number=>{setDoorsText(String(doorsNow));if(features)writeDoors(features.district,doorsNow);return doorsNow;};
   // The one click: the blocks with the most untapped potential in the precinct, then the routed list built from them alone.
   function planTurf(){
     if(!roi)return;
     if(!area.precinct){setNote('Pick a precinct first.');return;}
-    const where={...area},asked=commitDoors(),w=weights,got:{turf?:WalkTurf}={};
+    const where={...area},asked=commitDoors(),q=weightsQuery(weights),got:{turf?:WalkTurf;cut?:WalkListTrim|null}={};
     void load(async sig=>{
-      const plan=await getWalkPlan(where,{preset:'push',...weightsQuery(w),doors:asked},sig);
+      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked},sig);
       got.turf=plan.turf;
       if(!plan.turf)throw new ApiError(NO_TURF,400,true);
       if(!plan.turf.spans.length)throw new ApiError(NO_DOORS,400,true);
-      return getWalkList('',where,sig,plan.turf.spans,true);
+      got.cut=trimFor(plan.turf,asked,q);   // the list is cut to the doors asked for, with the weights the blocks were picked by (a server that cannot cut sends no trim)
+      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined);
     },p=>{
       picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);   // the list is the planned blocks alone
-      putSpans(got.turf?.spans??[],true);show(p,false);setTurf(got.turf??null);
+      putSpans(got.turf?.spans??[],true,got.cut??null);show(p,false);setTurf(got.turf??null);
     });
   }
   const openSaved=useCallback((key:string)=>{
@@ -657,8 +662,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
   const setLevel=(level:WalkLevel,v:string)=>{setNote('');putSpans([]);setArea(a=>level==='ss'?{ss:v,sh:'',precinct:''}:level==='sh'?{...a,sh:v,precinct:''}:{...a,precinct:v});};
   useEffect(()=>{
-    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,plan:null,list:listKey||null});
-  },[area,picks,spans,fresh,listKey]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
+    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),plan:null,list:listKey||null});
+  },[area,picks,spans,fresh,trim,listKey]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
   const started=useRef(false);
   useEffect(()=>{
     if(started.current)return;started.current=true;
