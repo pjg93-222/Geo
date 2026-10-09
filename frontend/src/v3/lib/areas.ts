@@ -36,6 +36,20 @@ export function binsFor(p:AreasPayload,group:IndexLayer,layer:Layer,meta:Meta):U
 }
 export function pendingBins(n:number):Uint8Array{return new Uint8Array(n+1).fill(BIN_PENDING);}
 
+/** One party code of a registration mix: its share of the people counted, 0..1 ('' = no code). The shares of a mix add up to 1. */
+export interface MixShare{code:string;share:number}
+const MAIN_CODES=['D','R','U'];
+/** The mix of people per party code (O-10): D, R and U first and always listed, then every other code that is present, most people first.
+ *  Each share is a count over the total, so the shares add up to 1. null when nobody is counted. */
+export function partyShares(counts:Record<string,number>):MixShare[]|null{
+  const total=Object.values(counts).reduce((a,b)=>a+b,0);
+  if(!(total>0))return null;
+  const rest=Object.keys(counts).filter(c=>!MAIN_CODES.includes(c)&&counts[c]>0).sort((a,b)=>counts[b]-counts[a]||(a<b?-1:1));
+  return [...MAIN_CODES,...rest].map(code=>({code,share:(counts[code]??0)/total}));
+}
+/** The grouped mix (D, R, U and Other) that the area table carries: what the rail shows when the server has no per-code counts. */
+export const groupShares=(d:number,r:number,u:number):MixShare[]=>[{code:'D',share:d},{code:'R',share:r},{code:'U',share:u},{code:'O',share:Math.max(0,1-d-r-u)}];
+
 export interface RowStat{group:'ovr'|'cua'|'part'|'soi';mean:number;lo:number;hi:number;pct:number}
 export interface AreaView{
   index:number;id:string;level:Level;label:string;
@@ -45,12 +59,13 @@ export interface AreaView{
   share:{value:number;lo:number;hi:number}|null;
   rows:RowStat[];
   lean:{mean:number;se:number;lo:number;hi:number}|null;
-  mix:{d:number;r:number;u:number;o:number}|null;
+  mix:MixShare[]|null;
   tractId:string|null;precinctId:string|null;blocks:number|null;
 }
 const POS=['ovr','cua','part','soi'] as const;
 
-export function areaView(p:AreasPayload,i:number,group:Group):AreaView{
+/** `counts`: the people per party code of this area (GET /api/v3/parties); without it the mix is the grouped D, R, U and Other. */
+export function areaView(p:AreasPayload,i:number,group:Group,counts?:Record<string,number>):AreaView{
   const empty=p.status[i]!=='ok';
   const base:AreaView={
     index:i,id:p.ids[i],level:p.level,label:p.labels[i],empty,n:p.n[i],households:p.households[i],measured:null,
@@ -71,7 +86,7 @@ export function areaView(p:AreasPayload,i:number,group:Group):AreaView{
     const mean=l.mean[i]!,se=l.se[i]!;
     base.lean={mean,se,lo:mean-1.6449*se,hi:mean+1.6449*se};
     const d=l.share_d[i]??0,r=l.share_r[i]??0,u=l.share_u[i]??0;
-    base.mix={d,r,u,o:Math.max(0,1-d-r-u)};
+    base.mix=(counts&&partyShares(counts))||groupShares(d,r,u);
   }
   return base;
 }
@@ -79,18 +94,18 @@ export function areaView(p:AreasPayload,i:number,group:Group):AreaView{
 /** Weighted district means for the empty-selection rail (areas with registered people; weights = people). */
 export function districtSummary(p:AreasPayload){
   const sums={ovr:0,cua:0,part:0,soi:0,lean:0,measured:0};let w=0;let people=0;
-  const mix={d:0,r:0,u:0,o:0};
+  const mix={d:0,r:0,u:0};
   for(let i=0;i<p.ids.length;i++){
     if(p.status[i]!=='ok')continue;
     const n=p.n[i]!;w+=n;
     const d=p.groups.lean.share_d[i]??0,r=p.groups.lean.share_r[i]??0,u=p.groups.lean.share_u[i]??0;
-    mix.d+=n*d;mix.r+=n*r;mix.u+=n*u;mix.o+=n*Math.max(0,1-d-r-u);
+    mix.d+=n*d;mix.r+=n*r;mix.u+=n*u;
     sums.ovr+=n*p.groups.ovr.mean[i]!;sums.cua+=n*p.groups.cua.mean[i]!;sums.part+=n*p.groups.part.mean[i]!;
     sums.soi+=n*p.groups.soi.mean[i]!;sums.lean+=n*p.groups.lean.mean[i]!;sums.measured+=n*(p.groups.ovr.measured[i]??0);
     people+=n;
   }
   const f=(x:number)=>w?x/w:0;
-  return {ovr:f(sums.ovr),cua:f(sums.cua),part:f(sums.part),soi:f(sums.soi),lean:f(sums.lean),measured:f(sums.measured),people,mix:{d:f(mix.d),r:f(mix.r),u:f(mix.u),o:f(mix.o)}};
+  return {ovr:f(sums.ovr),cua:f(sums.cua),part:f(sums.part),soi:f(sums.soi),lean:f(sums.lean),measured:f(sums.measured),people,mix:groupShares(f(mix.d),f(mix.r),f(mix.u))};
 }
 
 export const fmt1=(x:number)=>String(round(x));

@@ -2,7 +2,7 @@
 // coarse geometry paints first and the fine geometry replaces it ("first tiles from cache, low resolution, then sharp").
 import {useEffect,useMemo,useRef,useState} from 'react';
 import type {AreaGeometry,AreasPayload,Meta} from '../types';
-import {getAreas,getGeometry} from '../api/client';
+import {getAreas,getGeometry,getParties} from '../api/client';
 import type {Level} from './format';
 
 export interface GeoEntry{fc:AreaGeometry;pos:Map<string,number>;quality:'coarse'|'fine'}
@@ -45,6 +45,19 @@ export function useLevelData(meta:Meta|null,level:Level):{state:LevelState|null;
   },[meta,level,nonce]);
 
   return {state,loadingLevel,error,retry:()=>setNonce(n=>n+1)};
+}
+
+/** People per party code in each area of a level, by area id (O-10). null until it arrives, and when the server cannot count
+ *  (the rail then shows the grouped D, R, U and Other mix of the area table). */
+export function useParties(meta:Meta|null,level:Level):Map<string,Record<string,number>>|null{
+  const [got,setGot]=useState<{level:Level;byId:Map<string,Record<string,number>>}|null>(null);
+  useEffect(()=>{
+    if(!meta)return;
+    let live=true;
+    getParties(meta,level).then(p=>{if(live)setGot({level,byId:new Map(p.ids.map((id,i)=>[id,p.parties[i]]))});}).catch(()=>{if(live)setGot(null);});
+    return()=>{live=false;};
+  },[meta,level]);
+  return got&&got.level===level?got.byId:null;
 }
 
 /** Areas payload id -> index. */

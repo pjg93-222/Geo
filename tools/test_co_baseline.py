@@ -221,7 +221,156 @@ class IntendedTests(unittest.TestCase):
         self.assertEqual((len(out), printed), (1, ''))
         self.assertIn('DIFFERENT endpoints.walk_overview_other', out[0])
         self.assertNotIn('ruled', out[0])
-        self.assertEqual(list(B.INTENDED), ['walk_overview_precinct'])
+        self.assertEqual(list(B.INTENDED), ['walk_overview_precinct', 'meta'])
+
+
+OLD_META = {'schema': 'v3-meta-1', 'snapshot': 'co-cd005-aaaaaaaaaaaa', 'people': 100, 'households': 40,
+            'district_registration': {'d': 0.4, 'r': 0.3, 'u': 0.2, 'o': 0.1}, 'district_rate': {'ovr': 0.1}}
+NEW_META = {**{k: v for k, v in OLD_META.items() if k != 'district_registration'},
+            'district_parties': {'D': 40, 'R': 30, 'U': 20, 'W': 6, 'G': 3, '': 1}}
+
+
+class MetaPartySplitTests(unittest.TestCase):
+    """The ruled difference of meta (O-10): district_registration {d, r, u, o} became district_parties {code: people}."""
+
+    def changed(self, edit):
+        body = copy.deepcopy(NEW_META)
+        edit(body)
+        return B.meta_party_split(dumps(OLD_META), dumps(body))
+
+    def test_the_exact_split_passes(self):
+        self.assertEqual(B.meta_party_split(dumps(OLD_META), dumps(NEW_META)), [])
+
+    def test_a_split_that_does_not_add_up_fails_and_names_district_parties(self):
+        parties = lambda **change: lambda b: b['district_parties'].update(change)
+        recode = lambda code: lambda b: b['district_parties'].update({code: b['district_parties'].pop('W')})
+        cases = {
+            'a D count changed': parties(D=41),
+            'D moved to W, same total': parties(D=39, W=7),
+            'the other codes sum to one too many': parties(G=4),
+            'the other codes sum to one too few': parties(G=2),
+            'a zero count': parties(W=0, G=9),
+            'a lower-case code': recode('w'),
+            'a two-letter code': recode('WF'),
+            'a non-integer count': parties(W=6.0),
+        }
+        for name, edit in cases.items():
+            self.assertEqual(self.changed(edit), ['$.district_parties'], name)
+        self.assertEqual(self.changed(lambda b: b.pop('district_parties')), ['$.district_parties'], 'district_parties missing')
+        self.assertEqual(self.changed(lambda b: b.update(district_parties=[40, 30, 20])), ['$.district_parties'], 'not a mapping')
+
+    def test_every_other_change_fails_and_names_a_path(self):
+        self.assertEqual(self.changed(lambda b: b.update(households=41)), ['$.households'])
+        self.assertEqual(self.changed(lambda b: b.update(extra=1)), ['$.extra'])
+        self.assertEqual(self.changed(lambda b: b['district_rate'].update(ovr=0.2)), ['$.district_rate.ovr'])
+        self.assertEqual(self.changed(lambda b: b.update(district_registration=OLD_META['district_registration'])),
+                         ['$.district_registration'], 'the old split kept beside the new one')
+        self.assertEqual(self.changed(lambda b: b.update(people=101)), ['$.people'], 'people changed')
+        self.assertEqual(B.meta_party_split(dumps({k: v for k, v in OLD_META.items() if k != 'district_registration'}), dumps(NEW_META)),
+                         ['$.district_registration'], 'a golden body without the old split cannot be verified')
+
+    def test_a_split_off_by_a_rounding_error_passes_but_not_by_a_person(self):
+        old = copy.deepcopy(OLD_META)
+        old['people'] = 491308
+        old['district_registration'] = {k: n / 491308 for k, n in zip('druo', (200000, 150000, 100000, 41308))}
+        new = {**{k: v for k, v in old.items() if k != 'district_registration'},
+               'district_parties': {'D': 200000, 'R': 150000, 'U': 100000, 'T': 41300, 'W': 8}}
+        self.assertEqual(B.meta_party_split(dumps(old), dumps(new)), [])
+        new['district_parties'].update(T=41299, W=9)
+        self.assertEqual(B.meta_party_split(dumps(old), dumps(new)), [], 'the other codes still sum to the old other')
+        new['district_parties'].update(D=200001, R=149999)
+        self.assertEqual(B.meta_party_split(dumps(old), dumps(new)), ['$.district_parties'])
+
+
+def old_areas(**change):
+    body = {'schema': 'v3-areas-1', 'snapshot': 'co-cd005-aaaaaaaaaaaa', 'basis': 'registration', 'level': 'block',
+            'ids': ['a', 'b', 'c'], 'status': ['ok', 'ok', 'empty'], 'n': [10, 4, 0],
+            'groups': {'lean': {'share_d': [0.5, 0.25, None], 'share_r': [0.3, 0.25, None], 'share_u': [0.1, 0.5, None]}}}
+    return {**body, **change}
+
+
+NEW_PARTIES = {'schema': 'v3-parties-1', 'snapshot': 'co-cd005-aaaaaaaaaaaa', 'basis': 'registration', 'level': 'block',
+               'ids': ['a', 'b'], 'parties': [{'D': 5, 'R': 3, 'U': 1, 'W': 1}, {'D': 1, 'R': 1, 'U': 2}]}
+
+
+class PartiesSplitTests(unittest.TestCase):
+    """The ruled new endpoints (O-10): each level of /api/v3/parties against the old area table of the same level."""
+
+    def changed(self, edit, golden=None):
+        body = copy.deepcopy(NEW_PARTIES)
+        edit(body)
+        return B.parties_split(dumps(golden or old_areas()), dumps(body))
+
+    def test_the_exact_split_passes(self):
+        self.assertEqual(B.parties_split(dumps(old_areas()), dumps(NEW_PARTIES)), [])
+
+    def test_a_count_that_does_not_match_the_old_area_fails_at_its_area(self):
+        self.assertEqual(self.changed(lambda b: b['parties'][0].update(D=6)), ['$.areas[0]'], 'a D count changed')
+        self.assertEqual(self.changed(lambda b: b['parties'][0].update(D=4, W=2)), ['$.areas[0]'], 'D moved to W')
+        self.assertEqual(self.changed(lambda b: b['parties'][1].update(U=1, T=1)), ['$.areas[1]'], 'U moved to T')
+        self.assertEqual(self.changed(lambda b: b['parties'][0].update(W=2)), ['$.areas[0]'], 'the total is one too many')
+        self.assertEqual(self.changed(lambda b: b['parties'][0].update(W=0)), ['$.areas[0]'], 'a zero count')
+        self.assertEqual(self.changed(lambda b: b['parties'][0].update({'w': 1}) or b['parties'][0].pop('W')), ['$.areas[0]'], 'a lower-case code')
+        self.assertEqual(self.changed(lambda b: (b['ids'].pop(), b['parties'].pop())), ['$.areas[1]'], 'an area with people is missing')
+        self.assertEqual(self.changed(lambda b: (b['ids'].append('c'), b['parties'].append({'D': 1}))), ['$.areas[2]'], 'an empty area has counts')
+        self.assertEqual(self.changed(lambda b: (b['ids'].append('z'), b['parties'].append({'D': 1}))), ['$.ids'], 'an area the table does not have')
+
+    def test_an_answer_of_another_shape_fails_as_a_whole(self):
+        for name, edit in {'another snapshot': lambda b: b.update(snapshot='co-cd005-bbbbbbbbbbbb'),
+                           'another level': lambda b: b.update(level='tract'), 'another basis': lambda b: b.update(basis='residence'),
+                           'another schema': lambda b: b.update(schema='v3-parties-2'), 'an extra key': lambda b: b.update(extra=1),
+                           'ids and parties differ in length': lambda b: b['parties'].pop(),
+                           'ids out of order': lambda b: (b['ids'].reverse(), b['parties'].reverse())}.items():
+            self.assertEqual(self.changed(edit), ['$'], name)
+
+    def compare(self, endpoint_id, now_body, golden=None, status=200, recorded=False):
+        entry = lambda sha, st=200: {'status': st, 'content_type': 'application/json', 'bytes': 10, 'sha256': sha * 64}
+        with tempfile.TemporaryDirectory() as folder:
+            if golden is not False:
+                (Path(folder) / 'areas_registration_block.body').write_bytes(dumps(golden or old_areas()))
+            out, printed = [], io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                B.compare_endpoints({endpoint_id: entry('a')} if recorded else {}, {endpoint_id: entry('b', status)},
+                                    {endpoint_id: dumps(now_body)}, Path(folder), out)
+        return out, printed.getvalue()
+
+    def test_a_ruled_new_endpoint_passes_with_one_verified_line_and_no_other_does(self):
+        out, printed = self.compare('parties_registration_block', NEW_PARTIES)
+        self.assertEqual(out, [])
+        self.assertEqual(printed.strip(), 'INTENDED endpoints.parties_registration_block (O-10 party codes as themselves): '
+                                          'verified against areas_registration_block')
+        out, printed = self.compare('parties_other', NEW_PARTIES)
+        self.assertEqual((len(out), printed), (1, ''))
+        self.assertTrue(out[0].startswith('NEW'))
+        self.assertIn('endpoints.parties_other', out[0])
+        self.assertNotIn('ruled', out[0])
+
+    def test_a_ruled_new_endpoint_still_fails_when_its_verifier_status_or_golden_body_does(self):
+        broken = copy.deepcopy(NEW_PARTIES)
+        broken['parties'][0]['D'] = 6
+        out, printed = self.compare('parties_registration_block', broken)
+        self.assertEqual((len(out), printed), (1, ''))
+        self.assertIn('not met at $.areas[0]', out[0])
+        out, _ = self.compare('parties_registration_block', NEW_PARTIES, golden=False)
+        self.assertIn('cannot be verified', out[0])
+        out, printed = self.compare('parties_registration_block', NEW_PARTIES, status=404)
+        self.assertEqual((len(out), printed), (1, ''))
+        self.assertIn('cannot be verified', out[0])
+
+    def test_once_the_fixture_records_it_the_endpoint_is_compared_like_any_other(self):
+        out, printed = self.compare('parties_registration_block', NEW_PARTIES, recorded=True)
+        self.assertEqual(printed, '')
+        self.assertEqual(len(out), 1)
+        self.assertIn('DIFFERENT endpoints.parties_registration_block', out[0])
+
+    def test_every_added_endpoint_is_listed_and_checked_against_its_old_areas_answer(self):
+        listed = {endpoint_id for endpoint_id, _ in B.ENDPOINTS}
+        self.assertEqual(sorted(B.ADDED), sorted(i for i in listed if i.startswith('parties_')))
+        self.assertEqual(len(B.ADDED), 6)
+        for endpoint_id, (ruling, source, verify) in B.ADDED.items():
+            self.assertEqual(source, 'areas_' + endpoint_id[len('parties_'):])
+            self.assertIn(source, listed)
+            self.assertIs(verify, B.parties_split)
 
 
 class SafetyTests(unittest.TestCase):

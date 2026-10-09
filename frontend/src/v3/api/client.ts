@@ -1,5 +1,5 @@
 // The application reads the active local snapshot. A failed request never falls back to generated records.
-import type {AreaGeometry,AreasPayload,Density,Features,HouseholdPopover,Meta,PeoplePage,PeopleQuery,Profile,Source,StreetPayload,SearchResult} from '../types';
+import type {AreaGeometry,AreasPayload,Density,Features,HouseholdPopover,Meta,PeoplePage,PeopleQuery,Profile,PartiesPayload,Source,StreetPayload,SearchResult} from '../types';
 import type {Level} from '../lib/format';
 export type Family='meta'|'geometry'|'areas'|'people'|'person'|'household'|'street'|'search';
 export const sources:Record<Family,Source>={meta:'live',geometry:'live',areas:'live',people:'live',person:'live',household:'live',street:'live',search:'live'};
@@ -31,6 +31,7 @@ export async function getMeta():Promise<Meta>{
   return {...meta,source:'live'};
 }
 export function getAreas(meta:Meta,level:Level):Promise<AreasPayload>{return localJson(`/api/v3/areas/${encodeURIComponent(meta.snapshot)}/registration/${level}.json`);}
+export function getParties(meta:Meta,level:Level):Promise<PartiesPayload>{return localJson(`/api/v3/parties/${encodeURIComponent(meta.snapshot)}/registration/${level}.json`);}
 export function getGeometry(meta:Meta,level:Level,variant:'coarse'|'fine'):Promise<AreaGeometry>{return localJson(`/api/v3/geometry/${encodeURIComponent(meta.snapshot)}/${level}/${variant}.json`);}
 export function getDistrict():Promise<GeoJSON.FeatureCollection>{return localJson('/api/geometry?level=district');}
 /** This district's settings (industries, candidate and race mode, overlay layers, street plan); configuration only. */

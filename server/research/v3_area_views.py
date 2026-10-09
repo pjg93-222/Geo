@@ -5,6 +5,7 @@
   GET /api/v3/features                                     this district's settings: industries, candidate, overlay layers, street plan
   GET /api/v3/density                                      DATA_DIR/density.json (population and voter density per area), 404 until built
   GET /api/v3/areas/<snapshot>/<basis>/<level>.json        columnar values of one level (registration or residence)
+  GET /api/v3/parties/<snapshot>/<basis>/<level>.json      people per party code in each area of one level (O-10)
   GET /api/v3/geometry/<snapshot>/<level>/<coarse|fine>.json  polygons with label points
 
 Areas and geometry are immutable per snapshot (the key is in the URL): `private, max-age=31536000, immutable`, a strong
@@ -21,6 +22,7 @@ from django.conf import settings
 from tools import area_layers as AL
 from tools import districts as D
 from tools import field_labels as FL
+from tools import scores_schema as S
 
 from . import v3_cache
 from .models import Snapshot
@@ -79,9 +81,7 @@ def meta(request):
     if info is not None:
         payload['people'] = int(info.meta['n_people'])
         payload['households'] = int(info.meta['n_households'])
-        payload['district_registration'] = {
-            group.lower(): info.meta['reg_group_counts'][group] / info.n if info.n else 0
-            for group in ('D', 'R', 'U', 'O')}
+        payload['district_parties'] = info.party_counts()
         payload['district_rate'] = {g: info.meta['district']['top10_rate'][g] for g in ('ovr', 'cua', 'part', 'soi')}
         payload['district_mean'] = {'score': info.meta['district']['score_mean'],
                                     'measured': info.meta['district']['measured_mean'],
@@ -183,6 +183,36 @@ def areas(request, snap, basis, level):
     except LookupError:
         return error('Unknown snapshot.', 404)
     return blob_response(request, v3_cache.areas_blob(key, basis, level), IMMUTABLE)
+
+
+@lru_cache(maxsize=12)
+def _parties_blob(path, stamp, key, basis, level):
+    """One level's party counts, worked out from the score store on first use (display only): the store's path and stamp
+    are in the key, so a rebuilt store is read again."""
+    from . import scoresdb
+    by_area = scoresdb.party_counts_by_area(S.AREA_LEVEL_OF[(basis, level)])
+    ids = sorted(by_area)
+    return v3_cache.Blob(json.dumps({'schema': 'v3-parties-1', 'snapshot': key, 'basis': basis, 'level': level,
+                                     'ids': ids, 'parties': [by_area[i] for i in ids]},
+                                    separators=(',', ':'), allow_nan=False).encode('utf-8'))
+
+
+@get_only
+@signed_in
+def parties(request, snap, basis, level):
+    """O-10: how many people hold each party code in each area of a level ('' = no code). An area with no people is absent.
+    Every area is counted whatever its size; the sums are the area's people. Revalidated, not immutable: the counts come
+    from the score store, which can be rebuilt under the same snapshot."""
+    params(request, set())
+    if level not in AL.BASIS_LEVELS.get(basis, ()):
+        return error('Unknown area level.', 404)
+    found = v4_snapshot(snap)
+    if found is None:
+        return error('Unknown snapshot.', 404)
+    status, info = store_status(found[1])
+    if info is None or status['status'] != 'ok':
+        return error('The score store is unavailable.', 404)
+    return blob_response(request, _parties_blob(str(info.path), info.stamp, found[0], basis, level), REVALIDATE)
 
 
 @get_only

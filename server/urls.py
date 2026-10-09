@@ -20,6 +20,7 @@ v3_routes = [
     path('api/v3/districts', v3a.districts),
     path('api/v3/features', v3a.features), path('api/v3/density', v3a.density),
     re_path(r'^api/v3/areas/(?P<snap>' + SNAPSHOT + r')/(?P<basis>registration|residence)/(?P<level>block|precinct|tract|zip)\.json$', v3a.areas),
+    re_path(r'^api/v3/parties/(?P<snap>' + SNAPSHOT + r')/(?P<basis>registration|residence)/(?P<level>block|precinct|tract|zip)\.json$', v3a.parties),
     re_path(r'^api/v3/geometry/(?P<snap>' + SNAPSHOT + r')/(?P<level>block|precinct|tract|zip)/(?P<variant>coarse|fine)\.json$', v3a.geometry),
     path('api/v3/people', v3p.people), path('api/v3/person', v3p.person), path('api/v3/household', v3p.household),
     path('api/v3/street', v3p.street), path('api/v3/search', v3p.search),

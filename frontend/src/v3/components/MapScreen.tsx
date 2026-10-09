@@ -6,9 +6,9 @@ import {MapCanvas,STREET_ZOOM,type HouseholdSel,type MapHandle,type MapView} fro
 import {AreaRail,type Neighbour} from './AreaRail';
 import {AreaLabels,HouseholdLegend,Legend,LayersPanel,Popover,Readout,StreetRail,ZoomControl,type MapLabel} from './MapParts';
 import type {Density,Group,HouseholdPopover,Meta,OverlayLayer,StreetPayload} from '../types';
-import {BIN_PENDING,areaView,districtSummary} from '../lib/areas';
+import {BIN_PENDING,areaView,districtSummary,partyShares} from '../lib/areas';
 import {SHARE_RAMP,industryChoices,isGroup,offeredLayers,overlayBins,overlayQuery,readOverlay,usable,type Overlay} from '../lib/overlay';
-import {binsInGeometryOrder,featureBounds,useLevelData} from '../lib/useLevelData';
+import {binsInGeometryOrder,featureBounds,useLevelData,useParties} from '../lib/useLevelData';
 import {LEVELS,precinctShort,tractShort,zipLabel,type Level} from '../lib/format';
 import {replaceQuery,type Route} from '../lib/router';
 import {begin,end} from '../lib/timing';
@@ -40,6 +40,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const areas=state?.areas??null;
   const geo=state?.geo??null;
   const loadedLevel=state?.level??level;
+  const parties=useParties(meta,loadedLevel);
   dataReady.current=!!areas&&!loadingLevel;
 
   // ---- this district's layers (GET /api/v3/features, density once it is listed) -----------------------------------------------
@@ -82,12 +83,12 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
 
   const idIndex=useMemo(()=>new Map((areas?.ids??[]).map((id,i)=>[id,i])),[areas]);
   const selIndex=selected?idIndex.get(selected):undefined;
-  const areaV=useMemo(()=>areas&&selIndex!==undefined?areaView(areas,selIndex,group):null,[areas,selIndex,group]);
+  const areaV=useMemo(()=>areas&&selIndex!==undefined?areaView(areas,selIndex,group,parties?.get(areas.ids[selIndex])):null,[areas,selIndex,group,parties]);
   // the district summary is the score store's own means when the server sends them;
   // otherwise it is the people-weighted mean of the areas with registered people
   const summary=useMemo(()=>{
     const d=meta?.district_mean;
-    if(d)return {ovr:d.score.ovr,cua:d.score.cua,part:d.score.part,soi:d.score.soi,lean:d.lean,measured:d.measured.ovr,measuredBy:d.measured,people:meta!.people,mix:meta!.district_registration};
+    if(d)return {ovr:d.score.ovr,cua:d.score.cua,part:d.score.part,soi:d.score.soi,lean:d.lean,measured:d.measured.ovr,measuredBy:d.measured,people:meta!.people,mix:meta!.district_parties?partyShares(meta!.district_parties):undefined};
     return areas?districtSummary(areas):null;
   },[meta,areas]);
 
@@ -190,7 +191,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
       </div>
       {streetActive
         ?<StreetRail stats={street?.stats??null} truncated={street?.truncated}/>
-        :<AreaRail meta={meta} level={loadedLevel} group={group} view={areaV} loading={!areas} summary={summary} neighbors={neighbors}/>}
+        :<AreaRail meta={meta} level={loadedLevel} group={group} view={areaV} loading={!areas} summary={summary} neighbors={neighbors} names={features?.party_codes}/>}
     </div>
   </div>;
 }

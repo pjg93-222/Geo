@@ -17,7 +17,8 @@ export interface Meta{
   people:number;households:number;district_label:string;
   store?:{status:string;note:string};
   data_origin?:string;
-  district_registration?:{d:number;r:number;u:number;o:number};
+  /** People per party code over the whole district ('' = no code), live only (O-10). */
+  district_parties?:Record<string,number>;
   district_rate:Record<'ovr'|'cua'|'part'|'soi',number>;
   share_breaks:number[];lean_cuts:[number,number];measured_breaks:number[];household_breaks:number[];
   weights:{cua:number;part:number;soi:number;sup?:number};
@@ -55,6 +56,12 @@ export interface AreasPayload{
   tract:(string|null)[];      // precinct, zip -> modal tract id
   blocks:(number|null)[];     // precinct, tract, zip -> block count
   groups:Record<'ovr'|'cua'|'part'|'soi',ScoreCell>&{lean:LeanCell;sup?:ScoreCell};
+}
+
+/** People per party code in each area of a level (GET /api/v3/parties); an area with no registered people is absent. */
+export interface PartiesPayload{
+  schema:'v3-parties-1';snapshot:string;basis:'registration';level:Level;
+  ids:string[];parties:Record<string,number>[];
 }
 
 export interface AreaGeometry extends GeoJSON.FeatureCollection<GeoJSON.Polygon|GeoJSON.MultiPolygon,{id:string;lx:number;ly:number;i?:number}>{}

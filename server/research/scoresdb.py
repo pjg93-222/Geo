@@ -106,6 +106,19 @@ class StoreInfo:
         self._outlook_lock = threading.Lock()
         self._push = None
         self._push_lock = threading.Lock()
+        self._parties = None
+
+    def party_counts(self):
+        """{party code: people} over the whole district, '' = no code; counted once per version of the store. Display only (O-10):
+        the registration groups behind the scores are unchanged."""
+        if self._parties is None:
+            conn = _open(self.path)
+            try:
+                rows = conn.execute("SELECT COALESCE(party, ''), COUNT(*) FROM person GROUP BY 1 ORDER BY 1").fetchall()
+            finally:
+                conn.close()
+            self._parties = {code: int(n) for code, n in rows}
+        return self._parties
 
     def push(self):
         """(push 0..100 per person in pos order, positions from the highest push down with ties by position, the push
@@ -217,6 +230,15 @@ def info():
         finally:
             connection.close()
         return _info
+
+
+def party_counts_by_area(column):
+    """{area id: {party code: people}} for one area column of the person table ('' = no code). Display only (O-10)."""
+    by_area = {}
+    for area, code, n in connection().execute(
+            "SELECT %s, COALESCE(party, ''), COUNT(*) FROM person WHERE %s IS NOT NULL AND %s <> '' GROUP BY 1, 2 ORDER BY 1, 2" % ((column,) * 3)):
+        by_area.setdefault(area, {})[code] = int(n)
+    return by_area
 
 
 def reset():

@@ -170,8 +170,14 @@ class AggregatePayloadTests(TestCase):
         self.assertFalse(body['demo'])
         self.assertEqual(body['people'], info.n)
         self.assertEqual(body['households'], info.meta['n_households'])
-        for code in ('D', 'R', 'U', 'O'):
-            self.assertEqual(body['district_registration'][code.lower()], info.meta['reg_group_counts'][code] / info.n)
+        # O-10: every party code is its own count; D, R and U are the old group counts and the rest add up to the old Other
+        parties = body['district_parties']
+        self.assertNotIn('district_registration', body)
+        self.assertEqual(sum(parties.values()), info.n)
+        for code in ('D', 'R', 'U'):
+            self.assertEqual(parties[code], info.meta['reg_group_counts'][code])
+        self.assertEqual(sum(n for code, n in parties.items() if code not in ('D', 'R', 'U')), info.meta['reg_group_counts']['O'])
+        self.assertTrue({'G', 'L', 'O', 'T'} <= set(parties))
 
     def test_levels_are_immutable_gzipped_and_etagged(self):
         for basis, levels in AL.BASIS_LEVELS.items():
@@ -222,6 +228,76 @@ class AggregatePayloadTests(TestCase):
             self.assertAlmostEqual(body['groups']['lean']['mean'][i], lean['eb_mean'], places=5)
             self.assertAlmostEqual(body['groups']['lean']['share_d'][i], lean['share_reg_D'], places=7)
             self.assertEqual(body['n'][i], int(table[(ident, 'ovr')]['n_rows']))
+
+    def test_parties_counts_every_party_code_in_every_area(self):
+        for basis, levels in AL.BASIS_LEVELS.items():
+            for level in levels:
+                response = self.client.get(self.url('parties', basis, level + '.json'))
+                self.assertEqual(response.status_code, 200, (basis, level))
+                self.assertEqual(response['Cache-Control'], 'private, no-cache')
+                body = response.json()
+                self.assertEqual((body['schema'], body['snapshot'], body['basis'], body['level']),
+                                 ('v3-parties-1', self.key, basis, level))
+                self.assertEqual(len(body['ids']), len(body['parties']))
+                self.assertEqual(body['ids'], sorted(body['ids']))
+                counts = dict(zip(body['ids'], body['parties']))
+                areas = self.client.get(self.url('areas', basis, level + '.json')).json()
+                lean = areas['groups']['lean']
+                for i, ident in enumerate(areas['ids']):
+                    if areas['status'][i] != 'ok':
+                        self.assertNotIn(ident, counts)              # no registered people: no counts
+                        continue
+                    here = counts[ident]
+                    self.assertEqual(sum(here.values()), areas['n'][i], (level, ident))
+                    # D, R and U are the old shares of the area; the other codes make up the old Other
+                    for code, cell in (('D', 'share_d'), ('R', 'share_r'), ('U', 'share_u')):
+                        self.assertAlmostEqual(here.get(code, 0), areas['n'][i] * lean[cell][i], places=3)
+                    other = sum(n for code, n in here.items() if code not in ('D', 'R', 'U'))
+                    self.assertAlmostEqual(other, areas['n'][i] * (1 - lean['share_d'][i] - lean['share_r'][i] - lean['share_u'][i]), places=3)
+                self.assertEqual(sum(sum(here.values()) for here in counts.values()), sum(n or 0 for n in areas['n']))
+        # the whole district is the sum of the blocks
+        blocks = self.client.get(self.url('parties', 'registration', 'block.json')).json()['parties']
+        total = {}
+        for here in blocks:
+            for code, n in here.items():
+                total[code] = total.get(code, 0) + n
+        self.assertEqual(total, self.client.get('/api/v3/meta').json()['district_parties'])
+
+    def test_parties_are_revalidated_and_refuse_what_it_cannot_count(self):
+        url = self.url('parties', 'registration', 'precinct.json')
+        first = self.client.get(url)
+        self.assertEqual(self.client.get(url, HTTP_IF_NONE_MATCH=first['ETag']).status_code, 304)
+        gz = self.client.get(url, HTTP_ACCEPT_ENCODING='gzip')
+        self.assertEqual(json.loads(gzip.decompress(gz.content)), first.json())
+        self.assertEqual(self.client.get('/api/v3/parties/co-cd005-000000000000/registration/block.json').status_code, 404)
+        self.assertEqual(self.client.get(self.url('parties', 'residence', 'block.json')).status_code, 404)
+        self.assertEqual(self.client.get(url + '?x=1').status_code, 400)
+        self.assertEqual(self.client.post(url).status_code, 405)
+
+    def test_blank_and_missing_codes_are_counted_as_no_code(self):
+        import sqlite3
+        connection = sqlite3.connect(self.world.directory / 'scores.sqlite3')
+        saved = connection.execute("SELECT pos, party FROM person WHERE party IN ('T', 'G') ORDER BY pos").fetchall()
+        self.assertGreaterEqual(len(saved), 4)
+        try:
+            # both stay in the old Other group, so nothing else about the store changes
+            connection.executemany('UPDATE person SET party=? WHERE pos=?', [('' if i % 2 else None, pos) for i, (pos, _) in enumerate(saved)])
+            connection.commit()
+            scoresdb.reset()
+            meta = self.client.get('/api/v3/meta').json()
+            parties = meta['district_parties']
+            self.assertNotIn('T', parties)
+            self.assertNotIn('G', parties)
+            self.assertEqual(parties[''], len(saved))
+            self.assertEqual(sum(parties.values()), meta['people'])
+            blocks = self.client.get(self.url('parties', 'registration', 'block.json')).json()['parties']
+            self.assertEqual(sum(here.get('', 0) for here in blocks), len(saved))
+            self.assertTrue(all(code == '' or len(code) == 1 for here in blocks for code in here))
+        finally:
+            connection.executemany('UPDATE person SET party=? WHERE pos=?', [(party, pos) for pos, party in saved])
+            connection.commit()
+            connection.close()
+            scoresdb.reset()
 
     def test_conditional_get_and_etags_survive_a_restart(self):
         url = self.url('areas', 'registration', 'precinct.json')
@@ -285,6 +361,7 @@ class AggregatePayloadTests(TestCase):
             connection.commit()
             scoresdb.reset()
             self.assertEqual(self.client.get('/api/v3/meta').json()['store']['status'], 'mismatch')
+            self.assertEqual(self.client.get(self.url('parties', 'registration', 'block.json')).status_code, 404)
             pid = connection.execute('SELECT person_id FROM person LIMIT 1').fetchone()[0]
             self.assertEqual(self.client.get('/api/v3/person?id=' + pid).status_code, 409)
         finally:

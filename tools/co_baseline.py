@@ -109,6 +109,12 @@ ENDPOINTS = (
     ('areas_registration_zip', '/api/v3/areas/{snapshot}/registration/zip.json'),
     ('areas_residence_tract', '/api/v3/areas/{snapshot}/residence/tract.json'),
     ('areas_residence_zip', '/api/v3/areas/{snapshot}/residence/zip.json'),
+    ('parties_registration_block', '/api/v3/parties/{snapshot}/registration/block.json'),
+    ('parties_registration_precinct', '/api/v3/parties/{snapshot}/registration/precinct.json'),
+    ('parties_registration_tract', '/api/v3/parties/{snapshot}/registration/tract.json'),
+    ('parties_registration_zip', '/api/v3/parties/{snapshot}/registration/zip.json'),
+    ('parties_residence_tract', '/api/v3/parties/{snapshot}/residence/tract.json'),
+    ('parties_residence_zip', '/api/v3/parties/{snapshot}/residence/zip.json'),
     ('geometry_block_coarse', '/api/v3/geometry/{snapshot}/block/coarse.json'),
     ('geometry_block_fine', '/api/v3/geometry/{snapshot}/block/fine.json'),
     ('geometry_precinct_coarse', '/api/v3/geometry/{snapshot}/precinct/coarse.json'),
@@ -170,10 +176,67 @@ def overview_party_split(golden, now):
     return out[:12]
 
 
+def split_differs(counts, people, d, r, u, o):
+    """True unless counts ({code: people}) are whole numbers of at least 1 under single-capital (or blank) codes, total `people`,
+    D, R and U equal the old shares d, r and u of them, and the other codes together (no code too) equal the old share o.
+    The tolerance is the old shares' rounding to 8 decimals (v3_cache.SHARE_DECIMALS)."""
+    if (not isinstance(counts, dict) or type(people) is not int or not all(isinstance(x, (int, float)) for x in (d, r, u, o))
+            or any(not re.fullmatch(r'[A-Z]?', c) or type(n) is not int or n < 1 for c, n in counts.items())
+            or sum(counts.values()) != people):
+        return True
+    minor = sum(n for c, n in counts.items() if c not in ('D', 'R', 'U'))
+    return any(abs(got - share * people) > people * 2e-8 + 1e-6
+               for got, share in ((counts.get('D', 0), d), (counts.get('R', 0), r), (counts.get('U', 0), u), (minor, o)))
+
+
+def meta_party_split(golden, now):
+    """O-10: /api/v3/meta's district_registration (shares d, r, u, o) became district_parties ({code: people}). D, R and U equal
+    the old shares of the people, the other codes (no code too) sum to the old o, and every other key is unchanged. Problems
+    name JSON paths, never values."""
+    a, b = json.loads(golden), json.loads(now)
+    old, parties = a.pop('district_registration', None), b.pop('district_parties', None)
+    problems = [p if p.startswith(('$', '(')) else '$' + p for p in json_paths_differing(canonical(a), canonical(b))]
+    if not isinstance(old, dict) or set(old) != {'d', 'r', 'u', 'o'}:
+        problems.append('$.district_registration')
+    elif split_differs(parties, a.get('people'), old['d'], old['r'], old['u'], old['o']):
+        problems.append('$.district_parties')
+    return problems
+
+
+def parties_split(areas_golden, parties_now):
+    """O-10: a level of /api/v3/parties against the OLD area table of the same level. Each area with registered people has one
+    entry: its codes total its people, D, R and U equal the old lean shares of them and the other codes make up the old other.
+    An area without people has no entry, and nothing else is in the answer. Problems name JSON paths, never values."""
+    a, b = json.loads(areas_golden), json.loads(parties_now)
+    if (not isinstance(b, dict) or set(b) != {'schema', 'snapshot', 'basis', 'level', 'ids', 'parties'} or b['schema'] != 'v3-parties-1'
+            or [b[k] for k in ('snapshot', 'basis', 'level')] != [a.get(k) for k in ('snapshot', 'basis', 'level')]
+            or not isinstance(b['ids'], list) or not isinstance(b['parties'], list) or len(b['ids']) != len(b['parties'])
+            or b['ids'] != sorted(set(b['ids']))):
+        return ['$']
+    here, lean, out = dict(zip(b['ids'], b['parties'])), a['groups']['lean'], []
+    if not set(here) <= set(a['ids']):
+        out.append('$.ids')
+    for i, ident in enumerate(a['ids']):
+        if a['status'][i] != 'ok':
+            if ident in here:
+                out.append('$.areas[%d]' % i)
+            continue
+        d, r, u = lean['share_d'][i], lean['share_r'][i], lean['share_u'][i]
+        if ident not in here or split_differs(here[ident], a['n'][i], d, r, u, None if None in (d, r, u) else 1 - d - r - u):
+            out.append('$.areas[%d]' % i)
+    return out[:12]
+
+
 # Ruled differences from the Phase 0 fixture: {endpoint id: (ruling, verifier(golden bytes, new bytes) -> [problems])}.
 # A listed endpoint passes only when its status and content type are unchanged and its verifier finds no problem
 # (the golden body must be on disk); any other difference fails as before.
-INTENDED = {'walk_overview_precinct': ('O-10 party codes as themselves', overview_party_split)}
+INTENDED = {'walk_overview_precinct': ('O-10 party codes as themselves', overview_party_split),
+            'meta': ('O-10 party codes as themselves', meta_party_split)}
+# Ruled new endpoints, until a fixture that records them exists: {endpoint id: (ruling, id of the old endpoint it is checked against,
+# verifier(golden bytes of that endpoint, new bytes) -> [problems])}. One passes only with status 200 and a verifier that finds nothing.
+ADDED = {'parties_%s_%s' % (basis, level): ('O-10 party codes as themselves', 'areas_%s_%s' % (basis, level), parties_split)
+         for basis, level in (('registration', 'block'), ('registration', 'precinct'), ('registration', 'tract'),
+                              ('registration', 'zip'), ('residence', 'tract'), ('residence', 'zip'))}
 
 
 def log(message):
@@ -599,9 +662,22 @@ def short(value):
     return text if len(text) <= 24 else text[:12] + '...' + text[-6:]
 
 
-def compare_endpoints(expected, actual, bodies_now, golden_dir, out, intended=INTENDED):
+def compare_endpoints(expected, actual, bodies_now, golden_dir, out, intended=INTENDED, added=ADDED):
     for endpoint_id in sorted(set(expected) | set(actual)):
         before, now = expected.get(endpoint_id), actual.get(endpoint_id)
+        if before is None and now is not None and endpoint_id in added:
+            ruling, source, verify = added[endpoint_id]
+            golden = golden_dir / (source + '.body')
+            if now.get('status') != 200 or endpoint_id not in bodies_now or not golden.exists():
+                out.append('NEW       endpoints.%s: ruled addition "%s" cannot be verified (needs status 200 and the golden body of %s)'
+                           % (endpoint_id, ruling, source))
+                continue
+            found = verify(golden.read_bytes(), bodies_now[endpoint_id])
+            if found:
+                out.append('NEW       endpoints.%s: ruled addition "%s" not met at %s' % (endpoint_id, ruling, ', '.join(found)))
+            else:
+                print('INTENDED endpoints.%s (%s): verified against %s' % (endpoint_id, ruling, source))
+            continue
         if before is None or now is None:
             out.append('%s     endpoints.%s' % ('NEW      ' if before is None else 'MISSING  ', endpoint_id))
             continue

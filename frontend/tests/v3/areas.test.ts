@@ -76,3 +76,26 @@ test('district summary: weighted by every area that has people, the small ones t
   const byHand = [0, 1, 2, 3, 4].reduce((sum, i) => sum + n[i] * p.groups.ovr.mean[i]!, 0) / s.people;
   assert.ok(Math.abs(s.ovr - byHand) < 1e-9, `ovr ${s.ovr} vs ${byHand}`);
 });
+
+test('registration mix: every party code is its own share, D R U first, the rest by people, and the shares add up to 1', () => {
+  const mix = A.partyShares({D: 40, R: 30, U: 20, W: 5, G: 3, T: 1, '': 1})!;
+  assert.deepEqual(mix.map((s: {code: string}) => s.code), ['D', 'R', 'U', 'W', 'G', '', 'T'], 'a tie is listed in code order, the blank code first');
+  assert.ok(Math.abs(mix.reduce((a: number, s: {share: number}) => a + s.share, 0) - 1) < 1e-12);
+  assert.equal(mix[0].share, 0.4); assert.equal(mix[3].share, 0.05);
+  const few = A.partyShares({R: 3, W: 1, G: 0})!;
+  assert.deepEqual(few.map((s: {code: string}) => s.code), ['D', 'R', 'U', 'W'], 'D, R and U are always listed; a code nobody holds is not');
+  assert.equal(few[0].share, 0); assert.equal(few[1].share, 0.75);
+  assert.equal(A.partyShares({}), null); assert.equal(A.partyShares({D: 0}), null);
+});
+
+test('area view: per-code counts replace the grouped mix; without them the grouped D R U Other mix stays', () => {
+  const p = payload();
+  const grouped = A.areaView(p, 0, 'ovr').mix!;
+  assert.deepEqual(grouped.map((s: {code: string}) => s.code), ['D', 'R', 'U', 'O']);
+  assert.ok(Math.abs(grouped.reduce((a: number, s: {share: number}) => a + s.share, 0) - 1) < 1e-12, 'the grouped shares add up to 1 too');
+  const own = A.areaView(p, 0, 'ovr', {D: 48, R: 36, U: 24, W: 8, T: 4}).mix!;
+  assert.deepEqual(own.map((s: {code: string}) => s.code), ['D', 'R', 'U', 'W', 'T']);
+  assert.equal(own[0].share, 0.4); assert.ok(Math.abs(own.reduce((a: number, s: {share: number}) => a + s.share, 0) - 1) < 1e-12);
+  assert.equal(A.areaView(p, 5, 'ovr', {D: 1}).mix, null, 'an area with no registered people has no mix');
+  assert.deepEqual(A.districtSummary(p).mix.map((s: {code: string}) => s.code), ['D', 'R', 'U', 'O']);
+});
