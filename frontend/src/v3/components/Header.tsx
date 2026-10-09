@@ -148,6 +148,7 @@ export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:OverlayLayer|nul
     <SectionNav active="map"/>
     <div className="map-toolbar">
       <div className="seg-slot index"><Segmented<OverlayLayer|''> variant="index" label="Index" items={items} value={p.index??''} onChange={v=>{if(v)p.onIndex(v);}}/></div>
+      {p.features&&!p.features.candidate&&<span className="untapped-note">Untapped needs a candidate: see Oregon District 5 or Connecticut District 1.</span>}
       {industries&&<select className="district-select" aria-label="Industry" value={p.industry} onChange={e=>p.onIndustry(e.target.value)}>
         {industries.map(i=><option key={i.id} value={i.id}>{i.label}</option>)}</select>}
       <div className="seg-slot level"><Segmented variant="level" label="Level" items={LEVELS.map(l=>({id:l,label:LEVEL_LABEL[l]}))} value={p.level} onChange={p.onLevel}/></div>

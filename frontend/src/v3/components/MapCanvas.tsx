@@ -28,6 +28,8 @@ export interface HouseholdSel{id:string;lon:number;lat:number;bin:number}
 export interface MapCanvasProps{
   geometry:AreaGeometry|null;
   bins:Uint8Array|null;palette:string[];
+  /** State House or State Senate outlines shaded by their own bins; while set they replace the level's fills. */
+  overlayGeometry:AreaGeometry|null;overlayBins:Uint8Array|null;overlayPalette:string[];
   selectedId:string|null;
   focus:{bounds:[number,number,number,number];nonce:number}|null;
   initialBounds:[number,number,number,number]|null;
@@ -88,6 +90,7 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
     const casing=(base:number)=>road(base,3*u);
     m.on('load',()=>{
       m.addSource('areas',{type:'geojson',data:empty,tolerance:0.2,buffer:16});
+      m.addSource('poly',{type:'geojson',data:empty,tolerance:0.2,buffer:16});
       m.addSource('district',{type:'geojson',data:empty});
       m.addSource('roads',{type:'geojson',data:empty,tolerance:0.3});
       m.addSource('hh',{type:'geojson',data:empty});
@@ -97,6 +100,7 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
         m.addLayer({id:'fill-'+id,type:'fill',source:'areas',maxzoom:STREET_ZOOM,
           paint:{'fill-color':idle,'fill-opacity':id==='a'?1:0,'fill-antialias':false,'fill-opacity-transition':{duration:0,delay:0}}});
       }
+      m.addLayer({id:'fill-poly',type:'fill',source:'poly',maxzoom:STREET_ZOOM,layout:{visibility:'none'},paint:{'fill-color':idle,'fill-antialias':false}});
       const kinds:[string,number][]=[['S1400',1.5*u*1.15],['S1200',3*u],['S1100',4*u]];
       for(const [kind,base] of kinds){
         m.addLayer({id:'casing-'+kind,type:'line',source:'roads',minzoom:14,filter:['==',['get','kind'],kind],layout:{'line-cap':'round','line-join':'round'},
@@ -108,6 +112,8 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
       }
       m.addLayer({id:'areas-line',type:'line',source:'areas',maxzoom:STREET_ZOOM,
         paint:{'line-color':'#FFFFFF','line-opacity':0.92,'line-width':['interpolate',['linear'],['zoom'],8,0.15,11,0.45,13,0.9,15,1.5*u*1.4] as unknown as number}});
+      m.addLayer({id:'poly-line',type:'line',source:'poly',maxzoom:STREET_ZOOM,layout:{visibility:'none'},
+        paint:{'line-color':'#2A2456','line-opacity':0.85,'line-width':['interpolate',['linear'],['zoom'],8,0.8,12,1.4,15,2.4*u] as unknown as number}});
       m.addLayer({id:'district-line',type:'line',source:'district',layout:{'line-cap':'round','line-join':'round'},
         paint:{'line-color':'#423376','line-width':4*u,'line-dasharray':[1.9,2.6]}});
       const none:maplibregl.FilterSpecification=['==',['get','id'],''];
@@ -155,6 +161,21 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
     (m.getSource('areas') as maplibregl.GeoJSONSource).setData(props.geometry as GeoJSON.FeatureCollection);
     mark('geometry-set');
   },[ready,props.geometry]);
+
+  // ---- State House / Senate outlines (Untapped) ------------------------------------------------------------------------
+  useEffect(()=>{
+    const m=mapRef.current;if(!m||!ready)return;
+    armed.current=true;
+    const on=!!props.overlayGeometry;
+    (m.getSource('poly') as maplibregl.GeoJSONSource).setData((props.overlayGeometry??empty) as GeoJSON.FeatureCollection);
+    for(const id of ['fill-poly','poly-line'])m.setLayoutProperty(id,'visibility',on?'visible':'none');
+    for(const id of ['fill-a','fill-b','areas-line','sel-glow','sel-ring','sel-line'])m.setLayoutProperty(id,'visibility',on?'none':'visible');
+  },[ready,props.overlayGeometry]);
+  useEffect(()=>{
+    const m=mapRef.current;if(!m||!ready||!props.overlayGeometry)return;
+    armed.current=true;
+    m.setPaintProperty('fill-poly','fill-color',props.overlayBins?colorExpr(Array.from(props.overlayBins),props.overlayPalette):SKELETON);
+  },[ready,props.overlayGeometry,props.overlayBins,props.overlayPalette]);
 
   // ---- colors (cross-fade) -------------------------------------------------------------------------------------------
   const painted=useRef(false);

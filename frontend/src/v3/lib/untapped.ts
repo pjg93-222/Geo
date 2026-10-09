@@ -56,6 +56,12 @@ export function writeWeights(district:string,w:UntappedWeights,storage?:WeightSt
 /** Query parameters of the walk endpoints. */
 export const weightsQuery=(w:UntappedWeights)=>({wp:w.wp.toFixed(2),wi:w.wi.toFixed(2)});
 
+/** The district's default weights from /api/v3/features; a server that does not send them gets 0.5 and 0.5. */
+export const defaultWeights=(roi:{potential?:UntappedWeights}|null|undefined):UntappedWeights=>
+  clampWeights(roi?.potential??{},{wp:0.5,wi:0.5});
+/** Where "Plan walk list" goes: the Walk tab with this precinct, which builds the list at once. */
+export const planWalkPath=(precinct:string):string=>'/walk?'+new URLSearchParams({precinct,plan:'1'});
+
 export const UNDECIDED_WORDS='Undecided, usually votes';
 export const SUPPORTER_WORDS='Supporter, may not vote';
 export const DEFAULTS_NOTE='Defaults: balance 50/50, influence 0.5 (top influence counts 1.5 times).';

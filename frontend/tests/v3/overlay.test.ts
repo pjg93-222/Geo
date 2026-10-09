@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {registerHooks} from 'node:module';
 import type {AreasPayload, Density, Features, Meta} from '../../src/v3/types.ts';
+import type {UntappedAreas, UntappedLevel} from '../../src/v3/lib/untapped.ts';
 
 // areas.ts imports its neighbours without a file extension, so node needs a resolve hook to load it straight from source.
 registerHooks({resolve: (spec, ctx, next) => ctx.parentURL?.includes('/src/v3/') && /^\.{1,2}\//.test(spec) && !/\.[cm]?[jt]sx?$/.test(spec) ? next(spec + '.ts', ctx) : next(spec, ctx)});
@@ -173,10 +174,11 @@ test('URL: the default overlay writes nothing, every mode round-trips, junk fall
 
 test('offered layers: only what features lists, density only once density.json is loaded; the rest fall back', () => {
   const feat = (layers: string[], dens: boolean) => ({overlay: {layers, density: dens}}) as unknown as Features;
-  const co = feat(['ovr', 'cua', 'part', 'soi', 'lean'], false), or = feat([...co.overlay.layers, 'sup', 'pop_density', 'voter_density'], true);
+  const co = feat(['ovr', 'cua', 'part', 'soi', 'lean'], false), or = feat([...O.ALL_LAYERS], true), old = feat([...co.overlay.layers, 'sup'], false);
   assert.deepEqual(O.offeredLayers(null, false), O.BASE_LAYERS); assert.deepEqual(O.offeredLayers(co, false), O.BASE_LAYERS);
-  assert.deepEqual(O.offeredLayers(or, false), [...O.BASE_LAYERS, 'sup'], 'density layers wait for the file');
+  assert.deepEqual(O.offeredLayers(or, false), ['untapped', ...O.BASE_LAYERS, 'sup'], 'density layers wait for the file');
   assert.deepEqual(O.offeredLayers(or, true), O.ALL_LAYERS);
+  assert.ok(!O.offeredLayers(old, true).includes('untapped'), 'a server that does not list Untapped gets no Untapped layer');
   const wanted: O.Overlay = {mode: 'bi', layer: 'sup', blend: {sup: 50}, pair: ['sup', 'voter_density']};
   assert.deepEqual(O.usable(wanted, O.BASE_LAYERS), {mode: 'bi', layer: 'ovr', blend: O.DEFAULT_OVERLAY.blend, pair: ['cua', 'part']});
   assert.equal(O.usable(wanted, O.ALL_LAYERS).layer, 'sup'); assert.deepEqual(O.usable(wanted, O.ALL_LAYERS).pair, ['sup', 'voter_density']);
@@ -192,11 +194,81 @@ test('industry menu appears with two industries and not with one; the race badge
   assert.equal(O.raceBadge(null), null); assert.equal(O.raceBadge(undefined), null);
 });
 
+// ---- Untapped: sums for the block ids above, two of them (the empty blocks) not in the payload, and undecided rising with k while supporters fall ----
+const sums = (level: UntappedLevel = 'block', skip: number[] = EMPTY_AT, idList = ids): UntappedAreas => {
+  const keep = idList.filter((_, i) => !skip.includes(i)), col = (f: (k: number) => number) => keep.map((_, k) => f(k));
+  return {
+    schema: 'v3-untapped-1', level, ids: keep, labels: keep.map(id => `Area ${id}`), people: col(() => 50), knocked: col(k => k % 3),
+    undecided: col(k => k + 1), supporter: col(k => 30 - k), undecided_i: col(() => 0), supporter_i: col(() => 0),
+    defaults: {wp: 0.5, wi: 0.5}, t_source: {sai: 1050, record: 0, even: 0}, results: {version: '0-0', people_knocked: 0},
+  };
+};
+const bare = (bins: Uint8Array) => Array.from(bins.subarray(0, N));
+
+test('untapped layer: fifths of the sums at the slider weights, plain pale where there is nothing to show', () => {
+  const a = areas(), u = sums();
+  const r = O.overlayBins(single('untapped'), a, null, meta, false, {u, w: {wp: 1, wi: 0}});
+  const c = counts(r.bins);
+  assert.equal(c.reduce((x, y) => x + y, 0), 21); assert.ok(Math.max(...c) - Math.min(...c) <= 1, `fifths ${c}`);
+  assert.equal(r.bins[3], BIN_NONE); assert.equal(r.bins[17], BIN_NONE); assert.equal(r.bins[N], BIN_PENDING);
+  assert.equal(r.bins[0], 0, 'least undecided potential is the lowest fifth'); assert.equal(r.bins[22], 4);
+  assert.deepEqual(r.palette, O.SHARE_RAMP);
+  // the supporters end of the balance slider turns the same sums upside down
+  const rev = O.overlayBins(single('untapped'), a, null, meta, false, {u, w: {wp: 0, wi: 0}});
+  assert.equal(rev.bins[0], 4); assert.equal(rev.bins[22], 0);
+  // 1..21 at wp 1: breaks 5, 9, 13, 17
+  assert.deepEqual(r.legend, {title: 'Untapped potential', sub: 'Sum per area · doors with a recorded result left out',
+    labels: ['Under 5', '5–9', '9–13', '13–17', '17+'], ramp: O.SHARE_RAMP});
+  // a block the payload has people for but the sums do not hold is plain pale; an empty block never gets a color from the sums
+  assert.equal(O.overlayBins(single('untapped'), a, null, meta, false, {u: sums('block', [3, 5, 17]), w: {wp: 1, wi: 0}}).bins[5], BIN_NONE);
+  assert.equal(O.overlayBins(single('untapped'), a, null, meta, false, {u: sums('block', []), w: {wp: 1, wi: 0}}).bins[3], BIN_NONE);
+  // no sums yet, or sums of another level: every area waits, and the legend is already there
+  for (const wait of [null, {u: sums('precinct'), w: {wp: 1, wi: 0}}]) {
+    const p = O.overlayBins(single('untapped'), a, null, meta, false, wait);
+    assert.ok(Array.from(p.bins).every(b => b === BIN_PENDING)); assert.equal(p.legend!.title, 'Untapped potential'); assert.equal(p.legend!.labels.length, 5);
+  }
+  assert.ok(Array.from(O.overlayBins(single('ovr'), a, null, meta, false, {u, w: {wp: 1, wi: 0}}).bins.subarray(0, N)).every(b => b !== BIN_PENDING), 'only the Untapped layer reads the sums');
+});
+
+test('untapped outlines: State House polygons shaded by fifths of their own sums, in geometry order', () => {
+  const polys = ['41011', '41013', '41099', '41015', '41017', '41019'];
+  const u = sums('state_house', [], ['41011', '41013', '41015', '41017', '41019']);
+  const r = O.untappedBins(polys, {u, w: {wp: 1, wi: 0}});
+  assert.equal(r.bins.length, polys.length + 1); assert.equal(r.bins[polys.length], BIN_PENDING);
+  assert.equal(r.bins[2], BIN_NONE, 'an outline the sums do not hold');
+  assert.deepEqual([0, 1, 3, 4, 5].map(i => r.bins[i]), [0, 1, 2, 3, 4], 'five areas, one in each fifth, rising with undecided potential');
+  assert.ok(Array.from(O.untappedBins(polys, null).bins).every(b => b === BIN_PENDING));
+  assert.deepEqual(O.untappedValues(['b', 'a'], {u: {...sums('block', [], ['a', 'b']), undecided: [2, 6], supporter: [0, 0]}, w: {wp: 0.5, wi: 0}}), [3, 1]);
+});
+
+test('untapped is the opening layer where it is offered; the address names a layer only when it is not the opening one', () => {
+  assert.equal(O.districtDefault(O.BASE_LAYERS), 'ovr'); assert.equal(O.districtDefault(['untapped', ...O.BASE_LAYERS, 'sup']), 'untapped');
+  const q = (o: O.Overlay, d?: string) => new URLSearchParams(Object.entries(O.overlayQuery(o, d as never)).filter(([, v]) => v !== null) as [string, string][]);
+  assert.equal(O.readOverlay(new URLSearchParams(''), 'untapped').layer, 'untapped');
+  assert.equal(O.readOverlay(new URLSearchParams('index=ovr'), 'untapped').layer, 'ovr', 'overall chosen on purpose stays');
+  assert.equal(O.readOverlay(new URLSearchParams('index=sup'), 'untapped').layer, 'sup');
+  assert.equal(q(single('untapped'), 'untapped').toString(), '', 'the opening layer writes nothing');
+  assert.equal(q(single('ovr'), 'untapped').get('index'), 'ovr', 'so overall in a candidate district is written out');
+  assert.equal(O.readOverlay(q(single('ovr'), 'untapped'), 'untapped').layer, 'ovr');
+  assert.equal(q(single('untapped'), 'ovr').get('index'), 'untapped');
+  assert.equal(O.readOverlay(q(single('untapped'), 'ovr'), 'ovr').layer, 'untapped');
+  assert.deepEqual(O.readOverlay(new URLSearchParams('')), O.DEFAULT_OVERLAY, 'no district default given: Colorado as today');
+  assert.equal(q(O.DEFAULT_OVERLAY).toString(), '');
+  // shaded by potential alone: never in a blend or a pair, and no standing among the other layers
+  const junk = O.readOverlay(new URLSearchParams('mode=blend&blend=untapped:50,part:20&a=untapped&b=untapped'), 'untapped');
+  assert.deepEqual(junk.blend, {part: 20}); assert.deepEqual(junk.pair, ['cua', 'part']);
+  assert.ok(O.layerPct(areas(), null, 'untapped').every(x => x == null));
+  assert.equal(O.usable(single('untapped'), O.BASE_LAYERS).layer, 'ovr', 'Colorado has no such layer');
+  assert.equal(O.usable(single('untapped'), O.ALL_LAYERS).layer, 'untapped');
+  assert.equal(O.LAYER_NAME.untapped, 'Untapped');
+  assert.equal(O.ALL_LAYERS[0], 'untapped', 'it leads the Index buttons');
+});
+
 test('wording: no advisory word in any string the overlay shows (same pattern as tools/field_labels.ADVISORY_PATTERN)', () => {
   const ADVISORY = /\b(prospect|prospects|target|targets|targeting|best|recommend|recommended|priority|priorities|should|ideal|worth|likely to join|persuad|persuasion|convert|opportunity|high[- ]value|insufficient evidence)\b/i;
   const dir = new URL('../../src/v3/', import.meta.url);
   const strings: string[] = [...Object.values(O.LAYER_NAME)];
-  for (const file of ['lib/overlay.ts', 'components/MapParts.tsx', 'components/Header.tsx', 'components/MapScreen.tsx']) {
+  for (const file of ['lib/overlay.ts', 'lib/untapped.ts', 'components/MapParts.tsx', 'components/Header.tsx', 'components/MapScreen.tsx', 'components/UntappedPanel.tsx', 'components/AreaRail.tsx', 'components/MapCanvas.tsx']) {
     const text = readFileSync(new URL(file, dir), 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\be\.target\b/g, '');
     for (const m of text.matchAll(/'([^'\n]{3,})'|"([^"\n]{3,})"|`([^`\n]{3,})`|>([^<>{}\n]{3,})</g)) strings.push(m[1] ?? m[2] ?? m[3] ?? m[4]);
   }

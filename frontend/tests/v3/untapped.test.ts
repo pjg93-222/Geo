@@ -119,3 +119,83 @@ test('weightsQuery and the shared words', () => {
   const ADVISORY = /\b(prospect|prospects|target|targets|targeting|best|recommend|recommended|priority|priorities|should|ideal|worth|likely to join|persuad|persuasion|convert|opportunity|high[- ]value|insufficient evidence)\b/i;
   for (const s of [U.UNDECIDED_WORDS, U.SUPPORTER_WORDS, U.DEFAULTS_NOTE]) assert.ok(!ADVISORY.test(s), s);
 });
+
+test('defaultWeights and planWalkPath: an older server still gets 0.5/0.5, and the button opens the Walk tab on the precinct', () => {
+  assert.deepEqual(U.defaultWeights(null), D); assert.deepEqual(U.defaultWeights(undefined), D); assert.deepEqual(U.defaultWeights({}), D);
+  assert.deepEqual(U.defaultWeights({potential: W(0.4, 0.75)}), W(0.4, 0.75));
+  assert.equal(U.planWalkPath('41005-101'), '/walk?precinct=41005-101&plan=1');
+  assert.equal(new URL(U.planWalkPath('a b&c'), 'http://x').searchParams.get('precinct'), 'a b&c', 'the id travels whole');
+});
+
+// ---- the client: an ETag per level, a 304 hands back the same object --------------------------------------------------------------------
+const C = await import('../../src/v3/api/client.ts');
+const realFetch = globalThis.fetch;
+type Call = {url: string; headers: Record<string, string>};
+function fake(answers: {status: number; body?: unknown; etag?: string}[]) {
+  const calls: Call[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push({url, headers: {...(init?.headers as Record<string, string>)}});
+    const a = answers[Math.min(calls.length - 1, answers.length - 1)];
+    return new Response(a.status === 304 ? null : JSON.stringify(a.body ?? {}), {status: a.status, headers: a.etag ? {ETag: a.etag} : {}});
+  }) as typeof fetch;
+  return calls;
+}
+
+test('getUntapped: asks for its level, sends the last ETag back, and a 304 returns the very same object', async () => {
+  const one = payload({level: 'state_senate'}), two = payload({level: 'state_senate', people: [1, 1]});
+  const calls = fake([{status: 200, body: one, etag: '"v1"'}, {status: 304, etag: '"v1"'}, {status: 200, body: two, etag: '"v2"'}, {status: 304, etag: '"v2"'}]);
+  try {
+    const first = await C.getUntapped('state_senate');
+    assert.equal(calls[0].url, '/api/v3/untapped?level=state_senate'); assert.equal(calls[0].headers['If-None-Match'], undefined, 'nothing seen yet');
+    assert.deepEqual(first, one);
+    const again = await C.getUntapped('state_senate');
+    assert.equal(calls[1].headers['If-None-Match'], '"v1"'); assert.equal(again, first, 'unchanged: the same object, so a screen holding it does not redraw');
+    const changed = await C.getUntapped('state_senate');
+    assert.equal(calls[2].headers['If-None-Match'], '"v1"'); assert.deepEqual(changed, two); assert.notEqual(changed, first);
+    assert.equal(await C.getUntapped('state_senate'), changed); assert.equal(calls[3].headers['If-None-Match'], '"v2"');
+    await C.getUntapped('precinct').catch(() => {});
+    assert.equal(calls[4].url, '/api/v3/untapped?level=precinct'); assert.equal(calls[4].headers['If-None-Match'], undefined, 'each level keeps its own');
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('getUntapped: the refusals of the endpoint come back as ApiError with the server\'s words; an answer with no ETag is never reused', async () => {
+  const calls = fake([{status: 404, body: {error: 'No candidate is set for this district.'}}]);
+  try {
+    await assert.rejects(C.getUntapped('zip'), (e: unknown) => e instanceof C.ApiError && e.status === 404 && e.answered && e.message === 'No candidate is set for this district.');
+    globalThis.fetch = (async () => new Response('<html>', {status: 502})) as typeof fetch;
+    await assert.rejects(C.getUntapped('zip'), (e: unknown) => e instanceof C.ApiError && e.status === 502 && !e.answered);
+    const plain = fake([{status: 200, body: payload({level: 'tract'})}, {status: 200, body: payload({level: 'tract'})}]);
+    await C.getUntapped('tract'); await C.getUntapped('tract');
+    assert.equal(plain[1].headers['If-None-Match'], undefined, 'no ETag given, none sent back');
+    assert.equal(calls.length, 1);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+// ---- wiring read from the source, as the walk tests do -----------------------------------------------------------------------------------
+import {readFileSync} from 'node:fs';
+const src = (f: string) => readFileSync(new URL(`../../src/v3/${f}`, import.meta.url), 'utf8');
+
+test('wiring: Untapped panel on the rail, Plan walk list on precinct rows and the precinct block, refetch on mount and focus', () => {
+  const panel = src('components/UntappedPanel.tsx'), screen = src('components/MapScreen.tsx'), rail = src('components/AreaRail.tsx');
+  assert.ok(panel.includes("p.level==='precinct'&&p.canPlan") && panel.includes('Plan walk list'), 'rows: precinct level only, and only with the street plan');
+  assert.ok(/p\.precinct&&p\.canPlan/.test(panel), 'the block: the same rule');
+  assert.ok(panel.includes("addEventListener('focus'") && panel.includes("'visibilitychange'") && /\bload\(\);/.test(panel), 'fetched on mount, again on focus');
+  assert.ok(panel.includes('ranked(p.data,w)') && panel.includes('DEFAULTS_NOTE') && panel.includes('UNDECIDED_WORDS') && panel.includes('SUPPORTER_WORDS') && panel.includes('>Defaults<'));
+  assert.ok(screen.includes('navigate(planWalkPath(precinct))') && screen.includes('canPlan=!!features?.roi'), 'one click goes to the Walk tab; the button needs features.roi');
+  assert.ok(screen.includes('<UntappedPanel') && screen.includes('top={untappedOn?') && screen.includes('untapped={untappedOn?'), 'panel and block only while the layer is on');
+  assert.ok(rail.includes('{p.top}') && rail.includes('<UntappedBlock'));
+  assert.ok(screen.includes("readWeights(features.district,defaults)") && screen.includes('writeWeights(features.district,w)'), 'sliders are remembered per district');
+  assert.ok(screen.includes("getGeometry(meta,polyLevel,'coarse')"), 'State House and Senate outlines come from the coarse geometry');
+});
+
+test('wiring: the Colorado line sits beside the Index buttons and only when the district has no candidate', () => {
+  const header = src('components/Header.tsx');
+  assert.ok(header.includes('{p.features&&!p.features.candidate&&<span className="untapped-note">Untapped needs a candidate: see Oregon District 5 or Connecticut District 1.</span>}'));
+  assert.ok(header.indexOf('untapped-note') > header.indexOf('label="Index"') && header.indexOf('untapped-note') < header.indexOf('label="Level"'));
+});
+
+test('wiring: the canvas swaps the level fills for the outlines while they are set, and never draws them at street zoom', () => {
+  const canvas = src('components/MapCanvas.tsx');
+  assert.ok(canvas.includes("id:'fill-poly'") && canvas.includes("id:'poly-line'") && /maxzoom:STREET_ZOOM,layout:\{visibility:'none'\}/.test(canvas));
+  assert.ok(canvas.includes("['fill-a','fill-b','areas-line','sel-glow','sel-ring','sel-line']") && canvas.includes("on?'none':'visible'"));
+});

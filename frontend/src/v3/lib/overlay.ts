@@ -1,8 +1,9 @@
 // Map overlay modes (Phase 4D): one layer, a weighted blend of layers, or two layers on a 3 x 3 grid. Everything is worked out
 // here from the area payload and density.json, so the map itself only needs one bin per area and a palette.
 import type {AreasPayload,CandidateInfo,Density,Features,Group,Meta,OverlayLayer} from '../types';
-import {BIN_NONE,BIN_PENDING,binsFor} from './areas.ts';
+import {BIN_NONE,BIN_PENDING,binsFor,pendingBins} from './areas.ts';
 import {ENDASH,MIDDOT,binOf,int,round} from './format.ts';
+import {areaAt,type UntappedAreas,type UntappedWeights} from './untapped.ts';
 
 export const SHARE_RAMP=['#E6F1EC','#C2E0DB','#8BC2BC','#54979B','#286D73'];
 export const LEAN_RAMP=['#95ADCE','#E7A490','#C6C2D3','#F5F1E9','#E5DFDA'];
@@ -12,7 +13,8 @@ export const LEAN_RAMP=['#95ADCE','#E7A490','#C6C2D3','#F5F1E9','#E5DFDA'];
 export const BI_PALETTE=['#E6F1EC','#BFBBDA','#7B6CAC','#9FCFC8','#84A1B9','#555D92','#3F8589','#34677F','#223B64'];
 
 export const BASE_LAYERS:OverlayLayer[]=['ovr','cua','part','soi','lean'];
-export const ALL_LAYERS:OverlayLayer[]=[...BASE_LAYERS,'sup','pop_density','voter_density'];
+/** Untapped leads: it is the opening layer of a candidate district (districtDefault). It is shaded by its own sums, so it is never part of a blend or a pair. */
+export const ALL_LAYERS:OverlayLayer[]=['untapped',...BASE_LAYERS,'sup','pop_density','voter_density'];
 export const LAYER_NAME:Record<OverlayLayer,string>={
   ovr:'Overall',cua:'Credit Union Alignment',part:'Participation',soi:'Sphere of Influence',lean:'Partisan lean',
   sup:'Candidate support',pop_density:'Population density',voter_density:'Voter density',untapped:'Untapped',
@@ -28,25 +30,29 @@ export interface OverlayLegend{title:string;sub:string;labels:string[];ramp:stri
 export interface OverlayResult{bins:Uint8Array;palette:string[];legend:OverlayLegend|null}
 
 export const DEFAULT_OVERLAY:Overlay={mode:'single',layer:'ovr',blend:{cua:50,part:50},pair:['cua','part']};
+/** The layer a district opens on: Untapped where it is offered (candidate districts), the overall standing otherwise. */
+export const districtDefault=(offered:OverlayLayer[]):OverlayLayer=>offered.includes('untapped')?'untapped':'ovr';
 export const isGroup=(l:OverlayLayer):l is Group=>BASE_LAYERS.includes(l);
 export const isDensity=(l:OverlayLayer):l is 'pop_density'|'voter_density'=>l==='pop_density'||l==='voter_density';
 const isLayer=(v:unknown):v is OverlayLayer=>ALL_LAYERS.includes(v as OverlayLayer);
+const isBlendable=(v:unknown):v is OverlayLayer=>isLayer(v)&&v!=='untapped';
 
 // --- URL ----------------------------------------------------------------------------------------------------------------
-export function readOverlay(q:URLSearchParams):Overlay{
-  const pick=(k:string,d:OverlayLayer)=>{const v=q.get(k);return isLayer(v)?v:d;};
+export function readOverlay(q:URLSearchParams,dflt:OverlayLayer='ovr'):Overlay{
+  const pick=(k:string,d:OverlayLayer,ok=isBlendable)=>{const v=q.get(k);return ok(v)?v as OverlayLayer:d;};
   const blend:Blend={};
   for(const part of (q.get('blend')??'').split(',')){
     const [l,w]=part.split(':');const n=Number(w);
-    if(isLayer(l)&&Number.isFinite(n)&&n>0)blend[l]=n;
+    if(isBlendable(l)&&Number.isFinite(n)&&n>0)blend[l]=n;
   }
   const mode=q.get('mode');
-  return {mode:mode==='blend'||mode==='bi'?mode:'single',layer:pick('index','ovr'),
+  return {mode:mode==='blend'||mode==='bi'?mode:'single',layer:pick('index',dflt,isLayer),
     blend:Object.keys(blend).length?blend:DEFAULT_OVERLAY.blend,pair:[pick('a','cua'),pick('b','part')]};
 }
-/** The query parameters of an overlay (null removes one); the default overlay writes none. */
-export function overlayQuery(o:Overlay):Record<string,string|null>{
-  return {index:o.layer==='ovr'?null:o.layer,mode:o.mode==='single'?null:o.mode,
+/** The query parameters of an overlay (null removes one); the default overlay writes none. `dflt` is the district's opening layer, so choosing
+ *  the overall standing in a district that opens on Untapped writes `index=ovr`. */
+export function overlayQuery(o:Overlay,dflt:OverlayLayer='ovr'):Record<string,string|null>{
+  return {index:o.layer===dflt?null:o.layer,mode:o.mode==='single'?null:o.mode,
     blend:o.mode==='blend'?ALL_LAYERS.filter(l=>o.blend[l]).map(l=>`${l}:${o.blend[l]}`).join(','):null,
     a:o.mode==='bi'?o.pair[0]:null,b:o.mode==='bi'?o.pair[1]:null};
 }
@@ -110,7 +116,7 @@ export function biClass(a:number|null,b:number|null):number|null{
   return a==null||b==null?null:3*t(a)+t(b);
 }
 
-function toBins(p:AreasPayload,cls:(i:number)=>number|null):Uint8Array{
+function toBins(p:Pick<AreasPayload,'ids'>,cls:(i:number)=>number|null):Uint8Array{
   const out=new Uint8Array(p.ids.length+1);out[p.ids.length]=BIN_PENDING;
   p.ids.forEach((_,i)=>{out[i]=cls(i)??BIN_NONE;});
   return out;
@@ -118,8 +124,29 @@ function toBins(p:AreasPayload,cls:(i:number)=>number|null):Uint8Array{
 /** A density break in at most five characters: 8.4, 196, 1.1k, 12k. */
 const num=(x:number)=>x>=10000?`${round(x/1000)}k`:x>=1000?`${round(x/100)/10}k`:x>=10?int(x):String(round(x*10)/10);
 const FIFTH_LABELS=['Lowest','Low','Middle','High','Highest'];
+/** The five legend labels for the four breaks between fifths: Under 8.4, 8.4–20, ..., 196+. */
+const breakLabels=(breaks:number[]):string[]=>breaks.length?[`Under ${num(breaks[0])}`,...breaks.slice(1).map((x,i)=>`${num(breaks[i])}${ENDASH}${num(x)}`),`${num(breaks[3])}+`]:FIFTH_LABELS;
 
-export function overlayBins(o:Overlay,p:AreasPayload,d:Density|null,meta:Meta,measured=false):OverlayResult{
+// --- the Untapped layer --------------------------------------------------------------------------------------------------
+/** What the Untapped layer is shaded by: the sums of one level and the slider weights. */
+export interface UntappedInput{u:UntappedAreas;w:UntappedWeights}
+/** The value of each id at the weights; null for an id the sums do not hold. */
+export function untappedValues(ids:string[],x:UntappedInput):(number|null)[]{
+  const at=new Map(x.u.ids.map((id,k)=>[id,k]));
+  return ids.map(id=>{const k=at.get(id);return k===undefined?null:areaAt(x.u,k,x.w).value;});
+}
+/** Bins of `ids` by fifths of areas that have a value, in the order of `ids`; `has(i)` is false for an area with no registered people.
+ *  Without sums (still loading) every area is pending. */
+export function untappedBins(ids:string[],x:UntappedInput|null,has:(i:number)=>boolean=()=>true):OverlayResult{
+  const sub=`Sum per area ${MIDDOT} doors with a recorded result left out`;
+  if(!x)return {bins:pendingBins(ids.length),palette:SHARE_RAMP,legend:{title:'Untapped potential',sub,labels:FIFTH_LABELS,ramp:SHARE_RAMP}};
+  const raw=untappedValues(ids,x),v=raw.map((y,i)=>has(i)?y:null),breaks=fifths(v);
+  return {bins:toBins({ids},i=>v[i]==null?null:binOf(v[i]!,breaks)),palette:SHARE_RAMP,
+    legend:{title:'Untapped potential',sub,labels:breakLabels(breaks),ramp:SHARE_RAMP}};
+}
+
+/** `untapped` carries the sums of the layer shown (single mode, layer Untapped); sums of another level count as still loading. */
+export function overlayBins(o:Overlay,p:AreasPayload,d:Density|null,meta:Meta,measured=false,untapped:UntappedInput|null=null):OverlayResult{
   if(o.mode==='bi'){
     const [a,b]=o.pair,pa=layerPct(p,d,a),pb=layerPct(p,d,b);
     return {bins:toBins(p,i=>biClass(pa[i],pb[i])),palette:BI_PALETTE,legend:{
@@ -139,9 +166,9 @@ export function overlayBins(o:Overlay,p:AreasPayload,d:Density|null,meta:Meta,me
     const v=densityValues(p,d,o.layer),breaks=fifths(v);
     return {bins:toBins(p,i=>v[i]==null?null:binOf(v[i]!,breaks)),palette:SHARE_RAMP,legend:{
       title:LAYER_NAME[o.layer],sub:`${DENSITY_UNIT[o.layer]} ${MIDDOT} fifths of areas`,ramp:SHARE_RAMP,
-      labels:breaks.length?[`Under ${num(breaks[0])}`,...breaks.slice(1).map((x,i)=>`${num(breaks[i])}${ENDASH}${num(x)}`),`${num(breaks[3])}+`]:FIFTH_LABELS}};
+      labels:breakLabels(breaks)}};
   }
-  if(o.layer==='untapped')return {bins:toBins(p,()=>null),palette:SHARE_RAMP,legend:null};   // until the sums arrive
+  if(o.layer==='untapped')return untappedBins(p.ids,untapped&&untapped.u.level===p.level?untapped:null,i=>p.status[i]==='ok');
   return {bins:binsFor(p,o.layer,measured?'measured':'share',meta),palette:o.layer==='lean'&&!measured?LEAN_RAMP:SHARE_RAMP,legend:null};
 }
 

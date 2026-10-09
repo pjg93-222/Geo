@@ -49,6 +49,7 @@ const MODES:{id:Mode;label:string}[]=[{id:'single',label:'One layer'},{id:'blend
 export function LayersPanel(p:{o:Overlay;layers:OverlayLayer[];onChange:(o:Overlay)=>void;hidden:boolean}){
   const {o}=p;
   const layers=Object.keys(o.blend).length;
+  const blendable=p.layers.filter(l=>l!=='untapped');   // Untapped is shaded by potential alone, never mixed with another layer
   const setWeight=(l:OverlayLayer,w:number|null)=>{const blend={...o.blend};if(w===null)delete blend[l];else blend[l]=w;p.onChange({...o,blend});};
   const pick=(i:0|1,l:OverlayLayer)=>p.onChange({...o,pair:i===0?[l,o.pair[1]]:[o.pair[0],l]});
   return <details className="overlay-panel" hidden={p.hidden}>
@@ -59,7 +60,7 @@ export function LayersPanel(p:{o:Overlay;layers:OverlayLayer[];onChange:(o:Overl
       </div>
       {o.mode==='single'&&<p className="op-note">Choose the layer with the Index buttons above the map.</p>}
       {o.mode==='blend'&&<ul className="op-blend" aria-label="Layers in the blend">
-        {p.layers.map(l=>{const w=o.blend[l];return <li key={l}>
+        {blendable.map(l=>{const w=o.blend[l];return <li key={l}>
           <label><input type="checkbox" checked={w!==undefined} disabled={w!==undefined&&layers===1} onChange={e=>setWeight(l,e.target.checked?50:null)}/>{LAYER_NAME[l]}</label>
           {w!==undefined&&<input type="number" aria-label={`${LAYER_NAME[l]} weight`} min={1} max={100} step={5} value={w}
             onChange={e=>{const n=Number(e.target.value);if(n>0)setWeight(l,n);}}/>}
@@ -68,7 +69,7 @@ export function LayersPanel(p:{o:Overlay;layers:OverlayLayer[];onChange:(o:Overl
       {o.mode==='bi'&&<div className="op-pair">
         {(['Across','Down'] as const).map((side,i)=><label key={side}><span>{side}</span>
           <select aria-label={`${side} layer`} value={o.pair[i]} onChange={e=>pick(i as 0|1,e.target.value as OverlayLayer)}>
-            {p.layers.map(l=><option key={l} value={l}>{LAYER_NAME[l]}</option>)}</select></label>)}
+            {blendable.map(l=><option key={l} value={l}>{LAYER_NAME[l]}</option>)}</select></label>)}
       </div>}
     </div>
   </details>;

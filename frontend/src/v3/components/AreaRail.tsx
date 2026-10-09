@@ -9,6 +9,7 @@ import {
   areaLabel,tractLabel,precinctLabel,type Level
 } from '../lib/format';
 import {INDEX_NAME,INDEX_TOP10_NAME} from './Header';
+import {UntappedBlock,type UntappedBlockProps} from './UntappedPanel';
 
 const MAIN_COLOR:Record<string,string>={D:'var(--reg-d)',R:'var(--reg-r)',U:'var(--reg-u)'};
 const ROW_NAMES=['ovr','cua','part','soi'] as const;
@@ -24,6 +25,8 @@ export interface AreaRailProps{
   neighbors:Neighbour[]|null;
   /** Party code -> name (the district's, from /api/v3/features); a code without one reads "Code T". */
   names?:Record<string,string>;
+  /** Untapped layer on: the panel at the top of the rail, and the selected area's Untapped block under it. */
+  top?:React.ReactNode;untapped?:UntappedBlockProps|null;
 }
 
 /** The district's party names; D, R and U are known before they arrive. */
@@ -43,6 +46,8 @@ export function AreaRail(p:AreaRailProps){
   const summaryMode=!p.view;
   const variantB=!summaryMode&&p.level!=='block';
   return <aside className="rail" aria-label="Selected area">
+    {p.top}
+    {p.untapped&&!summaryMode&&<UntappedBlock {...p.untapped}/>}
     {variantB?<RailB {...p}/>:<RailA {...p}/>}
   </aside>;
 }
