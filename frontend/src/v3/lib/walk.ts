@@ -629,7 +629,7 @@ export function turfLines(turf:Pick<WalkTurf,'spans'|'jumps'|'stopped'|'trim'>,t
   const lines=[`From ${countText(turf.spans.length,'block')} with the most untapped potential in reach: ${countText(totals.doors,'door')}, ${countText(totals.voters,'person','people')}, ${distanceText(totals.walk_m)} of walking.`];
   if(turf.trim)lines.push(`Took the ${countText(turf.trim.kept,'door')} with the most untapped people from the last block (of its ${turf.trim.of}).`);
   if(turf.jumps.length)lines.push(`${countText(turf.jumps.length,'hop')} of up to ${jumpM} m between blocks.`);
-  if(turf.stopped==='far'||turf.stopped==='exhausted')lines.push(`Only ${countText(totals.doors,'door')} without a recorded result ${totals.doors===1?'is':'are'} in reach in this precinct.`);
+  if(turf.stopped==='far'||turf.stopped==='exhausted')lines.push(`Only ${countText(totals.doors,'door')} without a recorded result ${totals.doors===1?'is':'are'} in reach of these blocks.`);
   else if(turf.stopped==='cap')lines.push(`Stopped before the list got too large to build in one list (${COUNT.format(MAX_LIST_PEOPLE)} people or ${MAX_PLAN_SPANS} blocks).`);
   return lines;
 }

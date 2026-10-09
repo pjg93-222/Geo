@@ -1397,8 +1397,8 @@ test('after a one-click build: blocks, doors, people and km of walking, then the
   assert.deepEqual(turfLines(turf({jumps: [{span: 790, metres: 182.4}, {span: 815, metres: 390}]}), {doors: 63, voters: 101, walk_m: 2900}), [main, '2 hops of up to 400 m between blocks.']);
   assert.deepEqual(turfLines(turf({jumps: [{span: 790, metres: 182.4}]}), {doors: 63, voters: 101, walk_m: 2900}, 250)[1], '1 hop of up to 250 m between blocks.', 'the hop limit is the server\'s');
   assert.deepEqual(turfLines(turf({spans: [812], stopped: 'far'}), {doors: 21, voters: 30, walk_m: 800}), [
-    'From 1 block with the most untapped potential in reach: 21 doors, 30 people, 0.8 km of walking.', 'Only 21 doors without a recorded result are in reach in this precinct.']);
-  assert.equal(turfLines(turf({stopped: 'exhausted'}), {doors: 1, voters: 1, walk_m: 40})[1], 'Only 1 door without a recorded result is in reach in this precinct.');
+    'From 1 block with the most untapped potential in reach: 21 doors, 30 people, 0.8 km of walking.', 'Only 21 doors without a recorded result are in reach of these blocks.']);
+  assert.equal(turfLines(turf({stopped: 'exhausted'}), {doors: 1, voters: 1, walk_m: 40})[1], 'Only 1 door without a recorded result is in reach of these blocks.');
   assert.deepEqual(turfLines(turf({stopped: 'cap'}), {doors: 480, voters: 1500, walk_m: 9100}).slice(1), ['Stopped before the list got too large to build in one list (10,000 people or 200 blocks).']);
   for (const stopped of ['full', 'exhausted', 'far', 'cap'] as const)
     for (const text of turfLines(turf({stopped, jumps: [{span: 1, metres: 9}], trim: {span: 790, kept: 6, of: 40}}), {doors: 2, voters: 3, walk_m: 100})) assert.ok(!ADVISORY.test(text), text);
