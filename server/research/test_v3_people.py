@@ -211,11 +211,25 @@ class V3PeopleTests(TestCase):
         self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), ('U', 'Unknown'))
         values[34] = 1
         self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), (-2, 'Very conservative'))
-        values[38] = 1
+        values[38] = 1   # very conservative + very liberal skips three steps
         self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), ('U', 'Multiple responses'))
         # The category reads values only: it does not discard stored model fills or use a numerical lean score.
         values[34] = 0
         self.assertEqual(scoresdb.outlook_fields(scoresdb.outlook_code(info, values)), (2, 'Very liberal'))
+
+    def test_collapse_outlook_rule(self):
+        # positions: 0 very conservative, 1 somewhat conservative, 2 middle, 3 somewhat liberal, 4 very liberal
+        U, M = scoresdb.OUTLOOK_UNKNOWN, scoresdb.OUTLOOK_MULTIPLE
+        for flags, want in (
+                ([], U),
+                ([0], -2), ([1], -1), ([2], 0), ([3], 1), ([4], 2),            # one flag is itself
+                ([0, 1], -2), ([3, 4], 2),                                      # very + somewhat: the very one
+                ([1, 2], -1), ([2, 3], 1),                                      # next to middle: the non-middle one
+                ([2, 3, 4], 2), ([0, 1, 2], -2),                                # run to one side: the far end
+                ([1, 2, 3], M), ([0, 1, 2, 3], M), ([0, 1, 2, 3, 4], M),        # run across middle
+                ([0, 4], M), ([0, 2], M), ([1, 3], M), ([2, 4], M), ([0, 1, 3], M)):   # a gap
+            self.assertEqual(scoresdb.collapse_outlook(flags), want, flags)
+            self.assertEqual(scoresdb.collapse_outlook(flags[::-1]), want, flags)
 
     # ---- filters, sorts and the balanced view ------------------------------------------------------------------
     def count(self, where='1=1', *args):
@@ -229,8 +243,9 @@ class V3PeopleTests(TestCase):
             literal = self.scores.execute('SELECT literal FROM value_dict WHERE fid=? AND code=?',
                                          (fid, int(values[fid]))).fetchone()
             if literal and literal[0] in ('1', '1.0'):
-                selected.append(fid - 36)
-        return selected[0] if len(selected) == 1 else 'U'
+                selected.append(fid - 34)
+        code = scoresdb.collapse_outlook(selected)
+        return 'U' if abs(code) == 3 else code
 
     def test_filters_match_sql(self):
         def total(query):

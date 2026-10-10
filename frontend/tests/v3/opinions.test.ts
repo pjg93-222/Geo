@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {MARGIN_LABELS,describeOpinions,marginBin} from '../../src/v3/lib/opinions.ts';
+import {MARGIN_LABELS,describeOpinions,marginBin,outlookLabel} from '../../src/v3/lib/opinions.ts';
 test('distinct registration and opinion are not averaged into a middle position',()=>{
   const fields=[{field:'svi_party_registration',value:'Democrat'},{field:'sci_ct_political_partyaff_gop',value:'Yes'},{field:'sci_ct_political_outlk_vconserv',value:'Yes'}];
   assert.deepEqual(describeOpinions(fields),{affiliation:'Republican',outlook:'Very conservative'});
@@ -11,6 +11,17 @@ test('missing responses stay unknown rather than middle or other',()=>{
 test('conflicting category evidence remains explicit',()=>{
   const fields=[{field:'sci_ct_political_partyaff_gop',value:'Yes'},{field:'sci_ct_political_partyaff_democrat',value:'Yes'},{field:'sci_ct_political_outlk_vconserv',value:'Yes'},{field:'sci_ct_political_outlk_vliberal',value:'Yes'}];
   assert.deepEqual(describeOpinions(fields),{affiliation:'Multiple responses',outlook:'Multiple responses'});
+});
+test('two neighbouring outlook flags show the more extreme one',()=>{
+  const fields=[{field:'sci_ct_political_outlk_vconserv',value:'Yes'},{field:'sci_ct_political_outlk_swconserv',value:'Yes'}];
+  assert.equal(describeOpinions(fields).outlook,'Very conservative');
+});
+test('neighbouring outlook flags collapse to the more extreme; runs across middle or with a gap stay multiple',()=>{
+  const want:[number[],string][]=[[[],'Unknown'],[[0],'Very conservative'],[[2],'Middle outlook'],[[4],'Very liberal'],
+    [[0,1],'Very conservative'],[[3,4],'Very liberal'],[[1,2],'Somewhat conservative'],[[2,3],'Somewhat liberal'],
+    [[2,3,4],'Very liberal'],[[0,1,2],'Very conservative'],
+    [[1,2,3],'Multiple responses'],[[0,1,2,3,4],'Multiple responses'],[[0,4],'Multiple responses'],[[0,2],'Multiple responses'],[[2,4],'Multiple responses']];
+  for(const [flags,label] of want){assert.equal(outlookLabel(flags),label,flags.join());assert.equal(outlookLabel([...flags].reverse()),label,flags.join());}
 });
 
 test('a conservative Democrat and an unaffiliated Democratic identifier preserve supplied responses',()=>{

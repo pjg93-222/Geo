@@ -2,13 +2,23 @@ import type {FieldRow} from '../types';
 
 export const OUTLOOK_KEYS=['sci_ct_political_outlk_vconserv','sci_ct_political_outlk_swconserv','sci_ct_political_outlk_mid','sci_ct_political_outlk_swliberal','sci_ct_political_outlk_vliberal'] as const;
 export const OUTLOOK_LABELS=['Very conservative','Somewhat conservative','Middle outlook','Somewhat liberal','Very liberal'] as const;
+/** Outlook label for the positions (0 very conservative .. 4 very liberal) of the flags set. One flag is itself. An unbroken run that does not
+ *  reach both sides of middle (2) collapses to its most extreme flag (very + somewhat conservative is very conservative; somewhat conservative +
+ *  middle is somewhat conservative; middle + somewhat + very liberal is very liberal). A run across middle or flags with a gap are Multiple
+ *  responses; no flags is Unknown. Mirrors collapse_outlook in server/research/scoresdb.py. */
+export function outlookLabel(selected:number[]):string{
+  if(!selected.length)return 'Unknown';
+  const low=Math.min(...selected),high=Math.max(...selected);
+  if(high-low+1!==new Set(selected).size||(low<2&&high>2))return 'Multiple responses';
+  return OUTLOOK_LABELS[high<=2?low:high];
+}
 export function describeOpinions(fields:Pick<FieldRow,'field'|'value'>[]){
   const values=new Map(fields.map(f=>[f.field,f.value]));
   const outlook=OUTLOOK_KEYS.filter(k=>values.get(k)==='Yes');
   const parties=[['sci_ct_political_partyaff_democrat','Democrat'],['sci_ct_political_partyaff_gop','Republican'],['sci_ct_political_partyaff_ind','Independent']] as const;
   const chosen=parties.filter(([k])=>values.get(k)==='Yes');
   return {
-    outlook:outlook.length===1?OUTLOOK_LABELS[OUTLOOK_KEYS.indexOf(outlook[0])]:outlook.length>1?'Multiple responses':'Unknown',
+    outlook:outlookLabel(outlook.map(k=>OUTLOOK_KEYS.indexOf(k))),
     affiliation:chosen.length===1?chosen[0][1]:chosen.length>1?'Multiple responses':parties.every(([k])=>values.get(k)==='No')?'Other':'Unknown',
   };
 }

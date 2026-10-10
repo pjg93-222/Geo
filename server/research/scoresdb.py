@@ -156,8 +156,9 @@ class StoreInfo:
     def outlook_codes(self):
         """One cached category per stored evidence row; never derive views from the lean score.
 
-        Both observed and stored model-filled values participate. Empty and conflicting flags are retained
-        as separate states, rather than forced into a midpoint or a registration-consistent response.
+        Both observed and stored model-filled values participate. Neighbouring flags collapse to the more extreme one
+        (see collapse_outlook); empty and still-conflicting flags are retained as separate states, rather than forced
+        into a midpoint or a registration-consistent response.
         """
         if self._outlooks is None:
             with self._outlook_lock:
@@ -354,10 +355,26 @@ def decode_evidence(blob):
             for name, dtype, offset in EVIDENCE_LAYOUT}
 
 
+def collapse_outlook(selected):
+    """Outlook code from the positions (0 very conservative .. 4 very liberal) of the vendor flags that are set.
+
+    One flag is that flag. Flags that form one unbroken run on the five-point scale and do not reach both sides of
+    middle (position 2) collapse to the run's most extreme flag: very + somewhat conservative is very conservative,
+    somewhat conservative + middle is somewhat conservative, middle + somewhat liberal + very liberal is very liberal.
+    A run that reaches both sides of middle (somewhat conservative + middle + somewhat liberal) or flags with a gap
+    (very conservative + very liberal) stay OUTLOOK_MULTIPLE. No flags is OUTLOOK_UNKNOWN.
+    """
+    if not selected:
+        return OUTLOOK_UNKNOWN
+    low, high = min(selected), max(selected)
+    if high - low + 1 != len(set(selected)) or (low < 2 < high):
+        return OUTLOOK_MULTIPLE
+    return (low if high <= 2 else high) - 2
+
+
 def outlook_code(current, values):
-    selected = [index for index, fid in enumerate(OUTLOOK_FIDS)
-                if current.value_dict.get(fid, {}).get(int(values[fid])) in ('1', '1.0')]
-    return selected[0] - 2 if len(selected) == 1 else OUTLOOK_MULTIPLE if selected else OUTLOOK_UNKNOWN
+    return collapse_outlook([index for index, fid in enumerate(OUTLOOK_FIDS)
+                             if current.value_dict.get(fid, {}).get(int(values[fid])) in ('1', '1.0')])
 
 
 def outlook_fields(code):
