@@ -8,7 +8,7 @@ import type {HouseholdPopover,StreetPayload,OverlayLayer} from '../types';
 import {ENDASH,MIDDOT,householdLabel,int,round,seconds} from '../lib/format';
 import {LAYER_NAME,luminance,type Mode,type Overlay,type OverlayLegend} from '../lib/overlay';
 import {useTiming} from '../lib/timing';
-import {MARGIN_LABELS} from '../lib/opinions';
+import {MARGIN_SHORT} from '../lib/opinions';
 import {uPx} from '../lib/units';
 
 const SHARE_LABELS=['Under 5%',`5${ENDASH}8%`,`8${ENDASH}12%`,`12${ENDASH}18%`,'18%+'];
@@ -23,7 +23,7 @@ export function Legend(p:{group:OverlayLayer;measured:boolean;onMeasured:(v:bool
   let title:string,sub:string,labels:string[],ramp:string[];
   if(p.overlay){({title,sub,labels,ramp}=p.overlay);}
   else if(p.measured){title='% measured';sub='Area mean of % measured';labels=MEASURED_LABELS;ramp=RAMP;}
-  else if(p.group==='lean'){title='Registration';sub='Democratic minus Republican share of registered people, in points';labels=[...MARGIN_LABELS];ramp=LEAN_RAMP;}
+  else if(p.group==='lean'){title='Registration';sub='Democratic minus Republican share of registered people, in points';labels=[...MARGIN_SHORT];ramp=LEAN_RAMP;}
   else{title=INDEX_NAME[p.group];sub=`Share of people in the ${TOP_NAME[p.group]} top 10%`;labels=SHARE_LABELS;ramp=RAMP;}
   const axes=p.overlay?.axes;
   return <section className="legend" aria-label="Legend">

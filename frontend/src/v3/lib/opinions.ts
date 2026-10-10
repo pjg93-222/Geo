@@ -14,6 +14,8 @@ export function describeOpinions(fields:Pick<FieldRow,'field'|'value'>[]){
 }
 /** The five steps of the registration map, R side first: the D share minus the R share, both over everyone registered (U and others too). */
 export const MARGIN_LABELS=['R +15 or more','R +5 to 15','Within 5','D +5 to 15','D +15 or more'] as const;
+/** The same five steps, short enough to sit under a legend swatch without running into the next label. */
+export const MARGIN_SHORT=['R 15+','R 5–15','Within 5','D 5–15','D 15+'] as const;
 /** The MARGIN_LABELS step (0..4) of an area or block with D share `d` and R share `r` (0..1): 15 points or more either way is the strong
  *  step, 5 to 15 the lean step, and under 5 either way the centre. */
 export function marginBin(d:number,r:number):number{

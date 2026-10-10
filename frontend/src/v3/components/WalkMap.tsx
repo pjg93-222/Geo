@@ -12,7 +12,7 @@ import {getWalkOverview,type WalkOverview} from '../api/walk';
 import {ZoomControl} from './MapParts';
 import {cx} from './ui';
 import {blockLean,countText,doorBreaks} from '../lib/walk';
-import {MARGIN_LABELS} from '../lib/opinions';
+import {MARGIN_LABELS,MARGIN_SHORT} from '../lib/opinions';
 import {uPx} from '../lib/units';
 import {areaParts,cleanLine,doorPoints,isListed,labelPoint,lineLength,listedPrecincts,spotAlong,usableBounds} from '../lib/walkGeo';
 
@@ -271,7 +271,7 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
         ?<div className="walk-legend-group"><p className="walk-legend-title">Doors per block</p>
           <div className="walk-ramp"><span>fewer</span><ul className="walk-swatches" aria-hidden="true">{colors.ramp.map((c,i)=><li key={i}><i style={{background:c}}/></li>)}</ul><span>more</span></div></div>
         :<div className="walk-legend-group"><p className="walk-legend-title">Party lean per block</p>
-          <ul className="walk-swatches party">{MARGIN_LABELS.map((name,i)=><li key={name}><i style={{background:colors.party[i]}}/><span>{name}</span></li>)}</ul></div>)}
+          <ul className="walk-swatches party">{MARGIN_LABELS.map((name,i)=><li key={name} title={name}><i style={{background:colors.party[i]}}/><span>{MARGIN_SHORT[i]}</span></li>)}</ul></div>)}
       <ul className="walk-lines">
         <li><i className="walk-sample solid"/>Walk</li>
         <li><i className="walk-sample dashed"/>Between stops</li>
