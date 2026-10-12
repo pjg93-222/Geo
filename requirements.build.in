@@ -1,0 +1,4 @@
+# Build toolchain of the Terrier store builds (Dockerfile.build, target geo): the libraries of the laptop's work\.venv (CPython 3.12.14),
+# the interpreter of prepare_geography, roads, street, contacts, walk, bundle and density. The same set as requirements.txt.
+# Exact versions: requirements.lock.txt (the laptop's); hashed Linux lock: requirements.build.lock.
+-r requirements.txt

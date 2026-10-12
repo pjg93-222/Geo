@@ -45,13 +45,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools import districts as D               # noqa: E402
 from tools import field_labels as FL           # noqa: E402
+from tools import hostpaths as H               # noqa: E402
 from tools import scores_schema as S           # noqa: E402
 from tools import scores_writer as W           # noqa: E402
 from tools import support as SUP               # noqa: E402
 from tools.glassbox import GlassBox, new_run_id    # noqa: E402
 
 V3 = Path(__file__).resolve().parents[1]
-ROOT = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography')
+ROOT = H.SIBLING
 RF = ROOT / '.local' / 'row-framework-20260930'
 RFB = RF / 'build' / 'rowfw-1.0.0'
 VERSION = 'rowfw-1.0.0'

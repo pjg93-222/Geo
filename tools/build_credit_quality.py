@@ -2,12 +2,17 @@
 import csv
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from tools import hostpaths  # noqa: E402
+
 STUDY = ROOT/'.local/model-study'
-SOURCE = Path('C:/Users/pgoff/Downloads/statara_co_cd005_20260904.csv')
+SOURCE = hostpaths.SOURCES/'statara_co_cd005_20260904.csv'
 FIELDS = {
     'cc': ('CC index', 'sci_cpi_cc_index', set('0123456789')),
     'card_user': ('Card user', 'sci_credit_card_user', {'0', '1'}),

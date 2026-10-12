@@ -1,0 +1,5 @@
+# The build image takes the two hashed locks from the context and nothing else: no code, no data, no stores.
+# (BuildKit reads this file for `-f Dockerfile.build` instead of .dockerignore.)
+**
+!requirements.build.lock
+!requirements.score.lock
