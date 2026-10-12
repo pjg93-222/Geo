@@ -37,9 +37,9 @@ from django.test import Client, override_settings # noqa: E402
 from server.research import scoresdb               # noqa: E402
 from tools import area_layers as AL               # noqa: E402
 from tools import field_labels as FL              # noqa: E402
+from tools import hostpaths as H                  # noqa: E402
 
-RFB = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography\.local'
-           r'\row-framework-20260930\build\rowfw-1.0.0')
+RFB = H.SIBLING / '.local' / 'row-framework-20260930' / 'build' / 'rowfw-1.0.0'
 EMAIL_PHONE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.]+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b')
 
 

@@ -18,6 +18,7 @@ import time
 from fractions import Fraction as F
 from pathlib import Path
 
+from tools import hostpaths as H
 from . import copy_stage as CS
 from . import originals
 from .common import (CO_EXPORT, DISTRICTS, GLOBAL_DIR, L, LUNA, PY312, TER, Step, district_dir, log, read_json, sha256_file,
@@ -31,8 +32,7 @@ LEGACY5 = ('sci_cpi_cc_index', 'sci_cpi_insurance_auto_index', 'sci_cpi_insuranc
            'sci_cpi_online_pay_index')
 GEO_COLUMNS = ('registration_block15', 'registration_tract11', 'svi_registration_precinct_code', 'svi_registration_zip',
                'sii_tract11', 'sii_zip', 'svi_registration_censusid', 'sii_censusid')
-SCRATCH_CO = (r'C:\Users\pgoff\AppData\Local\Temp\claude\C--Users-pgoff-OneDrive-Desktop-Melange-Systems--claude-worktrees-'
-              r'codex-websocket-error-468fa9\60d3bc55-b6fd-473b-9b78-a958ba7ee615\scratchpad')
+SCRATCH_CO = str(H.LUNA_SCRATCH)      # text inside Luna's original scripts that PATCHES below match: tools/hostpaths.py
 CACHE_SHA_CO = 'cece066ca7e1886fc72abc1b43e82a24ae883ff61481699cc95a377ae8392cbc'
 EXPORT_SHA_CO = 'a8dd3028edb9027250a9e3eae73f69cb67c0c753fc2c457fceb1476bbb13b0b0'
 

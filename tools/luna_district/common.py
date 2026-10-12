@@ -13,14 +13,17 @@ import time
 import traceback
 from pathlib import Path
 
+from tools import hostpaths as H
+
 TER = Path(__file__).resolve().parents[2]
-LUNA = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography')
+LOCAL_DIR = H.env_path('TERRIER_LOCAL_DIR', TER / '.local')      # where this repo's stores go (tools.districts.LOCAL)
+LUNA = H.SIBLING
 L = LUNA / '.local'
 MODEL_STUDY_SITE = L / 'model-study' / '.venv' / 'Lib' / 'site-packages'
 CO_EXPORT = LUNA / 'data-completion-gpu-model-20260930'
-WORK_PY = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\work\.venv\Scripts\python.exe')
-PY312 = Path(r'C:\Users\pgoff\AppData\Local\Programs\Python\Python312\python.exe')
-GLOBAL_DIR = TER / '.local' / '_phase3'
+WORK_PY = H.WORK_PY
+PY312 = H.PY312
+GLOBAL_DIR = LOCAL_DIR / '_phase3'
 ORIGINALS_BEFORE = GLOBAL_DIR / 'luna-originals-before.json'
 
 # Seeds: each model keeps its own Colorado seed (lead ruling R-9).
@@ -73,21 +76,21 @@ assert len(GROUP_CPI10) == 10 and len(GROUP_MID14) == 14
 DISTRICTS = {
     'co-replay': dict(
         id='co-replay', label='Colorado CD-05 replay (gate G0)', dir='co-replay', is_co=True,
-        source_csv=r'C:\Users\pgoff\Downloads\statara_co_cd005_20260904.csv',
+        source_csv=str(H.SOURCES / 'statara_co_cd005_20260904.csv'),
         source_sha256='4c48800b8c21870e6e2b6242810bbbe917d8169e529b440efb662f71c464239f', source_bytes=867435428,
         rows=491308, households=343000, completed_values=1722948,
         blanks=dict(cpi10=79551, mid14=50784, children=208908, dwelling=7554),
         components=249368, largest_component=4038, split_components=[149620, 49874, 49874]),
     'or-05': dict(
         id='or-05', label='Oregon OR-05', dir='or-05', is_co=False,
-        source_csv=r'C:\Users\pgoff\Downloads\terrier-sources\statara_or_cd005_20260904.csv',
+        source_csv=str(H.SOURCES / 'terrier-sources' / 'statara_or_cd005_20260904.csv'),
         source_sha256='d75d13ccfea891eb252b7609017e338a70263ddee5a27ced5dda17abda91a598', source_bytes=1074173461,
         rows=562563, households=396480, completed_values=1861842,
         blanks=dict(cpi10=83214, mid14=55787, children=247125, dwelling=1559),
         components=273654, largest_component=213, split_components=[164192, 54731, 54731]),
     'ct-01': dict(
         id='ct-01', label='Connecticut CT-01', dir='ct-01', is_co=False,
-        source_csv=r'C:\Users\pgoff\Downloads\terrier-sources\statara_ct_cd001_20260904.csv',
+        source_csv=str(H.SOURCES / 'terrier-sources' / 'statara_ct_cd001_20260904.csv'),
         source_sha256='6e6c7822c44bf04712cf67c25721e6a180281a603af41721df32c9ab7074129a', source_bytes=831664503,
         rows=458372, households=334071, completed_values=1340098,
         blanks=dict(cpi10=59719, mid14=40516, children=172646, dwelling=3038),
@@ -110,7 +113,7 @@ def expected_blanks(district, target):
 
 
 def district_dir(district):
-    return TER / '.local' / DISTRICTS[district]['dir'] / 'luna-v1'
+    return LOCAL_DIR / DISTRICTS[district]['dir'] / 'luna-v1'
 
 
 # ------------------------------------------------------------------ small utilities

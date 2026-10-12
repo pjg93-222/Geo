@@ -16,13 +16,16 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from server.research import walk_names as N
+from tools import hostpaths as H
 
 REPO = Path(__file__).resolve().parents[1]
-LOCAL = REPO / '.local'
-# absolute, like build_scores_v3.ROOT: a git worktree of this repo sits elsewhere; the data does not move
-WORK = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\work')
-SIBLING_LOCAL = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography') / '.local'
-DOWNLOADS = Path(r'C:\Users\pgoff\Downloads')
+# The inputs sit at absolute paths, like build_scores_v3.ROOT: a git worktree of this repo sits elsewhere; the data does not move.
+# tools/hostpaths.py makes each an environment variable whose default is the Windows path used so far (the build container sets them).
+LOCAL = H.env_path('TERRIER_LOCAL_DIR', REPO / '.local')
+WORK = H.WORK
+GEOGRAPHY = H.GEOGRAPHY
+SIBLING_LOCAL = H.SIBLING / '.local'
+DOWNLOADS = H.SOURCES
 DEFAULT = 'co-05'
 
 _CITY_WORDS = {'SPG': 'SPRING', 'SPGS': 'SPRINGS', 'SPRNGS': 'SPRINGS', 'FT': 'FORT', 'MTN': 'MOUNTAIN',
@@ -79,7 +82,7 @@ DISTRICTS = {
         'sha256': '4c48800b8c21870e6e2b6242810bbbe917d8169e529b440efb662f71c464239f',
         'rows': 491308, 'households': 343000,
         'data_dir': '', 'street_salt': SIBLING_LOCAL / '.street-salt', 'snapshot_prefix': 'co-cd005-',
-        'geography': WORK / 'geography', 'road_files': ('roads.zip',), 'counties': ('08041',),
+        'geography': GEOGRAPHY, 'road_files': ('roads.zip',), 'counties': ('08041',),
         'block_regions': False, 'road_clip_m': None,
         'bounds': (-109.1, 36.9, -102.0, 41.1), 'utm_epsg': 26913, 'center': (-104.82, 38.86), 'zoom': 10,
         'roads_label': 'El Paso County',
@@ -101,7 +104,7 @@ DISTRICTS = {
         'sha256': 'd75d13ccfea891eb252b7609017e338a70263ddee5a27ced5dda17abda91a598',
         'rows': 562563, 'households': 396480,
         'data_dir': 'or-05', 'street_salt': None, 'snapshot_prefix': 'or-cd005-',
-        'geography': WORK / 'geography' / 'or-05',
+        'geography': GEOGRAPHY / 'or-05',
         'road_files': tuple('roads/tl_2025_%s_roads.zip' % c for c in _OR_COUNTIES), 'counties': _OR_COUNTIES,
         'block_regions': False, 'road_clip_m': 2000,
         'bounds': (-124.6, 41.9, -116.4, 46.3), 'utm_epsg': 26910, 'center': (-122.17, 44.64), 'zoom': 8,
@@ -133,7 +136,7 @@ DISTRICTS = {
         'sha256': '6e6c7822c44bf04712cf67c25721e6a180281a603af41721df32c9ab7074129a',
         'rows': 458372, 'households': 334071,
         'data_dir': 'ct-01', 'street_salt': None, 'snapshot_prefix': 'ct-cd001-',
-        'geography': WORK / 'geography' / 'ct-01',
+        'geography': GEOGRAPHY / 'ct-01',
         'road_files': tuple('roads/tl_2025_%s_roads.zip' % c for c in _CT_REGIONS), 'counties': _CT_REGIONS,
         # voter block ids use planning-region county codes; TIGER2025 tabblock20 uses old counties: re-code
         'block_regions': True, 'road_clip_m': 2000,
