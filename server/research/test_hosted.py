@@ -1,6 +1,7 @@
 """Hosted field access: which person-level routes a district's invited staff may use, and nothing else. Synthetic voters only
 (walk_testkit): the walk world is built once, lists are saved the local way, then read and answered the hosted way."""
 import json
+import re
 import sqlite3
 import tempfile
 from contextlib import closing
@@ -409,10 +410,46 @@ class InviteTests(TestCase):
         self.assertTrue(Invitation.objects.get(username=STAFF).field_staff)
 
 
+def dockerignored(rules, path):
+    """Docker's rule: the last pattern matching the path or one of its parent directories decides; a leading ! re-includes."""
+    out = False
+    parents = [path] + [path.rsplit('/', n)[0] for n in range(1, path.count('/') + 1)]
+    for rule in rules:
+        rx = re.escape(rule.lstrip('!')).replace(r'\*\*/', '(.*/)?').replace(r'\*\*', '.*').replace(r'\*', '[^/]*')
+        if any(re.fullmatch(rx, each) for each in parents):
+            out = not rule.startswith('!')
+    return out
+
+
 class ContainerStartTests(SimpleTestCase):
-    def test_the_image_build_context_leaves_out_the_frontend_fixtures(self):
-        lines = (Path(settings.BASE_DIR) / '.dockerignore').read_text(encoding='utf-8').split()
-        self.assertGreater(lines.index('frontend/public/fixtures/**'), lines.index('!frontend/public/**'))      # last rule wins
+    # (the line the image needs, a path it keeps out). .local holds the stores, .secret and salts; the first line (default deny)
+    # also covers them, so their paths are in OUT
+    REQUIRED = [
+        ('**/__pycache__/**', 'server/__pycache__/anything.txt'), ('**/*.pyc', 'tools/stray.pyc'),
+        ('**/test_*.py', 'server/research/test_hosted.py'), ('**/tests.py', 'server/research/tests.py'),
+        ('**/*_testkit.py', 'server/research/walk_testkit.py'), ('**/*.test.ts', 'tools/household-index.test.ts'),
+        ('**/*.ps1', 'tools/Test-TerrierDesktop.ps1'), ('frontend/public/fixtures/**', 'frontend/public/fixtures/v3/meta.json'),
+        ('tools/luna_district/**', 'tools/luna_district/g0.py'), ('**/*.sqlite3', 'server/research/walk.sqlite3'),
+        ('**/*.zip', 'tools/bundle.zip'), ('.local', '.local/co-05/walk.sqlite3'),
+    ]
+    OUT = ['.local/co-05/.secret', '.local/co-05/.walk-salt', '.local/co-05/.street-salt', '.secret', '.walk-salt', 'data/voters.csv',
+           'frontend/node_modules/react/index.js', 'HANDOFF_2026-10-01.md']
+    IN = ['manage.py', 'requirements.linux.lock', 'server/settings.py', 'server/research/walk_store.py', 'tools/container_start.py',
+          'data/criteria.json', 'data/field_dictionary.csv', 'frontend/package.json', 'frontend/package-lock.json', 'frontend/tsconfig.json',
+          'frontend/vite.config.ts', 'frontend/index.html', 'frontend/src/main.tsx', 'frontend/public/brand/preview.js']
+
+    def test_the_image_build_context_leaves_out_tests_fixtures_state_and_secrets(self):
+        text = (Path(settings.BASE_DIR) / '.dockerignore').read_text(encoding='utf-8')
+        rules = [line.strip() for line in text.splitlines() if line.strip() and not line.startswith('#')]
+        last_reinclude = max(i for i, rule in enumerate(rules) if rule.startswith('!'))
+        for rule, path in self.REQUIRED:
+            self.assertIn(rule, rules)
+            self.assertGreater(rules.index(rule), last_reinclude, rule + ' must come after every re-inclusion')    # last rule wins
+            self.assertTrue(dockerignored(rules, path), rule + ' must keep ' + path + ' out of the image')
+        for path in self.OUT:
+            self.assertTrue(dockerignored(rules, path), path + ' must be out of the image')
+        for path in self.IN:
+            self.assertFalse(dockerignored(rules, path), path + ' must be in the image')
 
     def test_a_store_in_wal_mode_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
