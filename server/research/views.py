@@ -12,10 +12,11 @@ from django.db import transaction
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_http_methods, require_safe
 from .models import Snapshot, SavedView, Invitation, LoginAttempt, AuditEvent
 from .bundles import load, import_bundle
-from . import field_access, static_files, v3_cache
+from . import access_gate, field_access, static_files, v3_cache
 from .v3_http import blob_response
 from .terrier_contacts import csv_value
 from tools.measures import MEASURES
@@ -65,6 +66,9 @@ def signin(request):
     try:data=body(request)
     except ValueError:return JsonResponse({'error':'Invalid sign-in request'},status=400)
     username=str(data.get('username',''))[:150];address=client_address(request)
+    # Hosted, sign-in is for the Access identity and no one else: before any LoginAttempt row is touched, so one staff member's
+    # failed attempts can never lock another out.
+    if settings.HOSTED and username.casefold()!=(getattr(request,'access_email',None) or '').casefold():return JsonResponse({'error':'Sign in with the account that matches your Access identity.'},status=403)
     # Independently limit source IP and account name; rotating usernames cannot bypass IP limits.
     names=['ip:'+address,'user:'+username.casefold()]
     limit=timezone.now()-timedelta(minutes=15)
@@ -351,6 +355,13 @@ def health(request):
     except Exception:snap=None
     schema=snap.get('schema') if isinstance(snap,dict) else None
     return JsonResponse({'status':'ok','schema':schema or 'cu-summary-v1'})
+
+@never_cache
+@require_safe
+def version(request):
+    """What the VPS updater and `release status` read: git sha, build time and snapshot id, nothing else (the gate admits it
+    like /api/health: a loopback probe, a user token or a listed service token)."""
+    return JsonResponse(access_gate.version_payload('terrier-web'))
 
 def frontend(request,path=''):
     return static_files.serve(request,path)

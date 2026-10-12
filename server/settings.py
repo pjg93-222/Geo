@@ -61,7 +61,7 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 2*1024*1024
 STATIC_URL = '/static/'
 LOGGING = {'version':1,'disable_existing_loggers':False,'handlers':{'console':{'class':'logging.StreamHandler'}},'root':{'handlers':['console'],'level':'INFO'}}
 
-SECURE_REDIRECT_EXEMPT = [r'^api/health$']
+SECURE_REDIRECT_EXEMPT = [r'^api/health$', r'^version$']     # the container's own plain-http probes
 
 # ---- hosted: one district per container, behind Cloudflare Access (see HOSTED.md) ----------------------------------------
 # CU_DISTRICT_URLS (JSON or "co-05=https://...,or-05=https://...") sends the district selector to each district's own hostname.

@@ -93,25 +93,63 @@ class AccessMiddlewareTests(TestCase):
     def test_an_identity_with_no_account_has_no_data(self):
         self.assertEqual(K.client('nobody@example.test').get('/api/snapshots').status_code, 401)
 
-    def test_a_service_token_reaches_the_health_route_only(self):
+    def test_a_service_token_reaches_the_health_and_version_routes_only(self):
         service = K.token(email=None, common_name='svc-client.access')
-        for path, status in (('/api/health', 200), ('/api/auth/session', 403), ('/api/snapshots', 403)):
+        for path, status in (('/api/health', 200), ('/version', 200), ('/api/auth/session', 403), ('/api/snapshots', 403)):
             made = K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=service)
             self.assertEqual(made.get(path).status_code, status, path)
         stranger = K.token(email=None, common_name='someone-else.access')
-        self.assertEqual(K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=stranger).get('/api/health').status_code, 403)
+        for path in ('/api/health', '/version'):
+            self.assertEqual(K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=stranger).get(path).status_code, 403, path)
 
     def test_only_api_health_is_open_to_a_loopback_probe(self):
         probe = dict(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='127.0.0.1')
         self.assertEqual(Client(**probe).get('/api/health').json()['status'], 'ok')
         self.assertEqual(Client(**probe).get('/api/health?x=1').status_code, 200)           # the gate sees path plus query
         self.assertEqual(Client(**probe).get('/api/health%3Fx=1').status_code, 403)          # an encoded "?" is part of the path
-        for path in ('/api/auth/session', '/api/v3/meta', '/', '/healthz', '/version', '/api/health/x'):
+        for path in ('/api/auth/session', '/api/v3/meta', '/', '/healthz', '/version/x', '/api/health/x'):
             self.assertEqual(Client(**probe).get(path).status_code, 403, path)
         for header in ('HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'HTTP_FORWARDED'):
             self.assertEqual(Client(**probe, **{header: '203.0.113.9'}).get('/api/health').status_code, 403, header)
         self.assertEqual(Client(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='172.18.0.5').get('/api/health').status_code, 403)
         self.assertEqual(Client(HTTP_HOST='evil.example.test', REMOTE_ADDR='127.0.0.1').get('/api/health').status_code, 403)
+
+    def test_version_answers_the_probe_a_user_and_a_service_token_with_version_info_only(self):
+        with mock.patch.dict(os.environ, {'GIT_SHA': 'abc1234', 'BUILD_TIME': '2026-10-12T00:00:00Z'}):
+            probe = Client(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='127.0.0.1').get('/version')
+            user = K.client('nobody@example.test').get('/version')                  # an Access identity needs no account here
+            service = K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=K.token(email=None, common_name='svc-client.access')).get('/version')
+        want = {'app': 'terrier-web', 'git_sha': 'abc1234', 'build_time': '2026-10-12T00:00:00Z', 'snapshot_id': 'unknown'}
+        for who, answer in (('probe', probe), ('user', user), ('service', service)):
+            self.assertEqual((answer.status_code, answer.json()), (200, want), who)
+            self.assertIn('no-store', answer['Cache-Control'], who)
+        self.assertEqual(Client(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='127.0.0.1').post('/version').status_code, 405)
+
+    def test_version_still_needs_a_token_from_anyone_but_a_bare_loopback_probe(self):
+        for why, made in (('tunnel peer, no token', K.client(None)),
+                          ('loopback with a proxy header', Client(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='127.0.0.1',
+                                                                  HTTP_CF_CONNECTING_IP='203.0.113.9')),
+                          ('loopback, other peer', Client(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='172.18.0.5')),
+                          ('loopback, foreign host', Client(HTTP_HOST='evil.example.test', REMOTE_ADDR='127.0.0.1')),
+                          ('forged token', K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=K.token(tamper=True)))):
+            self.assertEqual(made.get('/version').status_code, 403, why)
+
+    def test_the_container_probes_are_not_redirected_to_https(self):
+        probe = dict(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='127.0.0.1')
+        with override_settings(SECURE_SSL_REDIRECT=True):
+            for path in ('/api/health', '/version'):
+                self.assertEqual(Client(**probe).get(path).status_code, 200, path)
+            self.assertEqual(K.client('staff@example.test').get('/api/auth/session').status_code, 301)    # everything else is
+
+    def test_a_token_for_another_districts_access_application_is_refused_on_its_audience(self):
+        co05 = K.token(aud='aud-co-05')
+        with mock.patch.dict(os.environ, {'ACCESS_AUD': 'aud-or-05'}), override_settings(DISTRICT=D.get('or-05')):
+            with self.assertLogs('cu.access', 'INFO') as seen:
+                refused = K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=co05).get('/api/auth/session')
+                accepted = K.client(None, HTTP_CF_ACCESS_JWT_ASSERTION=K.token(aud='aud-or-05')).get('/api/auth/session')
+        self.assertEqual((refused.status_code, accepted.status_code), (403, 200))      # same key, issuer and host: only the aud differs
+        denial = json.loads(seen.records[0].getMessage())
+        self.assertEqual((denial['app'], denial['reason'], denial['status']), ('terrier-or-05', 'aud', 403))
 
     def test_one_audit_line_per_request_without_the_query_or_the_address(self):
         with self.assertLogs('cu.access', 'INFO') as seen:
@@ -322,10 +360,42 @@ class ThrottleKeyTests(TestCase):
 
             def attempt(ip):
                 made = K.client('staff@example.test', HTTP_CF_CONNECTING_IP=ip)
-                return made.post('/api/auth/login', json.dumps({'username': 'x' + ip, 'password': 'wrong'}),
+                return made.post('/api/auth/login', json.dumps({'username': 'staff@example.test', 'password': 'wrong'}),
                                  content_type='application/json').status_code
             self.assertEqual(attempt('198.51.100.7'), 429)
             self.assertEqual(attempt('198.51.100.8'), 401)
+
+
+class SigninIdentityTests(TestCase):
+    """T2: a hosted sign-in is for the Access identity only, so nobody can run up another member of staff's failure count."""
+
+    def login(self, made, username, password):
+        return made.post('/api/auth/login', json.dumps({'username': username, 'password': password}), content_type='application/json')
+
+    def test_a_hosted_signin_for_another_account_is_refused_before_any_attempt_is_counted(self):
+        user('victim@example.test')
+        with K.hosted():
+            attacker = K.client('attacker@example.test')
+            for _ in range(10):                                         # more than the 8 failures that lock an account
+                self.assertEqual(self.login(attacker, 'victim@example.test', 'wrong').status_code, 403)
+            self.assertEqual(self.login(attacker, '', 'wrong').status_code, 403)
+            self.assertFalse(LoginAttempt.objects.exists())                  # nothing read, nothing written
+            self.assertEqual(self.login(K.client('victim@example.test'), 'victim@example.test',
+                                        'correct horse battery staple').status_code, 200)   # the victim is not locked out
+
+    def test_a_hosted_signin_for_the_access_identity_works_whatever_the_case_and_still_throttles(self):
+        user('Staff@Example.test')
+        with K.hosted():
+            made = K.client('staff@example.test')
+            for _ in range(8):
+                self.assertEqual(self.login(made, 'STAFF@example.test', 'wrong').status_code, 401)
+            self.assertEqual(self.login(made, 'staff@example.test', 'correct horse battery staple').status_code, 429)
+            self.assertTrue(LoginAttempt.objects.exists())
+
+    def test_a_local_signin_is_not_tied_to_any_identity(self):
+        user('plainname')
+        with override_settings(HOSTED=False):
+            self.assertEqual(self.login(Client(), 'plainname', 'correct horse battery staple').status_code, 200)
 
 
 class DistrictLinkTests(TestCase):

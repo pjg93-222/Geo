@@ -9,8 +9,9 @@ session cookie stolen or carried to another Access identity is useless, and an A
 Environment (read once, at startup; a missing or malformed value stops the server):
   ACCESS_AUD, ACCESS_ISSUER, ACCESS_JWKS_FILE, ACCESS_SERVICE_CNS   as access_gate.py describes them
   ALLOWED_HOSTS                                                     the gate's exact Host names; defaults to CU_ALLOWED_HOSTS
-The gate is always enforced here, whatever CU_BIND is. /api/health (the container's own probe) is the one route a loopback
-peer may reach without a token, by the gate's rule for /healthz; a request that carries proxy headers must still have one.
+The gate is always enforced here, whatever CU_BIND is. /api/health and /version (the container's own probes) are the routes a
+loopback peer may reach without a token, by the gate's rule for /healthz and /version; a request that carries proxy headers must
+still have one. /version answers with version info only (access_gate.version_payload: git sha, build time, snapshot id).
 
 One audit line per request goes to the cu.access logger: when, app, who, method, route without its query, status (and a
 fixed denial code). Never the query string, the client address, a header or a body.
@@ -54,12 +55,12 @@ class AccessJwtMiddleware:
     def __call__(self, request):
         request.access_email = None         # the verified Access identity; None until the gate has passed the request
         request.access_reason = None
-        # The gate's loopback exemption is for /healthz and /version. Here only /api/health may use it: that route is mapped onto
-        # /healthz, and the gate's own two routes (which this app does not have) are changed to a path that is exempt from nothing.
+        # The gate's loopback exemption is for /healthz and /version. Here /api/health (mapped onto /healthz) and /version (served by
+        # views.version) may use it; the gate's own /healthz, which this app does not have, is changed to a path exempt from nothing.
         # The gate wants real header names and path plus query: request.headers and request.get_full_path(). Never request.META
         # as the headers: the gate denies HTTP_* names. (META is read for the peer address only.)
         path, mark, query = request.get_full_path().partition('?')     # a "?" inside the path is percent-encoded by then
-        path = '/healthz' if path == HEALTH else '/' if path in gate.HEALTH_ROUTES else path
+        path = '/healthz' if path == HEALTH else '/' if path == '/healthz' else path
         decision = gate.check_request(self.cfg, request.method, path + mark + query, request.headers,
                                       request.META.get('REMOTE_ADDR', ''))
         if not decision.allowed:
