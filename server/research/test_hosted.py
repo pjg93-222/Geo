@@ -451,6 +451,17 @@ class ContainerStartTests(SimpleTestCase):
         for path in self.IN:
             self.assertFalse(dockerignored(rules, path), path + ' must be in the image')
 
+    def test_every_base_image_is_debian_13_pinned_by_index_digest(self):
+        """D-181. The python and node digests are the platform repo's ops/images.lock (checked there for its own Dockerfiles; this repo
+        cannot read that file, so the shape is checked here and the values are compared by hand at each base refresh)."""
+        text = (Path(settings.BASE_DIR) / 'Dockerfile').read_text(encoding='utf-8')
+        froms = re.findall(r'^FROM (\S+)(?: AS (\w+))?$', text, re.M)
+        self.assertEqual([stage for _, stage in froms], ['frontend', 'deps', ''])
+        for ref, _ in froms:
+            self.assertRegex(ref, r'^(python:3\.12-slim-trixie|node:22-trixie-slim)@sha256:[0-9a-f]{64}$')
+        self.assertEqual(len({ref for ref, _ in froms[1:]}), 1)          # the deps stage and the runtime stage share one python
+        self.assertNotIn('bookworm', text.lower())
+
     def test_a_store_in_wal_mode_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
             for name, mode in (('scores.sqlite3', 'delete'), ('walk.sqlite3', 'wal'), ('accounts.sqlite3', 'wal')):

@@ -1,6 +1,6 @@
 # Hashed Linux lock for the Terrier hosted image (Dockerfile); do not edit by hand.
 # Input: requirements.linux.in (this repo).
-# Target: CPython 3.12, linux x86_64, glibc 2.36 (python:3.12-slim-bookworm); wheels only (manylinux2014 and manylinux_2_28 tags).
+# Target: CPython 3.12, linux x86_64, glibc 2.41 (python:3.12-slim-trixie); wheels only (manylinux2014 and manylinux_2_28 tags).
 # Generated 2026-10-12 with pip 25.0.1, constrained to the versions the tests run on (requirements.lock.txt):
 #   python -m pip install --dry-run --ignore-installed --report report.json --platform manylinux2014_x86_64 --platform manylinux_2_28_x86_64 --python-version 3.12 --implementation cp --only-binary=:all: --target tgt -r requirements.linux.in -c requirements.lock.txt
 # then, for each resolved name==version, every wheel of that version on PyPI (JSON API) that the platform tags above accept;

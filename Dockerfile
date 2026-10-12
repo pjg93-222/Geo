@@ -4,21 +4,21 @@
 # carry a Cloudflare Access token (server/research/access.py). See HOSTED.md and compose.yaml.
 #
 # requirements.linux.lock is the hashed lock of requirements.linux.in for CPython 3.12 on linux x86_64 (its header has the command).
-# Base images are pinned by index digest: the python and node digests are the ones in the platform repo's ops/images.lock.
+# Base images are Debian 13 (trixie, D-181), pinned by index digest: the python and node digests are the ones in the platform repo's ops/images.lock.
 
-FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS frontend
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 AS deps
+FROM python:3.12-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS deps
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 COPY requirements.linux.lock /tmp/requirements.linux.lock
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --require-hashes --no-deps -r /tmp/requirements.linux.lock
 
-FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+FROM python:3.12-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 # CI passes the commit and build time; server/research/access_gate.py reports them (and SNAPSHOT_ID_FILE) from /version.
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown

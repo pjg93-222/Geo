@@ -1,0 +1,35 @@
+# Offline npm cache for the Terrier frontend. It used to be a job in the platform repo's deps.yml, which had to check this repo out
+# with a cross-repo read token; here the workflow's own token reads its own repo. Run by hand (workflow_dispatch only): it is not part
+# of a release, so it never adds a run to a release tag's commit. The cache is the artifact `npm-cache`.
+#
+# Every `uses:` is pinned to a full commit SHA (the tag it was resolved from is the trailing comment).
+name: deps
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  npm-cache:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Populate the npm cache from the lockfile, scripts off
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --cache "$GITHUB_WORKSPACE/npm-cache" --prefer-offline
+          tar --sort=name --owner=0 --group=0 --numeric-owner -cf - -C "$GITHUB_WORKSPACE" npm-cache | gzip -n -9 > "$GITHUB_WORKSPACE/npm-cache.tgz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-cache
+          path: npm-cache.tgz
+          if-no-files-found: error

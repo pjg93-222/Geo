@@ -112,7 +112,7 @@ rebuild a district's stores in a data directory that has lost it.
 ## Image, compose and release
 
 `Dockerfile`: node build of the frontend, hashed Python dependencies from `requirements.linux.lock` (CPython 3.12, linux x86_64,
-wheels only; the command that made it is in its header, the inputs are in `requirements.linux.in`), then `python:3.12-slim-bookworm`
+wheels only; the command that made it is in its header, the inputs are in `requirements.linux.in`), then `python:3.12-slim-trixie` (Debian 13, D-181)
 as uid 10001 with no login shell. Both base images are pinned by index digest (the same python and node digests as the platform
 repo's `ops/images.lock`). `ARG GIT_SHA` and `ARG BUILD_TIME` (set by CI) become the image's `GIT_SHA` and `BUILD_TIME`
 environment, which `access_gate.version_payload` reads. `GET /version` returns that payload (`app` `terrier-web`, `git_sha`, `build_time`,
