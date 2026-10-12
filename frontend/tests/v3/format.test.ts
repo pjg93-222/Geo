@@ -81,6 +81,10 @@ test('district selector: a district page is the same host at its own port', () =
   assert.equal(districtHref({port: 8777}, {protocol: 'https:', hostname: 'terrier.local'}), 'https://terrier.local:8777/');
 });
 
+test('district selector: a hosted server gives each district its own address, which wins over host and port', () => {
+  assert.equal(districtHref({port: 8775, url: 'https://or05.example.org/'}, {protocol: 'https:', hostname: 'co05.example.org'}), 'https://or05.example.org/');
+});
+
 test('district selector: not-built districts are disabled and say so; the current one stays enabled', () => {
   const list = [
     {id: 'co-05', label: 'Colorado · District 05', ready: true},

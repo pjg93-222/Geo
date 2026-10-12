@@ -96,6 +96,8 @@ def accept_invitation(request):
         with transaction.atomic():
             invite=Invitation.objects.select_for_update().filter(token_hash=hashlib.sha256(token.encode()).hexdigest(),used_at=None,expires_at__gt=timezone.now()).first()
             if not invite:return JsonResponse({'error':'This invitation has expired or was already used. Ask an administrator for a new link.'},status=400)
+            # Hosted, an invitation is for the Access identity it names; anyone else holding the link cannot spend it.
+            if settings.HOSTED and (getattr(request,'access_email',None) or '').casefold()!=invite.username.casefold():return JsonResponse({'error':'This invitation was made for a different sign-in.'},status=403)
             user=User.objects.filter(username=invite.username).first()
             if user and not invite.reset:return JsonResponse({'error':'An account with that name already exists.'},status=400)
             if not user:user=User(username=invite.username,is_staff=invite.administrator)

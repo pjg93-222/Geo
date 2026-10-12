@@ -11,7 +11,8 @@ import {box4,boxesHit,cleanLine,clipLine,doorPoints,fitFrame,growBounds,inArea,i
 import type {Fit,Frame,XY} from './walkGeo';
 
 /** `scores`: the Print scores toggle (off by default, which leaves the pages as they were): adds a SCORES group of Ovr, Sup (candidate districts) and Part columns. */
-export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap}
+/** `watermark`: who printed the list and when (hosted servers; walk.ts watermarkText), written on every page and faintly across it. Without it the pages are exactly as before. */
+export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap;watermark?:string}
 
 type RGB=[number,number,number];
 type Box=Frame;
@@ -498,6 +499,23 @@ function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,t
   });
 }
 
+// --- watermark ---------------------------------------------------------------------------------------------------------
+interface Faint{GState?:new(o:{opacity:number})=>unknown;setGState?:(g:unknown)=>unknown;saveGraphicsState?:()=>unknown;restoreGraphicsState?:()=>unknown}
+/** The watermark on every page: small and dark in the top margin (legible), and large and faint across the middle (a photocopy keeps it). */
+function stamp(doc:jsPDF,text:string):void{
+  const pageW=doc.internal.pageSize.getWidth(),pageH=doc.internal.pageSize.getHeight(),faint=doc as unknown as Faint;
+  for(let p=1;p<=doc.getNumberOfPages();p++){
+    doc.setPage(p);doc.setFont('helvetica','normal');doc.setTextColor(...MUTED);doc.setFontSize(8.5);
+    doc.text(fit(doc,text,pageW-2*MARGIN-200),pageW-MARGIN,30,{align:'right'});
+    if(!(faint.GState&&faint.setGState&&faint.saveGraphicsState&&faint.restoreGraphicsState))continue;   // an older jsPDF keeps the top-margin line alone
+    faint.saveGraphicsState();faint.setGState(new faint.GState({opacity:0.09}));
+    doc.setFontSize(30);doc.setTextColor(0,0,0);
+    const line=fit(doc,text,pageH*1.1),w=doc.getTextWidth(line),a=Math.PI/6;   // 30 degrees up to the right, centred on the page
+    doc.text(line,pageW/2-w/2*Math.cos(a),pageH/2+w/2*Math.sin(a),{angle:30});
+    faint.restoreGraphicsState();
+  }
+}
+
 // --- document ----------------------------------------------------------------------------------------------------------
 /** Builds the PDF without saving it. `map` counts what the cover map drew. */
 export async function buildWalkPdf(payload:WalkListPayload,opts:WalkPdfOptions={}):Promise<{doc:jsPDF;fileName:string;map:WalkMapStats}> {
@@ -518,6 +536,7 @@ export async function buildWalkPdf(payload:WalkListPayload,opts:WalkPdfOptions={
     doc.setFontSize(7.5);doc.text(fit(doc,footer,pageW-2*MARGIN-90),MARGIN,pageH-24);
     doc.text(`Page ${p} of ${pages}`,pageW-MARGIN,pageH-24,{align:'right'});
   }
+  if(opts.watermark)stamp(doc,opts.watermark);
   return {doc,fileName:opts.fileName||walkFileName(area,payload.generated_on,'pdf'),map};
 }
 

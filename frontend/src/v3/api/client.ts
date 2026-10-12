@@ -63,6 +63,10 @@ export function getHousehold(id:string,signal?:AbortSignal):Promise<HouseholdPop
 export function getStreet(bbox:[number,number,number,number],zoom:number,signal?:AbortSignal):Promise<StreetPayload>{return localJson(endpoint('/api/v3/street',{basis:'registration',bbox:bbox.join(','),zoom:Math.floor(zoom)}),signal);}
 export function searchPeople(text:string,signal?:AbortSignal):Promise<SearchResult>{return localJson(endpoint('/api/v3/search',{q:text.trim().slice(0,80)}),signal);}
 
+/** GET /api/auth/session. `hosted` and `email` (the Cloudflare Access identity the server verified) are there only on a hosted server. */
+export interface Session{authenticated?:boolean;csrf?:string;hosted?:boolean;email?:string|null}
+export const getSession=(signal?:AbortSignal):Promise<Session>=>localJson<Session>('/api/auth/session',signal);
+
 // Writes carry the CSRF token the session endpoint hands out (same header and field as the legacy client). It is fetched once and kept.
 let csrfToken='';
 async function csrf(fresh:boolean,signal?:AbortSignal):Promise<string>{

@@ -6,7 +6,7 @@ import * as walkLib from '../../src/v3/lib/walk.ts';
 import {
   CODE_LABEL, CSV_COLUMNS, MAX_UPLOAD_ROWS, WALK_CODES, areaText, buildWalkCsv, codeLegend, countText, csvValue, distanceText, doorAddress,
   fullDate, houseSpan, isWalkCode, parseWalkCsv, phoneText, regDate, runHeader, scoreColumns, sideFromText, sideLabel, splitCsv, tallyText,
-  totalsLine, unitText, walkCsvRows, walkFileName
+  totalsLine, unitText, walkCsvRows, walkFileName, watermarkText
 } from '../../src/v3/lib/walk.ts';
 import {DOOR_SCRIPT, choiceText, fillScript, stepById, stepNumber} from '../../src/v3/lib/walkScript.ts';
 
@@ -75,6 +75,11 @@ test('result codes: five codes with labels, and a one-line legend', () => {
   assert.deepEqual(WALK_CODES.map(c => CODE_LABEL[c]), ['Supporter', 'Undecided', 'Opposed', 'Not home', 'Moved']);
   assert.equal(codeLegend(), 'S Supporter · U Undecided · O Opposed · NH Not home · MV Moved');
   assert.ok(isWalkCode('NH')); assert.ok(!isWalkCode('nh')); assert.ok(!isWalkCode('YS')); assert.ok(!isWalkCode(null));
+});
+
+test('watermark: who printed the list and when, to the minute in UTC', () => {
+  assert.equal(watermarkText('staff@example.org', new Date('2026-10-12T14:03:59.999Z')), 'staff@example.org · 2026-10-12 14:03 UTC');
+  assert.equal(watermarkText('  Staff@Example.org ', new Date('2026-01-02T03:04:00Z')), 'Staff@Example.org · 2026-01-02 03:04 UTC');
 });
 
 test('area text and file names', () => {
@@ -323,6 +328,17 @@ const pdfTexts = (doc: PdfDoc, page: number): string[] => {
 };
 const pdfPages = (doc: PdfDoc) => Array.from({length: doc.getNumberOfPages()}, (_, i) => pdfTexts(doc, i + 1));
 const manyDoors = (n: number, tag = 'a') => Array.from({length: n}, (_, i) => door(i + 1, String(100 + 2 * i), Array.from({length: 1 + (i % 5)}, (_, k) => voter({person_id: `${tag}${i}-${k}`, name: `Voter ${tag}${i}-${k}`}))));
+
+test('PDF watermark: who printed it and when is on every page, in the margin and faintly across the page; without one the pages carry nothing extra', async () => {
+  const mark = watermarkText('field@example.test', new Date('2026-10-12T14:03:00Z'));
+  const list = payload([run({doors: manyDoors(40)}), run({stop: 2, street_id: 9, street: 'Short St', doors: [door(50, '5', [voter()])]})]);
+  const plain = await buildWalkPdf(list), marked = await buildWalkPdf(list, {watermark: mark});
+  assert.equal(marked.doc.getNumberOfPages(), plain.doc.getNumberOfPages());
+  pdfPages(marked.doc).forEach((t, i) => assert.equal(t.filter(s => s === mark).length, 2, `page ${i + 1}: the margin line and the faint line`));
+  pdfPages(plain.doc).forEach(t => assert.ok(!t.some(s => s.includes('field@example.test'))));
+  const first = (marked.doc as unknown as {internal: {pages: string[][]}}).internal.pages[1].join('\n');
+  assert.ok(/\/GS\d+ gs/.test(first) && /0\.866\d* 0\.5\d* -0\.5\d* 0\.866\d*/.test(first), 'the faint line is drawn through a transparency state and rotated 30 degrees');
+});
 
 test('PDF: landscape letter, a header on every list page, (cont.) only after the first page of a run, page numbers and legend', async () => {
   const {doc, fileName} = await buildWalkPdf(payload([run({doors: manyDoors(40)}), run({stop: 2, street_id: 9, street: 'Short St', doors: [door(50, '5', [voter()])]})]));
@@ -1356,7 +1372,9 @@ test('walk screen wiring: the street plan shows only with features.roi, builds w
   assert.ok(/getWalkList\(streets,where,sig,planned,left,cut\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
   assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
   assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
-  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
+  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores,watermark\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
+  assert.ok(/const watermark=session\.hosted&&session\.email\?watermarkText\(session\.email\):undefined;/.test(src) && /if\(session\.hosted&&!session\.email\)throw/.test(src), 'a hosted server watermarks the PDF with the verified identity, and prints nothing without one');
+  assert.ok(/\{!hosted&&<button type="button" className="walk-button" onClick=\{\(\)=>void exportCsv\(\)\}>Download CSV/.test(src) && /p\|\|hosted\)return;/.test(src), 'a hosted server offers no CSV download');
   assert.ok(/for\(const chunk of idChunks\(ids\)\)/.test(src), 'a list longer than one request is asked for in pieces');
 });
 

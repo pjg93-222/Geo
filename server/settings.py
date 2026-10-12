@@ -79,10 +79,12 @@ if HOSTED:
         raise RuntimeError('A hosted deployment must have Cloudflare Access first and no local administrator.')
     if not os.environ.get('CU_ALLOWED_HOSTS') or '*' in ALLOWED_HOSTS:
         raise RuntimeError('Set CU_ALLOWED_HOSTS to the exact hostname(s) of a hosted deployment (no wildcard).')
-    # TLS ends at Cloudflare. The edge sends X-Forwarded-Proto and cloudflared relays it, so SECURE_PROXY_SSL_HEADER (above)
-    # is what lets Django see https. The origin cannot be reached except through the Access-checked tunnel, so a forged
-    # header gains nothing. CU_HTTPS_REDIRECT=1 additionally redirects plain http at the origin; the image sets it to 0
-    # (Cloudflare's Always Use HTTPS does that at the edge) because a redirect loop is the failure if the header is ever missing.
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, *(h for h in ('127.0.0.1',) if h not in ALLOWED_HOSTS)]    # the container's own health probe
+    # TLS ends at Cloudflare. Its edge adds X-Forwarded-Proto to the request it sends to the origin and cloudflared passes
+    # request headers on (to be confirmed with a real request at stand-up), so SECURE_PROXY_SSL_HEADER (above) is what lets Django
+    # see https. The origin is reachable only through the Access-checked tunnel, so a forged header gains nothing.
+    # CU_HTTPS_REDIRECT=1 additionally redirects plain http at the origin; the image sets it to 0 (Cloudflare's Always Use HTTPS
+    # does that at the edge) because a redirect loop is the failure if the header is ever missing.
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_REFERRER_POLICY = 'no-referrer'

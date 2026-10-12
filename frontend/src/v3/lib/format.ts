@@ -128,10 +128,11 @@ export function titleName(raw:string):string{
 export function seconds(ms:number):string{return (Math.max(100,Math.round(ms/100)*100)/1000).toFixed(1);}
 
 /** One row of GET /api/v3/districts (schema v3-districts-1). Each district runs as its own server instance at `port`. */
-export interface DistrictEntry{id:string;label:string;short_label:string;state:string;port:number;ready:boolean;center:[number,number];zoom:number}
+/** `url`: the district's own address when the server is hosted (CU_DISTRICT_URLS); without it the district is this host at `port`. */
+export interface DistrictEntry{id:string;label:string;short_label:string;state:string;port:number;ready:boolean;center:[number,number];zoom:number;url?:string}
 export interface DistrictList{schema:string;current:string;districts:DistrictEntry[]}
-/** The page of another district: same host, that district's port. */
-export const districtHref=(d:Pick<DistrictEntry,'port'>,loc:Pick<Location,'protocol'|'hostname'>):string=>`${loc.protocol}//${loc.hostname}:${d.port}/`;
+/** The page of another district: its own address when the server gave one, else the same host at that district's port. */
+export const districtHref=(d:Pick<DistrictEntry,'port'|'url'>,loc:Pick<Location,'protocol'|'hostname'>):string=>d.url??`${loc.protocol}//${loc.hostname}:${d.port}/`;
 /** Menu rows of the header selector. A district that is not built yet is disabled unless it is the one being served. */
 export const districtOptions=(list:Pick<DistrictEntry,'id'|'label'|'ready'>[],current:string)=>list.map(d=>{
   const disabled=!d.ready&&d.id!==current;

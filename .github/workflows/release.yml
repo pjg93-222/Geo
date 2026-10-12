@@ -30,11 +30,12 @@ jobs:
       # libraries the tests import. The hashed runtime lock is installed in the image build below.
       - run: python -m pip install -r requirements.lock.txt
       - run: python -m compileall -q server tools manage.py
-      - name: Django tests (synthetic data only)
+      # Synthetic data only. The suites that start from the aggregate summary bundle (data/*.zip, not in git) run on the laptop.
+      - name: Django tests
         run: >
           python manage.py test
           server.research.test_access server.research.test_hosted server.research.test_districts
-          server.research.test_walk_api server.research.test_v3_static tools.test_districts
+          server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts
       - name: Deploy checks with a dummy hosted environment
         env:
           CU_DEPLOYMENT: hosted

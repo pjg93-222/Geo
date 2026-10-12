@@ -91,6 +91,10 @@ export function walkFileName(area:string,isoDate:string,ext:'pdf'|'csv'):string{
   const slug=area.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60).replace(/-+$/,'')||'list';
   return `walk-list-${slug}-${ymd(isoDate)?isoDate.slice(0,10):localToday()}.${ext}`;
 }
+/** The line a hosted server's walk list carries on every page: who printed it, to the minute, in UTC ("name@example.org · 2026-10-12 14:03 UTC"). */
+export function watermarkText(email:string,now:Date=new Date()):string{
+  return `${email.trim()}${DOT}${now.toISOString().slice(0,16).replace('T',' ')} UTC`;
+}
 
 // --- CSV out ---------------------------------------------------------------------------------------------------------
 export const CSV_COLUMNS=['Stop','Precinct','Street','Side','Address','Unit','Name','Phone','Pri','Gen','Abs','Party','Age','Gender','Reg. Date','Result'] as const;

@@ -10,13 +10,13 @@ import type {WalkShade} from './WalkMap';
 import {replaceQuery,type Route} from '../lib/router';
 import type {Meta} from '../types';
 import {downloadFile} from '../lib/download';
-import {ApiError} from '../api/client';
+import {ApiError,getSession} from '../api/client';
 import {getWalkList,getWalkLists,getWalkOptions,getWalkPlan,getWalkSavedList,getWalkScores,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,searchWalkStreets} from '../api/walk';
 import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkTurf,WalkVoter} from '../api/walkTypes';
 import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
   lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
-  doorsByPerson,flaggedOnList,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,
+  doorsByPerson,flaggedOnList,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,watermarkText,
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,turfLines,
   type HeldList,type RefusalNote,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkScoreMap,type WalkVisit,
 } from '../lib/walk';
@@ -345,6 +345,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const doorsNow=clampDoors(doorsText??savedDoors,turfCfg.doors);
   const [turf,setTurf]=useState<WalkTurf|null>(null);   // the blocks the last click picked: the note under the totals
   const [printScores,setPrintScores]=useState(false);   // the Print scores toggle: off, the PDF and CSV carry no scores
+  const [hosted,setHosted]=useState(false);   // a hosted server: no CSV download and no scores (the server refuses them), and the PDF is watermarked
+  useEffect(()=>{getSession().then(s=>setHosted(s.hosted===true)).catch(()=>{});},[]);
   const [upload,setUpload]=useState<Upload|null>(null);const uploadRef=useRef<Upload|null>(null);const uploadSeq=useRef(0);const uploadAbort=useRef<AbortController|null>(null);
   const [uploadError,setUploadError]=useState('');const [skipped,setSkipped]=useState<WalkCsvProblem[]>([]);const [matching,setMatching]=useState(false);
   const [payload,setPayload]=useState<WalkListPayload|null>(null);const payloadRef=useRef<WalkListPayload|null>(null);
@@ -582,12 +584,15 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     setBusy('pdf');setActionNote(null);
     try{
       const scores=await printedScores(p);if(scores===null)return;
-      await exportWalkPdf(p,{area:listLabel(p),scores});
+      const session=await getSession();   // hosted: every page says who printed the list and when; no identity, no PDF
+      if(session.hosted&&!session.email)throw new Error('no identity');
+      const watermark=session.hosted&&session.email?watermarkText(session.email):undefined;
+      await exportWalkPdf(p,{area:listLabel(p),scores,watermark});
     }catch{setActionNote({text:'The PDF could not be created. Try again.',alert:true});}
     finally{setBusy('');}
   }
   async function exportCsv(){
-    const p=payloadRef.current;if(!p)return;
+    const p=payloadRef.current;if(!p||hosted)return;
     const scores=await printedScores(p);if(scores===null)return;
     downloadFile(walkFileName(listLabel(p),p.generated_on,'csv'),'text/csv;charset=utf-8',buildWalkCsv(p,resultsRef.current,historyRef.current,unsavedRef.current,scores));   // marks made while the scores came in are in the file
   }
@@ -779,9 +784,9 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           {turf&&<div className="walk-turf" role="status">{turfLines(turf,payload.totals,turfCfg.jump_m).map(t=><p key={t}>{t}</p>)}</div>}
           {payload.runs.length>0&&<div className="walk-actions">
             <button type="button" className="walk-button walk-primary" onClick={()=>void exportPdf()} disabled={busy==='pdf'} aria-busy={busy==='pdf'}>{busy==='pdf'?'Preparing PDF…':'Export PDF'}</button>
-            <button type="button" className="walk-button" onClick={()=>void exportCsv()}>Download CSV</button>
-            <label className="walk-check"><input type="checkbox" checked={printScores} onChange={e=>setPrintScores(e.target.checked)} aria-describedby="walk-scores-hint"/> Print scores</label>
-            <span id="walk-scores-hint" className="walk-check-hint">{features?.candidate?'Adds overall, candidate support and participation (0 to 100) to the PDF and the CSV.':'Adds overall and participation (0 to 100) to the PDF and the CSV.'}</span>
+            {!hosted&&<button type="button" className="walk-button" onClick={()=>void exportCsv()}>Download CSV</button>}
+            {!hosted&&<label className="walk-check"><input type="checkbox" checked={printScores} onChange={e=>setPrintScores(e.target.checked)} aria-describedby="walk-scores-hint"/> Print scores</label>}
+            {!hosted&&<span id="walk-scores-hint" className="walk-check-hint">{features?.candidate?'Adds overall, candidate support and participation (0 to 100) to the PDF and the CSV.':'Adds overall and participation (0 to 100) to the PDF and the CSV.'}</span>}
             <button type="button" ref={saveButton} className={cx('walk-button',saved&&'is-off')} aria-disabled={saved||undefined} onClick={()=>{if(saved)return;setSaveTitle(defaultListTitle(payload));setSaveOpen(o=>!o);}} disabled={busy==='save'} aria-expanded={saved?undefined:saveOpen} title={saved?'This list is saved':undefined}>Save</button>
             <button type="button" className={cx('walk-button',!saved&&'is-off')} aria-disabled={!saved||undefined} title={saved?undefined:'Save this list first'} onClick={reknock}>Not home again</button>
             <span className="walk-status">

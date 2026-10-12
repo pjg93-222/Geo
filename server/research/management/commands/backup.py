@@ -1,6 +1,5 @@
 import sqlite3
 from pathlib import Path
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from server.research.state import state_dir
 class Command(BaseCommand):
