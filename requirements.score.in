@@ -1,0 +1,12 @@
+# Scoring toolchain of the Terrier store builds (Dockerfile.build, target score): the libraries of the laptop's system Python 3.12.10,
+# the interpreter of shown_areas.py, build_scores_v3.py and the rowfw child processes (pyarrow). Pinned to the versions installed there
+# on 2026-10-12, because the two Windows interpreters differ (numpy 2.4.6 / pandas 3.0.3 here, 2.5.3 / 3.0.6 in work\.venv) and the
+# container mirrors each. Hashed Linux lock: requirements.score.lock.
+joblib==1.5.3
+numpy==2.4.6
+pandas==3.0.3
+pyarrow==24.0.0
+python-dateutil==2.9.0.post0
+scipy==1.18.0
+six==1.17.0
+tzdata==2026.2

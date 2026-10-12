@@ -1,0 +1,21 @@
+# Hashed Linux lock of the Terrier build toolchain, score target (Dockerfile.build); do not edit by hand.
+# Input: requirements.score.in (exact pins, the laptop's system Python 3.12.10 set).
+# Target: CPython 3.12, linux x86_64, glibc 2.36 (python:3.12.10-slim-bookworm); wheels only.
+# Generated 2026-10-12 from the PyPI JSON API (metadata only), as requirements.build.lock is.
+# Install: pip install --require-hashes --no-deps --only-binary=:all: -r requirements.score.lock
+joblib==1.5.3 \
+    --hash=sha256:5fc3c5039fc5ca8c0276333a188bbd59d6b7ab37fe6632daa76bc7f9ec18e713
+numpy==2.4.6 \
+    --hash=sha256:90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853
+pandas==3.0.3 \
+    --hash=sha256:6dc0b3fd2169c9157deed50b4d519553a3655c8c6a96027136d654592be973a9
+pyarrow==24.0.0 \
+    --hash=sha256:6165461f55ef6314f026de6638d661188e3455d3ec49834556a0ebbdbace18bb
+python-dateutil==2.9.0.post0 \
+    --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
+scipy==1.18.0 \
+    --hash=sha256:1f55797419e16e7f30cf88ffb3113ce0467f00cfe3f70d5c281730b21769bfc2
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+tzdata==2026.2 \
+    --hash=sha256:bbe9af844f658da81a5f95019480da3a89415801f6cc966806612cc7169bffe7

@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.7
+# Terrier build toolchain: the interpreters and libraries that build a district's stores, and nothing else. Separate from the
+# serve image (Dockerfile). NO code and NO data are baked in: the build tree is mounted read-only at /terrier, the inputs
+# read-only at /sources, /geography and /sibling, and a build writes only to the /stage volume. See compute.compose.yaml and COMPUTE.md.
+# The entrypoint runs one named step: `terrier-build run roads --district co-05` (tools/build_step.py).
+#
+# Two targets, one per Windows interpreter the steps use today (COMPUTE_CONTAINERS_DESIGN.md 1.1), so each container mirrors the
+# libraries of the job it replaces:
+#   --target geo    CPython 3.12.14 = the laptop's work\.venv (geopandas, pyogrio, pyproj, shapely, Django ...)
+#                   prepare_geography, roads, street, contacts, walk, bundle, density        requirements.build.lock  -> terrier-build
+#   --target score  CPython 3.12.10 = the laptop's system Python (numpy 2.4.6, pandas 3.0.3, pyarrow 24.0.0, scipy, joblib)
+#                   shown_areas, build_scores_v3, the rowfw children                          requirements.score.lock  -> terrier-build-score
+#
+# The locks are hashed (--require-hashes, wheels only); the bases are pinned by index digest (resolved 2026-10-12 from the registry
+# HTTP API, GET manifests/<tag>, Docker-Content-Digest). Compute runs this image by digest only.
+
+FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS geo-deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+COPY requirements.build.lock /tmp/requirements.lock
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r /tmp/requirements.lock
+
+FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS geo
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.title="terrier-build" org.opencontainers.image.revision="${GIT_SHA}" org.opencontainers.image.created="${BUILD_TIME}"
+ENV GIT_SHA=${GIT_SHA} BUILD_TIME=${BUILD_TIME} PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH=/opt/venv/bin:$PATH HOME=/tmp
+RUN groupadd --gid 10001 app \
+ && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \
+ && mkdir /stage && chown 10001:10001 /stage
+COPY --from=geo-deps /opt/venv /opt/venv
+WORKDIR /terrier
+USER 10001:10001
+VOLUME ["/stage"]
+ENTRYPOINT ["python", "/terrier/tools/build_step.py"]
+
+FROM python:3.12.10-slim-bookworm@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db AS score-deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+COPY requirements.score.lock /tmp/requirements.lock
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r /tmp/requirements.lock
+
+FROM python:3.12.10-slim-bookworm@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db AS score
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.title="terrier-build-score" org.opencontainers.image.revision="${GIT_SHA}" org.opencontainers.image.created="${BUILD_TIME}"
+ENV GIT_SHA=${GIT_SHA} BUILD_TIME=${BUILD_TIME} PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH=/opt/venv/bin:$PATH HOME=/tmp
+RUN groupadd --gid 10001 app \
+ && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \
+ && mkdir /stage && chown 10001:10001 /stage
+COPY --from=score-deps /opt/venv /opt/venv
+WORKDIR /terrier
+USER 10001:10001
+VOLUME ["/stage"]
+ENTRYPOINT ["python", "/terrier/tools/build_step.py"]
