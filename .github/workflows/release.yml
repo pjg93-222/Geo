@@ -1,5 +1,7 @@
 # Release: on a v* tag, test, build the hosted image, push it to GHCR by digest, write its SBOM and digests.json, and attach
 # both to a DRAFT release (publishing the release stays a manual step). CI is the only builder: no Docker is needed on the laptop.
+# The same tag also builds the two Terrier BUILD images (Dockerfile.build: terrier-build, terrier-build-score; toolchain only, no
+# code and no data) and attaches terrier-build.digests.json and their SBOMs; the laptop runs them by digest (COMPUTE.md).
 #
 # requirements.linux.lock (hashed, from requirements.linux.in) is committed, and every `uses:` below is pinned to a full commit SHA
 # (the tag it was resolved from is the trailing comment; re-resolve with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
@@ -14,6 +16,8 @@ permissions: {}          # nothing by default; each job asks only for what it ne
 
 env:
   IMAGE: ghcr.io/pjg93-222/terrier-web
+  BUILD_IMAGE: ghcr.io/pjg93-222/terrier-build
+  SCORE_IMAGE: ghcr.io/pjg93-222/terrier-build-score
 
 jobs:
   test:
@@ -36,7 +40,7 @@ jobs:
         run: >
           python manage.py test
           server.research.test_access server.research.test_hosted server.research.test_districts
-          server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts
+          server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
       - name: Deploy checks with a dummy hosted environment
         env:
           CU_DEPLOYMENT: hosted
@@ -126,8 +130,122 @@ jobs:
             terrier-web.spdx.json
           if-no-files-found: error
 
+  # The build toolchain images (Dockerfile.build): a hashed Linux lock each, bases pinned by digest, no code and no data inside.
+  # The laptop's compute runs pull them by digest from terrier-build.digests.json (COMPUTE.md).
+  build-image:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Tag must be v<YYYY>.<MM>.<DD>.<n>
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$ ]] || { echo "::error::tag does not match v<YYYY>.<MM>.<DD>.<n>"; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # The locks are generated (their headers say how) and committed; an unhashed or missing one must stop the build here.
+      - name: Locks must be hashed
+        run: |
+          for lock in requirements.build.lock requirements.score.lock; do
+            [ -s "$lock" ] && grep -q -- '--hash=sha256:' "$lock" || { echo "::error::$lock is missing or has no hashes"; exit 1; }
+          done
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: |
+          {
+            echo "epoch=$(git log -1 --format=%ct)"
+            echo "created=$(git log -1 --format=%cI)"
+          } >> "$GITHUB_OUTPUT"
+      - id: geo
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.build
+          target: geo
+          outputs: type=image,name=${{ env.BUILD_IMAGE }}:${{ github.ref_name }},push=true,rewrite-timestamp=true
+          no-cache: true
+          provenance: false
+          sbom: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.meta.outputs.epoch }}
+      - id: score
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.build
+          target: score
+          outputs: type=image,name=${{ env.SCORE_IMAGE }}:${{ github.ref_name }},push=true,rewrite-timestamp=true
+          no-cache: true
+          provenance: false
+          sbom: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.meta.outputs.epoch }}
+      # No code and no data may ride in either image (the build tree and the inputs arrive as read-only mounts); the toolchain
+      # must import; the process must be uid 10001.
+      - name: Images hold no data, run non-root and import their libraries
+        env:
+          GEO: ${{ env.BUILD_IMAGE }}@${{ steps.geo.outputs.digest }}
+          SCORE: ${{ env.SCORE_IMAGE }}@${{ steps.score.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for ref in "$GEO" "$SCORE"; do
+            docker pull "$ref" >/dev/null
+            found=$(docker run --rm --entrypoint sh "$ref" -c 'find /terrier /stage /sources /geography /sibling /data -xdev -type f 2>/dev/null | head -5 || true')
+            [ -z "$found" ] || { echo "::error::$ref contains files where data or code would be mounted:"; echo "$found"; exit 1; }
+            [ "$(docker run --rm --entrypoint id "$ref" -u)" = 10001 ] || { echo "::error::$ref does not run as uid 10001"; exit 1; }
+          done
+          docker run --rm --entrypoint python "$GEO" -c 'import sys; assert sys.version_info[:3] == (3, 12, 14), sys.version; import django, geopandas, numpy, pandas, pyogrio, pyproj, requests, shapely; print("geo ok", geopandas.__version__, pyogrio.__gdal_version_string__)'
+          docker run --rm --entrypoint python "$SCORE" -c 'import sys; assert sys.version_info[:3] == (3, 12, 10), sys.version; import joblib, numpy, pandas, pyarrow, scipy; print("score ok", numpy.__version__, pandas.__version__)'
+      - name: SBOM (terrier-build)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.BUILD_IMAGE }}@${{ steps.geo.outputs.digest }}
+          format: spdx-json
+          output-file: terrier-build.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM (terrier-build-score)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.SCORE_IMAGE }}@${{ steps.score.outputs.digest }}
+          format: spdx-json
+          output-file: terrier-build-score.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      # Same shape as digests.json (images.<name> = ref@digest), but its own file: ops/release.py reads digests.json for terrier-web only.
+      - name: terrier-build.digests.json
+        env:
+          GEO_DIGEST: ${{ steps.geo.outputs.digest }}
+          SCORE_DIGEST: ${{ steps.score.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$GEO_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$SCORE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg tag "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA" --arg geo "$BUILD_IMAGE@$GEO_DIGEST" --arg score "$SCORE_IMAGE@$SCORE_DIGEST" \
+            '{tag: $tag, commit: $sha, images: {"terrier-build": $geo, "terrier-build-score": $score}}' > terrier-build.digests.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-files
+          path: |
+            terrier-build.digests.json
+            terrier-build.spdx.json
+            terrier-build-score.spdx.json
+          if-no-files-found: error
+
   draft-release:
-    needs: image
+    needs: [image, build-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -135,6 +253,9 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-files
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: build-files
       - name: Attach to a draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,4 +264,4 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" \
                  --notes "terrier-web $GITHUB_REF_NAME. Deploy by digest: see digests.json."
-          gh release upload "$GITHUB_REF_NAME" digests.json terrier-web.spdx.json --clobber
+          gh release upload "$GITHUB_REF_NAME" digests.json terrier-web.spdx.json terrier-build.digests.json terrier-build.spdx.json terrier-build-score.spdx.json --clobber

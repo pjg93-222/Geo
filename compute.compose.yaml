@@ -1,0 +1,102 @@
+# Terrier compute runs on the laptop: build a district's stores in the terrier-build container (Docker Desktop, WSL2 backend).
+# Inputs are mounted READ-ONLY, each as narrowly as it can be; a build writes only to the `stage` volume (ext4 inside the Docker
+# VM, so SQLite is never written over the Windows file share); the stores leave the volume through `terrier-export`, which copies
+# them to a scratch folder with an integrity check. The live Terrier .local is never mounted. No network. See COMPUTE.md.
+#
+#   tools/compute_parity.py drives this file (it sets HOST_REPO, HOST_OUT, RUN_ID and TERRIER_BUILD_IMAGE). By hand:
+#   TERRIER_BUILD_IMAGE=ghcr.io/pjg93-222/terrier-build@sha256:<digest> HOST_REPO=C:/Users/pgoff/worktrees/dep-terrier-build \
+#   HOST_OUT=C:/Users/pgoff/terrier-parity/B RUN_ID=B-manual docker compose -f compute.compose.yaml --profile terrier \
+#   run --rm terrier-build run roads --district co-05
+#
+# Host paths default to the real folders (not the Codex junction, which Docker cannot follow). Override with HOST_* if they move.
+# Mount sources must exist (create_host_path: false): a wrong path is an error, never a quietly empty folder.
+name: terrier-compute
+
+x-build: &build
+  image: ${TERRIER_BUILD_IMAGE:?pin the image by digest, for example ghcr.io/pjg93-222/terrier-build@sha256:...}
+  profiles: [terrier]           # `docker compose up` starts nothing; a job is always an explicit `run`
+  read_only: true
+  user: "10001:10001"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  network_mode: none            # T2-T8 and T10-T12 need no network (the Census downloads, T1 and T9, are not run here)
+  tmpfs: ["/tmp:size=1g"]
+  mem_limit: ${BUILD_MEM:-12g}  # Docker's VM has 16 GB (.wslconfig memory=16GB); leave Windows its share
+  memswap_limit: ${BUILD_MEM:-12g}
+  cpus: ${BUILD_CPUS:-6}        # the host has 8 logical CPUs
+  pids_limit: 512
+  environment: &env
+    TERRIER_LOCAL_DIR: /stage/${RUN_ID:?set RUN_ID, the folder of this run in the stage volume}
+    TERRIER_SOURCES_DIR: /sources
+    TERRIER_GEOGRAPHY_DIR: /geography
+    TERRIER_SIBLING_DIR: /sibling
+    HOME: /glassbox-home        # tools/glassbox.py writes ~/.claude/glassbox/events: mounted below, so the dashboard still sees the run
+
+services:
+  terrier-build:
+    <<: *build
+    volumes:
+      # the tree to build from (code only; its .local is never read: TERRIER_LOCAL_DIR points into the stage volume)
+      - type: bind
+        source: ${HOST_REPO:?the tree to build from, mounted read-only}
+        target: /terrier
+        read_only: true
+        bind: {create_host_path: false}
+      # the vendor CSVs: the Colorado file and the OR/CT folder only, not the rest of Downloads
+      - type: bind
+        source: ${HOST_DOWNLOADS:-C:/Users/pgoff/Downloads}/statara_co_cd005_20260904.csv
+        target: /sources/statara_co_cd005_20260904.csv
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HOST_DOWNLOADS:-C:/Users/pgoff/Downloads}/terrier-sources
+        target: /sources/terrier-sources
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HOST_GEOGRAPHY:-C:/Users/pgoff/Documents/Terrier/work/geography}
+        target: /geography
+        read_only: true
+        bind: {create_host_path: false}
+      # the sibling cu-geography repo: the Colorado street salt and the frozen row framework, not the rest of its .local
+      - type: bind
+        source: ${HOST_SIBLING_LOCAL:-C:/Users/pgoff/Documents/Terrier/outputs/cu-geography/.local}/.street-salt
+        target: /sibling/.local/.street-salt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${HOST_SIBLING_LOCAL:-C:/Users/pgoff/Documents/Terrier/outputs/cu-geography/.local}/row-framework-20260930
+        target: /sibling/.local/row-framework-20260930
+        read_only: true
+        bind: {create_host_path: false}
+      # Glass Box events (small JSON files; the one writable host mount of a build)
+      - type: bind
+        source: ${HOST_GLASSBOX:-C:/Users/pgoff/.claude/glassbox/events}
+        target: /glassbox-home/.claude/glassbox/events
+        bind: {create_host_path: false}
+      - type: volume
+        source: stage
+        target: /stage
+
+  # The only writer of the scratch folder, and it only reads the stage volume.
+  terrier-export:
+    <<: *build
+    environment: *env
+    volumes:
+      - type: bind
+        source: ${HOST_REPO:?the tree to build from, mounted read-only}
+        target: /terrier
+        read_only: true
+        bind: {create_host_path: false}
+      - type: volume
+        source: stage
+        target: /stage
+        read_only: true
+      - type: bind
+        source: ${HOST_OUT:?the scratch folder the stores are exported to}
+        target: /out
+        bind: {create_host_path: false}
+    command: ["export", "/out"]
+
+volumes:
+  stage:
