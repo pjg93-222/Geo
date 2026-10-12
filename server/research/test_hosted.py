@@ -269,11 +269,25 @@ class FieldAccessTests(base.WalkCase):
             'walk.build.options', 'walk.build.streets', 'walk.build.walk_list', 'walk.build.overview', 'walk.build.plan',
             'walk.build.match', 'walk.build.create_list', 'walk.list.create'])
         self.assertTrue(all(e.actor == BOSS for e in events))
+        # one row per builder route, each carrying its own route (the saved list's row comes last)
+        self.assertEqual([e.detail['route'] for e in events[:-1]], [url.split('?')[0] for _, url, _ in self.builder_requests()])
         made_list = WalkList.objects.get(title='Made on the server')
         self.assertEqual(events[-1].detail, {'route': '/api/v3/walk/lists', 'list': made_list.key, 'kind': 'standard'})
         everything = json.dumps([e.detail for e in events]) + ''.join(e.actor + e.action for e in events)
         for secret in ('Made on the server', 'ced', 'Pine St', 'Ridgeview') + tuple(v['name'] for v in self.voters if v['name']):
             self.assertNotIn(secret, everything)
+
+    def test_one_allowance_counts_gets_and_posts_of_both_groups_together(self):
+        account = manager(also_staff=True)
+        with K.hosted(FIELD_RATE_PER_MINUTE=3):
+            made = K.client(BOSS, login=account)
+            self.assertEqual(made.get('/api/v3/walk/options?level=ss').status_code, 200)                     # manager GET
+            self.assertEqual(self.call(made, 'post', '/api/v3/walk/match', {'rows': [{'street': 'Pine St'}]}).status_code, 200)   # manager POST
+            self.assertEqual(made.get('/api/v3/walk/lists').status_code, 200)                                # staff GET
+            blocked = self.call(made, 'post', '/api/v3/walk/dispositions', self.entry())                      # staff POST
+            self.assertEqual((blocked.status_code, blocked['Retry-After']), (429, '60'))
+            self.assertEqual(made.get('/api/v3/walk/options?level=ss').status_code, 429)
+        self.assertFalse(Disposition.objects.exists())
 
     # ---- audit ----------------------------------------------------------------------------------------------------
     def test_each_opened_read_and_write_leaves_an_audit_event_without_a_name(self):
@@ -396,6 +410,10 @@ class InviteTests(TestCase):
 
 
 class ContainerStartTests(SimpleTestCase):
+    def test_the_image_build_context_leaves_out_the_frontend_fixtures(self):
+        lines = (Path(settings.BASE_DIR) / '.dockerignore').read_text(encoding='utf-8').split()
+        self.assertGreater(lines.index('frontend/public/fixtures/**'), lines.index('!frontend/public/**'))      # last rule wins
+
     def test_a_store_in_wal_mode_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
             for name, mode in (('scores.sqlite3', 'delete'), ('walk.sqlite3', 'wal'), ('accounts.sqlite3', 'wal')):

@@ -21,6 +21,7 @@
 **/*_testkit.py
 **/*.test.ts
 **/*.ps1
+frontend/public/fixtures/**
 tools/luna_district/**
 **/*.sqlite3
 **/*.zip

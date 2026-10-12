@@ -9,9 +9,11 @@ It uses `server/research/access_gate.py`, a byte-identical copy of the canonical
 file and copy it over, compare sha256). The middleware hands the gate Django's `request.headers` (real header names) and `request.get_full_path()`, never `request.META`:
 the gate denies any `HTTP_*` header name. A request needs a `Cf-Access-Jwt-Assertion` header carrying an RS256 token for this
 district's Access application (`ACCESS_AUD`, `ACCESS_ISSUER`, signing keys in `ACCESS_JWKS_FILE`) and an allowed `Host`. Anything
-else is `403 forbidden`. The one exception is `GET /api/health` from a loopback peer with no proxy headers (the container's own
-probe). After the session layer runs, a signed-in account must be the person the token names (the token's email equals the account's
-email, or its username when it has none, ignoring case); otherwise the session is ended and the answer is 403.
+else is `403 forbidden`. The exceptions are `GET /api/health` and `GET /version` from a loopback peer with no proxy headers (the
+container's own probes). After the session layer runs, a signed-in account must be the person the token names (the token's email equals the account's
+email, or its username when it has none, ignoring case); otherwise the session is ended and the answer is 403. Sign-in itself is
+tied to the same identity: `POST /api/auth/login` answers 403 unless the username is the token's email (ignoring case), before the
+failed-attempt counters are read or written, so nobody can lock another member of staff out by guessing at their account.
 
 One audit line per request goes to the `cu.access` logger: time, app, user, method, route without its query, status. No query
 string, no client address.
@@ -26,7 +28,7 @@ Environment (read at startup; a missing value stops the server):
 | `CU_DISTRICT` | `co-05`, `or-05` or `ct-01` |
 | `ACCESS_AUD`, `ACCESS_ISSUER`, `ACCESS_JWKS_FILE` | this district's Access application; the JWKS file is refused after 24 hours or when dated in the future |
 | `ACCESS_ENFORCE=1` | baked into the image: `manage.py serve` (hosted) reads the gate's settings from the plain environment and exits without them, and refuses a public `CU_BIND` when the gate is not enforced (`assert_bind_consistent`) |
-| `ACCESS_SERVICE_CNS` | optional service-token common names (they may reach `/api/health` only) |
+| `ACCESS_SERVICE_CNS` | optional service-token common names (they may reach `/api/health` and `/version` only) |
 | `CU_BIND`, `PORT` | listen address (the image: `0.0.0.0:8080`; default everywhere else `127.0.0.1`). A non-loopback `CU_BIND` is refused unless hosted. |
 | `CU_DATA_DIR` | the district's stores, mounted read-only |
 | `CU_STATE_DIR` | the writable volume: `accounts.sqlite3` and the imported summary snapshots |
@@ -113,10 +115,29 @@ rebuild a district's stores in a data directory that has lost it.
 wheels only; the command that made it is in its header, the inputs are in `requirements.linux.in`), then `python:3.12-slim-bookworm`
 as uid 10001 with no login shell. Both base images are pinned by index digest (the same python and node digests as the platform
 repo's `ops/images.lock`). `ARG GIT_SHA` and `ARG BUILD_TIME` (set by CI) become the image's `GIT_SHA` and `BUILD_TIME`
-environment, which `access_gate.version_payload` reads. (Terrier has no `/version` route: the middleware sends it to `/`, so it answers 403; the
-platform's updater and `release status` expect `/version`, an open item.) No data is baked in. `compose.yaml` is an example for three districts sharing one image
+environment, which `access_gate.version_payload` reads. `GET /version` returns that payload (`app` `terrier-web`, `git_sha`, `build_time`,
+`snapshot_id`: version information and nothing else) to the container's loopback probe, a user token or a listed service token, which
+is what the platform's updater and `release status` read. No data is baked in. `compose.yaml` is an example for three districts sharing one image
 (read-only root, `cap_drop: ALL`, no published ports, a separate data volume, state volume and secrets file per district); the
 platform repo's `ops/compose.yaml` is the one the server runs. `.github/workflows/release.yml` runs on a `v*` tag, with every action
 pinned to a commit SHA: tests, the image by digest to `ghcr.io/pjg93-222/terrier-web` (a check that the image holds no data files),
 an SBOM, and `digests.json` (`{tag, commit, images: {"terrier-web": "<image>@sha256:..."}}`, the shape `ops/release.py` reads),
 attached to a draft release.
+
+## Stand-up checklist and open rulings
+
+* **Each district gets its own `ACCESS_AUD`.** Make a separate Cloudflare Access application per district (co-05, or-05, ct-01) and give
+  each container the audience tag of its own application. A token is accepted only for the audience it was issued for
+  (`test_a_token_for_another_districts_access_application_is_refused_on_its_audience`), so two districts that shared an application
+  would also share their staff lists and a token from one would open the other. Never reuse one `ACCESS_AUD` across containers.
+* **`AuditEvent` rows hold voter keys.** A door-knock result is audited with the voter keys it wrote (`HMAC-SHA256(.walk-salt, voter id)`,
+  never a name, address or phone), and each saved list read with its list key. The keys are pseudonymous, not anonymous, so treat the
+  accounts database and its backups as sensitive. No retention policy has been set: pending Paul's ruling.
+* **No per-list assignment.** A list is not assigned to anyone: any `field-staff` account in a district can open any saved list of that
+  district and record results on it, and any `field-manager` can build and save lists. The district boundary is the only separation.
+  Pending Paul's ruling on assignment.
+* **Fixtures are not shipped.** `frontend/public/fixtures/v3` (made by `tools/make_v3_fixtures.py`, used only by the demo and test
+  servers) holds synthetic numbers (fixed totals of 109,150 people and 45,000 households, a smooth random field) on real public
+  geography: the Census block GEOIDs, polygons, roads and district outline of co-05. No person-level data is read to make it. The real
+  block ids are the reason `.dockerignore` leaves the folder out of the build context, so the image carries none of it (and a
+  CT or OR container would not carry Colorado's blocks).
