@@ -122,7 +122,11 @@ is what the platform's updater and `release status` read. No data is baked in. `
 platform repo's `ops/compose.yaml` is the one the server runs. `.github/workflows/release.yml` runs on a `v*` tag, with every action
 pinned to a commit SHA: tests, the image by digest to `ghcr.io/pjg93-222/terrier-web` (a check that the image holds no data files),
 an SBOM, and `digests.json` (`{tag, commit, images: {"terrier-web": "<image>@sha256:..."}}`, the shape `ops/release.py` reads),
-attached to a draft release.
+attached to a draft release. The same tag also builds the two build images (`COMPUTE.md`), and a `scan` job runs the platform's image
+policy on all three by digest before the draft release is made (`tools/image_gate.py`, trivy pinned by sha256; D-181, D-182):
+HIGH/CRITICAL vulnerabilities that have a fix, misconfigurations and secrets block; unfixed vulnerabilities and OS-package licences
+(Debian GPL/LGPL) are printed as INFO lines and written to the `image-scan` artifact; pip/npm licences that are forbidden, restricted
+or unknown block.
 
 ## Stand-up checklist and open rulings
 

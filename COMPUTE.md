@@ -12,10 +12,11 @@ Nothing has run in a container: Docker Desktop is not installed and no image has
 |---|---|
 | `tools/hostpaths.py` | every machine path a build tool used to hard-code, as an environment variable (section 2). Defaults are today's Windows paths, so the laptop builds as before |
 | `tools/build_step.py` | `run <step> --district d` / `export <out> <files>` / `fingerprint`. The container entrypoint, and also what the Windows side runs, so both sides take the same code path |
-| `Dockerfile.build` | the toolchain, no code and no data: target `geo` (CPython 3.12.14, = `work\.venv`) and target `score` (CPython 3.12.10, = system Python), hashed locks `requirements.build.lock` / `requirements.score.lock` |
+| `Dockerfile.build` | the toolchain, no code and no data: target `geo` (CPython 3.12.14, = `work\.venv`; `python:3.12.14-slim-trixie`) and target `score` (CPython 3.12.10, = system Python; still `python:3.12.10-slim-bookworm`, because the registry has no 3.12.10 trixie image, so it applies Debian's security updates at build), hashed locks `requirements.build.lock` / `requirements.score.lock` |
 | `compute.compose.yaml` | services `terrier-build` (network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume) and `terrier-export` (copies stores from the volume to a scratch folder) |
 | `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact |
 | `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release |
+| `.github/workflows/release.yml` job `scan` + `tools/image_gate.py` | trivy on `terrier-web`, `terrier-build` and `terrier-build-score` by digest, the platform's image policy (D-181, D-182: fixable HIGH/CRITICAL vulnerabilities, misconfigurations, secrets and pip/npm licences that are forbidden, restricted or unknown block; unfixed vulnerabilities and OS-package licences are reported). The draft release waits for it. Tests: `tools/test_image_gate.py` |
 | `tools/test_compute.py` | the tests (also in the release workflow's test job) |
 
 Steps wired in `tools/build_step.py`: `roads` (the smoke; exercised by a synthetic test), `street` and `contacts` (their plain
@@ -123,8 +124,8 @@ so the harness reports the check's own verdict, not a count).
   hashes, mounts, pinned actions) and by YAML parsing, not by a build.
 - `tools/luna_district` (OR/CT phase 3, T6) still calls `ctypes.windll` without a POSIX branch (`common.available_ram_gb`,
   `peak_working_set_gb`); the seams are in, the container does not run it. `build_walk.py` and `build_scores_v3.py` already degrade.
-- Debian bookworm's SQLite (3.40.1) differs from the host's (3.53.1 in `work\.venv`, 3.49.1 system): store bytes can never be
-  identical, which is why the gate is logical. A table-level variance mask is coarse: a stamp inside a table that also holds real
+- The images' Debian SQLite (the `geo` image is Debian 13, the `score` image Debian 12 with 3.40.1) differs from the host's (3.53.1 in
+  `work\.venv`, 3.49.1 system): store bytes can never be identical, which is why the gate is logical. A table-level variance mask is coarse: a stamp inside a table that also holds real
   values (for example `scores.metadata`) hides the whole table; refine with a column mask once a Windows A1/A2 pair shows what varies.
 - The score image's package set is the design's list (numpy, pandas, pyarrow, scipy, joblib); if `shown_areas` or the rowfw children
   import anything else, add it to `requirements.score.in` and regenerate the lock.

@@ -6,6 +6,8 @@
 # requirements.linux.lock (hashed, from requirements.linux.in) is committed, and every `uses:` below is pinned to a full commit SHA
 # (the tag it was resolved from is the trailing comment; re-resolve with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
 # The platform's ops/release.py reads digests.json from the draft release (images.terrier-web) and the image's /version git_sha.
+# A `scan` job runs the platform's image policy (D-181/D-182: tools/image_gate.py, trivy pinned by sha256) on all three images by digest;
+# the draft release waits for it, so a failing image gets no release to attach to.
 name: release
 
 on:
@@ -41,6 +43,7 @@ jobs:
           python manage.py test
           server.research.test_access server.research.test_hosted server.research.test_districts
           server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
+          tools.test_image_gate
       - name: Deploy checks with a dummy hosted environment
         env:
           CU_DEPLOYMENT: hosted
@@ -138,6 +141,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      geo_digest: ${{ steps.geo.outputs.digest }}
+      score_digest: ${{ steps.score.outputs.digest }}
     steps:
       - name: Tag must be v<YYYY>.<MM>.<DD>.<n>
         env:
@@ -244,8 +250,52 @@ jobs:
             terrier-build-score.spdx.json
           if-no-files-found: error
 
-  draft-release:
+  # The platform's images policy on the three images (tools/image_gate.py): fixable HIGH/CRITICAL vulnerabilities, misconfigurations and
+  # secrets block; OS-package licences (Debian GPL/LGPL) and unfixed vulnerabilities are reported; pip/npm licences that are
+  # forbidden, restricted or unknown block. trivy is pinned by version and by the sha256 GitHub publishes for the release asset.
+  scan:
     needs: [image, build-image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install trivy
+        env:
+          TRIVY_VERSION: 0.75.0
+          TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+        run: |
+          set -euo pipefail
+          curl -fsSL -o trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tgz" | sha256sum -c -
+          sudo tar -xzf trivy.tgz -C /usr/local/bin trivy
+          rm trivy.tgz
+      - name: Scan terrier-web, terrier-build and terrier-build-score by digest
+        env:
+          WEB: ${{ env.IMAGE }}@${{ needs.image.outputs.digest }}
+          GEO: ${{ env.BUILD_IMAGE }}@${{ needs.build-image.outputs.geo_digest }}
+          SCORE: ${{ env.SCORE_IMAGE }}@${{ needs.build-image.outputs.score_digest }}
+        run: python tools/image_gate.py "$WEB" "$GEO" "$SCORE" --report image-scan.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: image-scan
+          path: image-scan.json
+          if-no-files-found: ignore
+
+  draft-release:
+    needs: [image, build-image, scan]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

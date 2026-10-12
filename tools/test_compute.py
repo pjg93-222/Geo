@@ -424,9 +424,14 @@ class BuildImageFilesTests(unittest.TestCase):
         text = read('Dockerfile.build')
         froms = re.findall(r'^FROM (\S+) AS (\S+)', text, re.M)
         self.assertEqual([name for _ref, name in froms], ['geo-deps', 'geo', 'score-deps', 'score'])
+        # geo is Debian 13 (D-181); score stays on bookworm because python:3.12.10 has no trixie image (see the header of Dockerfile.build)
+        self.assertEqual([ref.split('@')[0] for ref, _ in froms], ['python:3.12.14-slim-trixie', 'python:3.12.14-slim-trixie',
+                                                                  'python:3.12.10-slim-bookworm', 'python:3.12.10-slim-bookworm'])
         for ref, _name in froms:
-            self.assertRegex(ref, r'^python:3\.12\.(14|10)-slim-bookworm@sha256:[0-9a-f]{64}$')
-        self.assertEqual([ref.split('-')[0] for ref, _ in froms], ['python:3.12.14', 'python:3.12.14', 'python:3.12.10', 'python:3.12.10'])
+            self.assertRegex(ref, r'@sha256:[0-9a-f]{64}$')
+        self.assertEqual(froms[0][0], froms[1][0])
+        self.assertEqual(froms[2][0], froms[3][0])
+        self.assertEqual(text.count('apt-get -y --no-install-recommends upgrade'), 1)       # the frozen score base gets Debian's security updates
 
     def test_the_image_is_toolchain_only_non_root_and_runs_a_named_step(self):
         text = read('Dockerfile.build')
@@ -465,8 +470,11 @@ class BuildImageFilesTests(unittest.TestCase):
             self.assertRegex(use, r'^[\w./-]+@[0-9a-f]{40}$', use)
         self.assertIn('BUILD_IMAGE: ghcr.io/pjg93-222/terrier-build\n', text.replace('\r\n', '\n'))
         self.assertEqual(text.count('file: Dockerfile.build'), 2)
-        self.assertIn('needs: [image, build-image]', text)
+        self.assertIn('needs: [image, build-image, scan]', text)      # the draft release waits for the image scan
         self.assertIn('tools.test_compute', text)
+        self.assertIn('tools.test_image_gate', text)
+        self.assertIn('python tools/image_gate.py "$WEB" "$GEO" "$SCORE"', text)
+        self.assertRegex(text, r'TRIVY_SHA256: [0-9a-f]{64}')
         self.assertEqual(text.count('no-cache: true'), 3)           # the web image and both build images
 
 
