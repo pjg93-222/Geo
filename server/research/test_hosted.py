@@ -22,25 +22,39 @@ from .models import AuditEvent, Disposition, Invitation, WalkList
 
 JSON = 'application/json'
 STAFF = 'field@example.test'
+BOSS = 'manager@example.test'
 OTHER = 'volunteer@example.test'
 TODAY = '2026-10-01'
 
-# every person-level route that is NOT one of the three the walk-list flow needs: (method, url)
-CLOSED = [
+# the routes that build and save a list (field managers only): (method, url)
+BUILDER = [
     ('get', '/api/v3/walk/options?level=ss'), ('get', '/api/v3/walk/streets?q=ced'), ('get', '/api/v3/walk/list?ss=010'),
     ('get', '/api/v3/walk/overview?ss=010'), ('get', '/api/v3/walk/plan?ss=010'),
-    ('post', '/api/v3/walk/match'), ('post', '/api/v3/walk/scores'), ('post', '/api/v3/walk/lists'),
+    ('post', '/api/v3/walk/match'), ('post', '/api/v3/walk/lists'),
+]
+# every other person-level route, closed to field staff and to field managers alike: (method, url)
+CLOSED_TO_ALL = [
+    ('post', '/api/v3/walk/scores'),
     ('get', '/api/v3/people'), ('get', '/api/v3/person'), ('get', '/api/v3/household'), ('get', '/api/v3/street'),
     ('get', '/api/v3/search?q=ab'), ('get', '/api/v3/contacts'), ('get', '/api/v3/contacts/export'),
     ('get', '/api/v3/workspace'),
     ('get', '/api/street'), ('get', '/api/household'), ('get', '/api/street-preload'), ('get', '/api/contacts'),
     ('get', '/api/person'), ('get', '/api/credit-quality'),
 ]
+CLOSED = BUILDER + CLOSED_TO_ALL        # closed to field staff
 
 
 def staff(name=STAFF, *, group=True):
     account = User.objects.create_user(name, password='correct horse battery staple')
     if group:
+        FA.grant(account)
+    return account
+
+
+def manager(name=BOSS, *, also_staff=False):
+    account = User.objects.create_user(name, password='correct horse battery staple')
+    FA.grant(account, FA.MANAGER)
+    if also_staff:
         FA.grant(account)
     return account
 
@@ -149,6 +163,118 @@ class FieldAccessTests(base.WalkCase):
             self.assertEqual(made.get('/api/summaries?format=csv&level=precinct&metric=count').status_code, 403)
         self.assertEqual((User.objects.count(), WalkList.objects.count()), (users, lists))
 
+    # ---- field managers: the routes that build and save a list, and nothing else -------------------------------------------
+    def builder_requests(self):
+        """(method, url, body) of each builder route, valid for the synthetic district."""
+        street = '%d:both' % self.street_id('Ridgeview Ct')
+        return [('get', '/api/v3/walk/options?level=ss', None), ('get', '/api/v3/walk/streets?q=ced', None),
+                ('get', '/api/v3/walk/list?streets=' + street, None), ('get', '/api/v3/walk/overview?ss=010', None),
+                ('get', '/api/v3/walk/plan?ss=010', None), ('post', '/api/v3/walk/match', {'rows': [{'street': 'Pine St'}]}),
+                ('post', '/api/v3/walk/lists', {'title': 'Made on the server', 'query': {'streets': street},
+                                                'fingerprint': base.ANY_FINGERPRINT})]
+
+    def test_a_manager_builds_and_saves_a_list_on_the_server(self):
+        account = manager()
+        self.posted('/api/v3/walk/dispositions', self.entry('NH'))              # the local owner's result: a re-knock list needs one
+        before = WalkList.objects.count()
+        with K.hosted():
+            made = K.client(BOSS, login=account)
+            for method, url, body in self.builder_requests():
+                answer = self.call(made, method, url, body)
+                if url.startswith('/api/v3/walk/plan'):         # this synthetic district has no candidate: 404 after the gate
+                    self.assertNotIn(answer.status_code, (401, 403, 429), url)
+                else:
+                    self.assertIn(answer.status_code, (200, 201), (url, answer.content[:200]))
+                self.assertEqual(answer['Cache-Control'], base.NO_STORE, url)
+            saved = WalkList.objects.order_by('-id').first()
+            self.assertEqual((WalkList.objects.count(), saved.title), (before + 1, 'Made on the server'))
+            # a re-knock list is made the same way
+            again = self.call(made, 'post', '/api/v3/walk/lists', {'title': 'Again', 'from': self.key, 'reknock': True})
+            self.assertEqual(again.status_code, 201)
+
+    def test_being_a_manager_is_not_being_field_staff_and_opens_nothing_else(self):
+        account = manager()
+        users, lists, results = User.objects.count(), WalkList.objects.count(), Disposition.objects.count()
+        with K.hosted():
+            made = K.client(BOSS, login=account)
+            self.assertEqual(made.get('/api/v3/walk/lists').status_code, 403)                 # the field-staff routes
+            self.assertEqual(made.get('/api/v3/walk/lists/' + self.key).status_code, 403)
+            self.assertEqual(self.call(made, 'post', '/api/v3/walk/dispositions', self.entry()).status_code, 403)
+            for method, url in CLOSED_TO_ALL:
+                self.assertEqual(self.call(made, method, url).status_code, 403, url)
+            self.assertEqual(made.put('/api/v3/walk/lists').status_code, 403)
+            self.assertEqual(made.get('/api/summaries?format=csv&level=precinct&metric=count').status_code, 403)
+        self.assertEqual((User.objects.count(), WalkList.objects.count(), Disposition.objects.count()), (users, lists, results))
+
+    def test_a_manager_who_is_also_field_staff_has_both(self):
+        account = manager(also_staff=True)
+        with K.hosted():
+            made = K.client(BOSS, login=account)
+            self.assertEqual(made.get('/api/v3/walk/options?level=ss').status_code, 200)
+            self.assertEqual(made.get('/api/v3/walk/lists').status_code, 200)
+
+    def test_field_staff_who_are_not_managers_cannot_build_or_save(self):
+        account = staff()
+        before = (WalkList.objects.count(), AuditEvent.objects.filter(action__startswith='walk.').count())
+        with K.hosted():
+            made = K.client(STAFF, login=account)
+            for method, url, body in self.builder_requests():
+                self.assertEqual(self.call(made, method, url, body).status_code, 403, url)
+        self.assertEqual((WalkList.objects.count(), AuditEvent.objects.filter(action__startswith='walk.').count()), before)
+
+    def test_nobody_else_gets_the_builder_routes(self):
+        account = manager()
+        plain = manager(OTHER)
+        plain.groups.clear()                                                    # signed in, in no group
+        before = WalkList.objects.count()
+        with K.hosted():
+            for who, made in (('no token', K.client(None, login=account)),                    # a session but no Access token
+                              ('no session', K.client(BOSS)),                                 # an Access identity but no account
+                              ('no group', K.client(OTHER, login=plain)),
+                              ('carried session', K.client(OTHER, login=account))):           # a session on someone else's token
+                for method, url, body in self.builder_requests():
+                    self.assertIn(self.call(made, method, url, body).status_code, (401, 403), (who, url))
+            self.assertEqual(K.client(BOSS).get('/api/v3/walk/options?level=ss').status_code, 401)
+            self.assertEqual(K.client(None).get('/api/v3/walk/options?level=ss').status_code, 403)
+            inactive = K.client(BOSS, login=account)
+            account.is_active = False
+            account.save()
+            self.assertEqual(inactive.get('/api/v3/walk/options?level=ss').status_code, 401)
+        self.assertEqual(WalkList.objects.count(), before)
+
+    def test_the_builder_routes_stay_closed_without_the_access_middleware(self):
+        account = manager()
+        with override_settings(HOSTED=True, LOCAL_ADMIN_ACCESS=False):          # settings say hosted, Access never ran
+            made = Client(HTTP_HOST='localhost')
+            made.force_login(account)
+            self.assertEqual(made.get('/api/v3/walk/options?level=ss').status_code, 403)
+
+    def test_a_manager_shares_the_rate_limit(self):
+        first, second = manager(), manager(OTHER)
+        with K.hosted(FIELD_RATE_PER_MINUTE=2):
+            made, other = K.client(BOSS, login=first), K.client(OTHER, login=second)
+            self.assertEqual([made.get('/api/v3/walk/options?level=ss').status_code for _ in range(2)], [200, 200])
+            blocked = made.get('/api/v3/walk/streets?q=ced')
+            self.assertEqual((blocked.status_code, blocked['Retry-After']), (429, '60'))
+            self.assertEqual(other.get('/api/v3/walk/options?level=ss').status_code, 200)
+
+    def test_each_builder_call_is_audited_by_route_without_a_name_or_a_parameter(self):
+        account = manager()
+        with K.hosted():
+            made = K.client(BOSS, login=account)
+            for method, url, body in self.builder_requests():
+                self.call(made, method, url, body)
+        events = list(AuditEvent.objects.filter(action__startswith='walk.').order_by('id'))
+        self.assertEqual([e.action for e in events], [
+            'walk.build.options', 'walk.build.streets', 'walk.build.walk_list', 'walk.build.overview', 'walk.build.plan',
+            'walk.build.match', 'walk.build.create_list', 'walk.list.create'])
+        self.assertTrue(all(e.actor == BOSS for e in events))
+        made_list = WalkList.objects.get(title='Made on the server')
+        self.assertEqual(events[-1].detail, {'route': '/api/v3/walk/lists', 'list': made_list.key, 'kind': 'standard'})
+        everything = json.dumps([e.detail for e in events]) + ''.join(e.actor + e.action for e in events)
+        for secret in ('Made on the server', 'ced', 'Pine St', 'Ridgeview') + tuple(v['name'] for v in self.voters if v['name']):
+            self.assertNotIn(secret, everything)
+
     # ---- audit ----------------------------------------------------------------------------------------------------
     def test_each_opened_read_and_write_leaves_an_audit_event_without_a_name(self):
         account = staff()
@@ -212,11 +338,22 @@ class InviteTests(TestCase):
         self.assertEqual(answer.status_code, 200)
         self.assertTrue(FA.is_field_staff(User.objects.get(username=STAFF)))
 
+    def test_an_invitation_can_make_the_account_a_field_manager_and_only_that(self):
+        from .views import create_invitation
+        token = create_invitation(BOSS, field_manager=True).split('=', 1)[1]
+        answer = Client().post('/api/auth/accept', json.dumps({'token': token, 'password': 'a long passphrase for tests'}),
+                                    content_type=JSON)
+        self.assertEqual(answer.status_code, 200)
+        account = User.objects.get(username=BOSS)
+        self.assertTrue(FA.in_group(account, FA.MANAGER))
+        self.assertFalse(FA.is_field_staff(account))
+
     def test_an_ordinary_invitation_is_not_field_staff(self):
         from .views import create_invitation
         token = create_invitation(OTHER).split('=', 1)[1]
         Client().post('/api/auth/accept', json.dumps({'token': token, 'password': 'a long passphrase for tests'}), content_type=JSON)
         self.assertFalse(FA.is_field_staff(User.objects.get(username=OTHER)))
+        self.assertFalse(FA.in_group(User.objects.get(username=OTHER), FA.MANAGER))
 
     def test_hosted_an_invitation_can_only_be_accepted_by_the_identity_it_names(self):
         from .views import create_invitation
@@ -245,6 +382,9 @@ class InviteTests(TestCase):
                 call_command('invite', 'plainname', stdout=out)
         call_command('invite', 'plainname', stdout=out)                            # locally any name still works
         self.assertFalse(Invitation.objects.get(username='plainname').field_staff)
+        call_command('invite', BOSS, '--field-manager', stdout=out)
+        made = Invitation.objects.get(username=BOSS)
+        self.assertEqual((made.field_manager, made.field_staff), (True, False))
 
     def test_the_admin_api_can_invite_field_staff(self):
         admin = User.objects.create_user('boss@example.test', password='correct horse battery staple', is_staff=True)

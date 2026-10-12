@@ -2,14 +2,19 @@
 
 Every person-level route is local_only (street_views.py): the passwordless owner on this machine, nobody else. Hosted there
 is no such owner, so those routes answer 403 to everyone, except the three the walk-list flow needs, which pass
-`field=True` and are then open to an account that is all of:
+`field=GROUP` and are then open to an account that is all of:
   * signed in, active, and in the Django group "field-staff" (granted when the invitation is made: manage.py invite
     --field-staff). The accounts database is this district's alone, so the group is district staff by construction;
   * the person the verified Cloudflare Access token names (the middleware in access.py, which must have run);
   * under the per-user rate limit.
 Opened: GET /api/v3/walk/lists (titles and counts), GET /api/v3/walk/lists/<key> (a saved list), POST /api/v3/walk/dispositions.
 Each opened read or write leaves an AuditEvent (who, route, list key, voter keys written: never a name, address or phone).
-Everything else, including building, exporting and scoring lists, contacts, search and the workspace, stays closed.
+Everything else, including scoring lists, contacts, search and the workspace, stays closed.
+
+Field managers: the group "field-manager" (manage.py invite --field-manager; nobody by default, and not implied by field-staff)
+opens the builder routes and nothing else: walk/{options,streets,match,list,overview,plan} and POST walk/lists, so a list can be
+made on the server, where the saved lists live. Same sign-in, same Access identity, same rate limit, and each call leaves an
+AuditEvent (route only: never a parameter, a name, an address or a phone).
 """
 import threading
 import time
@@ -21,6 +26,7 @@ from django.contrib.auth.models import Group
 from .models import AuditEvent
 
 GROUP = 'field-staff'
+MANAGER = 'field-manager'
 WINDOW = 60.0       # seconds the rate limit looks back
 
 _lock = threading.Lock()
@@ -34,13 +40,16 @@ def reset_rate_limits():
         _recent.clear()
 
 
-def grant(user):
-    group, _ = Group.objects.get_or_create(name=GROUP)
-    user.groups.add(group)
+def grant(user, group=GROUP):
+    user.groups.add(Group.objects.get_or_create(name=group)[0])
+
+
+def in_group(user, group):
+    return user.is_authenticated and user.is_active and user.groups.filter(name=group).exists()
 
 
 def is_field_staff(user):
-    return user.is_authenticated and user.is_active and user.groups.filter(name=GROUP).exists()
+    return in_group(user, GROUP)
 
 
 def limited(who, now=None):
@@ -56,8 +65,8 @@ def limited(who, now=None):
         return False
 
 
-def denied(request):
-    """The JSON error response unless this hosted request may use a field route, else None."""
+def denied(request, group=GROUP):
+    """The JSON error response unless this hosted request may use a route of `group` (field-staff or field-manager), else None."""
     from .street_views import response     # street_views imports this module lazily, so import it the same way
     who = getattr(request, 'access_email', None)
     if not settings.HOSTED or not who or who.startswith('service:'):
@@ -65,8 +74,8 @@ def denied(request):
     user = getattr(request, 'user', None)
     if user is None or not user.is_authenticated:
         return response({'error': 'Sign in to continue'}, 401)
-    if not is_field_staff(user):
-        return response({'error': 'This account is not field staff for this district.'}, 403)
+    if not in_group(user, group):
+        return response({'error': 'This account is not %s for this district.' % group.replace('-', ' ')}, 403)
     if limited(who):
         result = response({'error': 'Too many requests. Wait a minute and try again.'}, 429)
         result['Retry-After'] = str(int(WINDOW))

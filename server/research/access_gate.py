@@ -15,7 +15,8 @@ Environment (all optional unless the gate is enforced):
   ACCESS_AUD           the Access application's AUD tag.            (required when enforced)
   ACCESS_ISSUER        exact issuer, https://<team>.cloudflareaccess.com.   (required when enforced)
   ACCESS_JWKS_FILE     local copy of https://<team>.cloudflareaccess.com/cdn-cgi/access/certs,
-                       refreshed out of band; refused once older than 24 h.  (required when enforced)
+                       refreshed out of band; refused once older than 24 h or dated more than
+                       60 s in the future.  (required when enforced)
   ACCESS_SERVICE_CNS   optional comma-separated service-token common_name values, verbatim as
                        they appear in the token (Cloudflare's "<client id>.access").  Such a
                        token may reach /healthz and /version only.
@@ -23,7 +24,8 @@ Environment (all optional unless the gate is enforced):
                        can only add enforcement: a non-loopback bind is always enforced.
   GIT_SHA, BUILD_TIME, SNAPSHOT_ID_FILE   read by version_payload() for /version.
 
-Not enforced: every check is skipped and the app behaves exactly as before.
+Not enforced: every check is skipped and the app behaves exactly as before (two guards remain:
+HTTP_-style header names, and a real non-loopback bind, are denied; see Wiring below).
 Enforced: every request needs a Cf-Access-Jwt-Assertion header (the cookie is never read)
 carrying an RS256 token that verifies against ACCESS_JWKS_FILE with the right aud and iss and
 an email, plus an allowed Host.  Exceptions: /healthz and /version from a loopback peer with
@@ -36,11 +38,21 @@ Wiring (http.server):
         access_app = "mentat"
         access_cfg = require_config_or_exit()    # once, at startup
         def do_GET(self):
-            if not self.access_check():          # already answered 403 and logged
-                return
             ...                                  # self.send_security_headers() before end_headers()
+AccessMixin overrides parse_request(), so every request (GET, HEAD, POST, any unknown method) is
+gated once, before any do_* runs; a denial has already been answered 403 and logged.  Apps must
+NOT call access_check() per method any more (a second call is harmless but redundant).  The
+mixin also checks the address the server really bound (self.server.server_address[0]): an
+unenforced config on a non-loopback bind is refused with 403, whatever BIND_HOST said.
 Denials use send_response_only(), so http.server's own log line (client IP and query string)
 is not written for them; override log_message() in the app to keep allowed requests equally clean.
+
+Wiring (any other server, e.g. Django behind Waitress, which binds by its own flags):
+    assert_bind_consistent(cfg, bound_host)      # once, at startup, with the address really bound
+    check_request(cfg, method, path_with_query, headers, client_ip)    # per request
+Pass real header names: Django's request.headers and request.get_full_path(), never request.META.
+Any header name starting with HTTP_ (META style, which hides Cf-* and X-Forwarded-For from the
+proxy test) is denied, enforced or not.
 """
 from __future__ import annotations
 
@@ -146,9 +158,12 @@ def _b64u(text):
     if not isinstance(text, str) or not _B64U.fullmatch(text):
         raise AccessDenied("base64url")   # also rejects "=" padding and the empty string
     try:
-        return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+        raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
     except ValueError:
         raise AccessDenied("base64url")
+    if base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii") != text:   # canonical form only:
+        raise AccessDenied("base64url")                                       # stray slack bits decode alike
+    return raw
 
 
 def _json(text):
@@ -169,7 +184,7 @@ def _jwks(path, now, force=False):
         st = os.stat(path)
     except OSError:
         raise AccessDenied("jwks unreadable")
-    if now - st.st_mtime > JWKS_MAX_AGE:
+    if not -LEEWAY <= now - st.st_mtime <= JWKS_MAX_AGE:   # two-sided: a future-dated file is stale too
         raise AccessDenied("jwks stale")
     stamp = (st.st_mtime_ns, st.st_size)
     hit = _JWKS.get(path)
@@ -315,11 +330,23 @@ def _proxied(headers):
     return any(k.lower().startswith("cf-") or k.lower() in _FORWARDED for k, _ in headers.items())
 
 
+def _loopback_bind(host):
+    return str(host).strip().lower() in LOOPBACK or _loopback_peer(host)   # "", 0.0.0.0, :: are not
+
+
+def assert_bind_consistent(cfg, bound_host):
+    """For apps that bind by their own flags: call at startup with the address really bound."""
+    if not cfg.enforced and not _loopback_bind(bound_host):
+        raise AccessConfigError("bound to %r but the access gate is not enforced" % (bound_host,))
+
+
 def _deny(reason):
     return Decision(False, 403, None, reason)
 
 
 def check_request(cfg, method, path, headers, client_ip, now=None):
+    if any(str(k).lower().startswith("http_") for k, _ in headers.items()):
+        return _deny("meta header names")   # a Django META key would hide Cf-* / X-Forwarded-For
     if not cfg.enforced:
         return Decision(True, 200, None, "not enforced")
     route = str(path).split("?", 1)[0]
@@ -385,11 +412,19 @@ class AccessMixin:
         for name, value in security_headers(self.access_cfg, self.access_frame_options):
             self.send_header(name, value)
 
+    def parse_request(self):
+        """Gate every method once, before any do_*: handle_one_request stops on False.  If the
+        parse itself failed, http.server has already answered and access_check is not reached."""
+        return super().parse_request() and self.access_check()
+
     def access_check(self):
         """True to carry on.  False means a 403 has been sent and logged; just return."""
         if self.access_cfg is None:
             raise AccessConfigError("access_cfg is not set on the handler")   # no response: fail closed
-        d = check_request(self.access_cfg, self.command, self.path, self.headers, self.client_address[0])
+        if not self.access_cfg.enforced and not _loopback_bind(self.server.server_address[0]):
+            d = _deny("unenforced public bind")   # the address really bound decides, not BIND_HOST
+        else:
+            d = check_request(self.access_cfg, self.command, self.path, self.headers, self.client_address[0])
         self.access_user = d.user
         if d.allowed:
             return True

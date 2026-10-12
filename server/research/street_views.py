@@ -37,11 +37,11 @@ def response(payload, status=200):
 
 def local_denied(request, field=False):
     """The 403 response unless this is a direct loopback request of the signed-in local administrator, else None.
-    `field=True` (the few routes the walk-list flow needs) is the same rule locally; hosted, where there is no local
-    administrator and every other person-level route stays closed, it asks field_access.denied instead."""
+    `field` names a group (field_access.GROUP or MANAGER; the few routes the walk-list flow needs): the same rule locally;
+    hosted, where there is no local administrator and every other person-level route stays closed, the group decides."""
     if field and settings.HOSTED:
         from . import field_access
-        return field_access.denied(request)
+        return field_access.denied(request, field)
     try:
         loopback = ip_address(request.META.get("REMOTE_ADDR", "")).is_loopback
     except ValueError:

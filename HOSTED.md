@@ -6,7 +6,8 @@ Local use is unchanged: nothing here applies unless `CU_DEPLOYMENT=hosted`. The 
 
 Every request passes `server/research/access.py` first (the `AccessJwtMiddleware`, installed first by `server/settings.py`).
 It uses `server/research/access_gate.py`, a byte-identical copy of the canonical gate (never edit it here; change the canonical
-file and copy it over, compare sha256). A request needs a `Cf-Access-Jwt-Assertion` header carrying an RS256 token for this
+file and copy it over, compare sha256). The middleware hands the gate Django's `request.headers` (real header names) and `request.get_full_path()`, never `request.META`:
+the gate denies any `HTTP_*` header name. A request needs a `Cf-Access-Jwt-Assertion` header carrying an RS256 token for this
 district's Access application (`ACCESS_AUD`, `ACCESS_ISSUER`, signing keys in `ACCESS_JWKS_FILE`) and an allowed `Host`. Anything
 else is `403 forbidden`. The one exception is `GET /api/health` from a loopback peer with no proxy headers (the container's own
 probe). After the session layer runs, a signed-in account must be the person the token names (the token's email equals the account's
@@ -23,7 +24,8 @@ Environment (read at startup; a missing value stops the server):
 | `CU_SECRET_KEY` | per district, 50+ random characters |
 | `CU_ALLOWED_HOSTS`, `CU_TRUSTED_ORIGINS` | exact hostname(s) and the https origin; no wildcard |
 | `CU_DISTRICT` | `co-05`, `or-05` or `ct-01` |
-| `ACCESS_AUD`, `ACCESS_ISSUER`, `ACCESS_JWKS_FILE` | this district's Access application; the JWKS file is refused after 24 hours |
+| `ACCESS_AUD`, `ACCESS_ISSUER`, `ACCESS_JWKS_FILE` | this district's Access application; the JWKS file is refused after 24 hours or when dated in the future |
+| `ACCESS_ENFORCE=1` | baked into the image: `manage.py serve` (hosted) reads the gate's settings from the plain environment and exits without them, and refuses a public `CU_BIND` when the gate is not enforced (`assert_bind_consistent`) |
 | `ACCESS_SERVICE_CNS` | optional service-token common names (they may reach `/api/health` only) |
 | `CU_BIND`, `PORT` | listen address (the image: `0.0.0.0:8080`; default everywhere else `127.0.0.1`). A non-loopback `CU_BIND` is refused unless hosted. |
 | `CU_DATA_DIR` | the district's stores, mounted read-only |
@@ -45,8 +47,10 @@ stand-up before setting `CU_HTTPS_REDIRECT=1` (a missing header would make an en
 ## Person-level routes
 
 Every person-level route is `local_only`: the passwordless owner on the laptop and nobody else. Hosted there is no such owner, so
-they are all 403, except the three the walk-list and door-knock flows need. Those are open to an account that is signed in, active,
-in the Django group `field-staff`, the person the token names, and under the rate limit (`server/research/field_access.py`):
+they are all 403, except the ten below, in two groups. Each is open to an account that is signed in, active, in the named Django
+group, the person the token names, and under the rate limit (`server/research/field_access.py`; one per-user counter covers both
+groups). The groups are independent: `field-manager` does not imply `field-staff`, and nobody is in either by default. Group
+`field-staff`:
 
 | Open to field staff | Used for |
 |---|---|
@@ -54,16 +58,27 @@ in the Django group `field-staff`, the person the token names, and under the rat
 | `GET /api/v3/walk/lists/<key>` | a saved list: its runs, doors and voters, with each voter's latest result |
 | `POST /api/v3/walk/dispositions` | recording door-knock results |
 
-The walk-list PDF is built in the browser from the saved list, so it needs nothing else. Each opened read or write writes an
+Group `field-manager` (building and saving lists on the server, where the saved lists live):
+
+| Open to field managers | Used for |
+|---|---|
+| `GET /api/v3/walk/{options,streets,list,overview,plan}` | picking the area and streets, and building a list or street plan to look at |
+| `POST /api/v3/walk/match` | matching an uploaded street list |
+| `POST /api/v3/walk/lists` | saving a list (or a re-knock list) |
+
+Each call writes an `AuditEvent` by route (`walk.build.<name>`; a saved list adds `walk.list.create` with its key): never a
+parameter, title, name, address or phone. `/walk/scores` stays closed to everyone.
+
+The walk-list PDF is built in the browser from the saved list, so it needs nothing else. Each opened field-staff read or write writes an
 `AuditEvent` (who, route, list key, and for results the voter keys: never a name, address or phone). The PDF carries the signed-in
-email and the UTC time on every page. Still closed: building, planning, matching, scoring and creating lists
-(`/api/v3/walk/{options,streets,match,list,overview,plan,scores}` and `POST /walk/lists`), contacts and their export, the global
+email and the UTC time on every page. Still closed to both groups: scoring (`/api/v3/walk/scores`), contacts and their export, the global
 search, the workspace, people/person/household/street, the legacy `/api/{street,household,street-preload,contacts,person}`,
 credit-quality, and the summary-table CSV download. The page hides the CSV download and the scores toggle when hosted.
 
 Staff are invited inside the running container; the account name is their Access email address:
 
     python manage.py invite name@example.org --field-staff --origin https://co05.example.org
+    python manage.py invite name@example.org --field-manager --origin https://co05.example.org     # may build and save lists; add --field-staff too to also walk them
 
 An invitation can only be accepted by the Access identity it names. District separation is by construction: each district is its own
 container with its own accounts database and its own Access application, so district staff exist only in their own district.

@@ -24,10 +24,12 @@
 
 Every endpoint is local only (loopback owner, no proxy headers, not hosted), answers 403 in demo mode (lists carry real
 names and phones), is `no-store`, takes an exact list of query parameters and, for POST, a JSON object of at most 256 KB.
-Hosted (CU_DEPLOYMENT=hosted) there is no local owner and exactly three routes open, to field staff only (field_access.py):
-GET /walk/lists, GET /walk/lists/<key> and POST /walk/dispositions; every other route here, building and scoring included,
-answers 403. Django enforces CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded
-for a person on its roster, and the roster's voter keys travel privately inside the stored payload.
+Hosted (CU_DEPLOYMENT=hosted) there is no local owner (field_access.py). Three routes open to field staff (group field-staff):
+GET /walk/lists, GET /walk/lists/<key> and POST /walk/dispositions. Seven open to field managers (group field-manager, who are
+not thereby field staff): options, streets, match, list, overview, plan and POST /walk/lists, so a list can be built and saved on
+the server. Each call leaves an AuditEvent (route only). Every other route here, scores included, answers 403. Django enforces
+CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded for a person on its
+roster, and the roster's voter keys travel privately inside the stored payload.
 """
 import hashlib
 import json
@@ -142,12 +144,31 @@ def write(function):
 
 def field_read(function):
     """read(), also open to hosted field staff (field_access.py)."""
-    return local_only(guarded(function), field=True)
+    return local_only(guarded(function), field=FA.GROUP)
 
 
 def field_write(function):
     """write(), also open to hosted field staff."""
-    return local_only_post(guarded(function), field=True)
+    return local_only_post(guarded(function), field=FA.GROUP)
+
+
+def audited(function):
+    """One AuditEvent per call that got past the gate (hosted only): the route and the function, never a parameter."""
+    @wraps(function)
+    def wrapped(request, *args, **kwargs):
+        FA.audit(request, 'walk.build.' + function.__name__)
+        return function(request, *args, **kwargs)
+    return wrapped
+
+
+def manager_read(function):
+    """read(), also open to hosted field managers (field_access.py): the routes that build a list."""
+    return local_only(guarded(audited(function)), field=FA.MANAGER)
+
+
+def manager_write(function):
+    """write(), also open to hosted field managers."""
+    return local_only_post(guarded(audited(function)), field=FA.MANAGER)
 
 
 # ---- request parsing -----------------------------------------------------------------------------------------------
@@ -268,7 +289,7 @@ def short(code):
     return str(int(code)) if code.isdigit() else code
 
 
-@read
+@manager_read
 def options(request):
     q = params(request, {'level', 'ss', 'sh'}, {'level'})
     level = clean(q['level'], r'ss|sh|precinct')
@@ -285,7 +306,7 @@ def street_json(street, count):
             'doors': count['doors'], 'people': count['people'], 'even': count['even'], 'odd': count['odd']}
 
 
-@read
+@manager_read
 def streets(request):
     q = params(request, {'q', 'ss', 'sh', 'precinct'})
     text = q.get('q', '').strip()
@@ -358,7 +379,7 @@ def decide(hits, city, zip_code, doors):
     return [], labels[:MAX_SUGGESTIONS]
 
 
-@write
+@manager_write
 def match(request):
     params(request, set())
     body = json_body(request, {'rows', 'ss', 'sh', 'precinct'})
@@ -572,7 +593,7 @@ def attach_last(payload, keys):
                 voter['last'] = last.get(keys.get(voter['person_id']))
 
 
-@read
+@manager_read
 def walk_list(request):
     picks, spans, area, query = list_query(params(request, QUERY_KEYS))
     with W.walk_store() as store:
@@ -584,7 +605,7 @@ def walk_list(request):
 
 # ---- the blocks of an area -----------------------------------------------------------------------------------------
 
-@read
+@manager_read
 def overview(request):
     area = area_of(params(request, W.AREA_COLUMNS))
     if not area:
@@ -754,7 +775,7 @@ def parse_doors(text, area):
     return asked
 
 
-@read
+@manager_read
 def plan(request):
     roi = settings.DISTRICT['roi']
     if roi is None:
@@ -893,7 +914,7 @@ def reknock(title, parent_key):
     return freeze(payload, keys, title, 'reknock', parent, info), len(again) - len({row['voter_key'] for row in rows})
 
 
-@write
+@manager_write
 def create_list(request):
     params(request, set())
     body = json_body(request, {'title', 'query', 'fingerprint', 'from', 'reknock'})
@@ -902,6 +923,7 @@ def create_list(request):
         if set(body) != {'title', 'from', 'reknock'} or body['reknock'] is not True:
             raise BadRequest('A re-knock list needs title, from and reknock: true')
         payload, missing = reknock(title, body['from'])
+        FA.audit(request, 'walk.list.create', list=payload['list']['key'], kind='reknock')
         return response({**C.attach(payload), 'missing': missing}, 201)     # voters marked Not home the data no longer has
     query = body.get('query')
     if set(body) - {'fingerprint'} != {'title', 'query'} or not isinstance(query, dict) or not set(query) <= QUERY_KEYS:
@@ -915,6 +937,7 @@ def create_list(request):
         info = store.info
     attach_last(payload, keys)
     saved = C.attach(freeze(payload, keys, title, 'standard', None, info))
+    FA.audit(request, 'walk.list.create', list=saved['list']['key'], kind='standard')
     # The list is built again to be saved. If the voter data changed since the walker was shown it, the list saved is the
     # new one, never quietly: `changed` tells the page to show the list it gets back instead of the one it had.
     return response({**saved, 'changed': shown != saved['fingerprint']}, 201)

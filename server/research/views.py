@@ -104,20 +104,21 @@ def accept_invitation(request):
             validate_password(data.get('password',''),user)
             user.set_password(data['password']);user.is_active=True;user.save()
             if invite.field_staff:field_access.grant(user)
+            if invite.field_manager:field_access.grant(user,field_access.MANAGER)
             invite.used_at=timezone.now();invite.save()
             AuditEvent.objects.create(actor=user.username,action='account.reset' if invite.reset else 'account.activate')
         login(request,user);return who(request)
     except ValidationError as e:return JsonResponse({'error':' '.join(e.messages)},status=400)
     except (ValueError,KeyError,TypeError):return JsonResponse({'error':'Invalid invitation request'},status=400)
 
-def create_invitation(username,administrator=False,reset=False,field_staff=False):
+def create_invitation(username,administrator=False,reset=False,field_staff=False,field_manager=False):
     if not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,150}',username):raise ValueError('Invalid username')
     # Hosted, a person is who Cloudflare Access says they are: the account is named by that email (access.py compares them).
     if settings.HOSTED and not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',username):raise ValueError('Hosted accounts are named by an email address')
     if User.objects.filter(username=username).exists()!=reset:raise ValueError('Use reset for an existing account, invitation for a new account')
     Invitation.objects.filter(username=username,used_at=None).update(expires_at=timezone.now())
     token=secrets.token_urlsafe(36)
-    Invitation.objects.create(token_hash=hashlib.sha256(token.encode()).hexdigest(),username=username,administrator=administrator,field_staff=field_staff,reset=reset,expires_at=timezone.now()+timedelta(hours=24))
+    Invitation.objects.create(token_hash=hashlib.sha256(token.encode()).hexdigest(),username=username,administrator=administrator,field_staff=field_staff,field_manager=field_manager,reset=reset,expires_at=timezone.now()+timedelta(hours=24))
     return '/?invite='+token
 
 @protected(admin=True)

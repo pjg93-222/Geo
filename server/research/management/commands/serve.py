@@ -121,6 +121,12 @@ class Command(BaseCommand):
         if bind not in access_gate.LOOPBACK and not settings.HOSTED:
             raise CommandError('CU_BIND=%s is not loopback: only a hosted deployment (CU_DEPLOYMENT=hosted, behind Cloudflare '
                                'Access) may listen beyond this machine.' % bind)
+        if settings.HOSTED:     # the gate's own startup rules on the plain environment (the image bakes ACCESS_ENFORCE=1)
+            cfg = access_gate.require_config_or_exit()      # ACCESS_AUD, ACCESS_ISSUER, ACCESS_JWKS_FILE or exit status 2
+            try:
+                access_gate.assert_bind_consistent(cfg, bind)   # a public bind with the gate switched off never starts
+            except access_gate.AccessConfigError as problem:
+                raise CommandError('Cloudflare Access: %s' % problem) from None
         if os.environ.get('CU_DISTRICT'):               # the stores in this directory must be this district's
             try:
                 D.check_data_dir(settings.DISTRICT, settings.DATA_DIR)

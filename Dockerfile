@@ -19,7 +19,7 @@ RUN python -m venv /opt/venv && /opt/venv/bin/pip install --require-hashes --no-
 
 FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH=/opt/venv/bin:$PATH \
-    CU_DEPLOYMENT=hosted CU_BIND=0.0.0.0 PORT=8080 CU_HTTPS_REDIRECT=0 \
+    CU_DEPLOYMENT=hosted CU_BIND=0.0.0.0 PORT=8080 CU_HTTPS_REDIRECT=0 ACCESS_ENFORCE=1 \
     CU_DATA_DIR=/data CU_STATE_DIR=/state CU_BUNDLE=/data/bundle.zip
 RUN groupadd --gid 10001 app \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \

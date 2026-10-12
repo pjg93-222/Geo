@@ -1,6 +1,7 @@
 """Hosted deployment, the front door: the Cloudflare Access middleware, the settings a hosted deployment must have, the bind
 address, the sign-in throttle's key and the district selector's links. Synthetic accounts only; tokens are signed at run time
 with a throwaway key (access_testkit.py)."""
+import hashlib
 import json
 import os
 import subprocess
@@ -21,10 +22,13 @@ from django.utils import timezone
 from tools import districts as D
 
 from . import access
+from . import access_gate
 from . import access_testkit as K
 from .models import LoginAttempt
 from .views import client_address
 
+# sha256 of the canonical gate (Melange Systems fec/access_gate.py, branch deploy/access-gate): never edited here, only re-copied.
+GATE_SHA256 = 'dc7ef05085044601884ce037f21c1b44d774e7dffba3a0276a3ea5423227e58d'
 SESSION_KEYS = {'authenticated', 'username', 'administrator', 'local_admin_access', 'csrf'}
 
 
@@ -100,6 +104,8 @@ class AccessMiddlewareTests(TestCase):
     def test_only_api_health_is_open_to_a_loopback_probe(self):
         probe = dict(HTTP_HOST='127.0.0.1:8080', REMOTE_ADDR='127.0.0.1')
         self.assertEqual(Client(**probe).get('/api/health').json()['status'], 'ok')
+        self.assertEqual(Client(**probe).get('/api/health?x=1').status_code, 200)           # the gate sees path plus query
+        self.assertEqual(Client(**probe).get('/api/health%3Fx=1').status_code, 403)          # an encoded "?" is part of the path
         for path in ('/api/auth/session', '/api/v3/meta', '/', '/healthz', '/version', '/api/health/x'):
             self.assertEqual(Client(**probe).get(path).status_code, 403, path)
         for header in ('HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'HTTP_FORWARDED'):
@@ -123,6 +129,14 @@ class AccessMiddlewareTests(TestCase):
 
 
 class AccessConfigTests(SimpleTestCase):
+    def test_the_gate_is_the_canonical_copy_byte_for_byte(self):
+        self.assertEqual(hashlib.sha256(Path(access_gate.__file__).read_bytes()).hexdigest(), GATE_SHA256)
+
+    def test_the_gate_refuses_meta_style_header_names_so_the_middleware_must_not_pass_them(self):
+        cfg = access.load_config(self.GOOD)
+        meta = {'HTTP_HOST': 'co05.example.test', 'HTTP_CF_ACCESS_JWT_ASSERTION': 'x'}
+        self.assertEqual(access_gate.check_request(cfg, 'GET', '/', meta, '172.18.0.5').reason, 'meta header names')
+
     GOOD = {'ACCESS_AUD': 'aud', 'ACCESS_ISSUER': 'https://t.cloudflareaccess.com', 'ACCESS_JWKS_FILE': '/access/jwks.json',
             'CU_ALLOWED_HOSTS': 'co05.example.test,127.0.0.1'}
 
@@ -253,8 +267,29 @@ class ServeBindTests(SimpleTestCase):
             self.assertEqual(self.serve(CU_BIND='::1').call_args.kwargs['host'], '::1')
 
     def test_hosted_binds_where_it_is_told(self):
-        with override_settings(HOSTED=True):
+        with K.hosted():                    # the Access settings and ACCESS_ENFORCE=1, as the image has them
             self.assertEqual(self.serve(CU_BIND='0.0.0.0').call_args.kwargs['host'], '0.0.0.0')
+
+    def test_a_hosted_start_without_the_access_settings_never_binds(self):
+        with K.hosted():
+            for name in ('ACCESS_AUD', 'ACCESS_ISSUER', 'ACCESS_JWKS_FILE'):
+                with mock.patch.dict(os.environ):
+                    os.environ.pop(name)
+                    with self.assertRaises(SystemExit, msg=name) as raised:
+                        self.serve(CU_BIND='0.0.0.0')
+                    self.assertEqual(raised.exception.code, 2)
+
+    def test_a_hosted_public_bind_with_the_gate_switched_off_never_binds(self):
+        with K.hosted():
+            for flag in ('0', None):        # overridden, or missing from the environment
+                with mock.patch.dict(os.environ):
+                    os.environ.pop('ACCESS_ENFORCE')
+                    with self.assertRaises(CommandError, msg=flag) as raised:
+                        self.serve(CU_BIND='0.0.0.0', **({} if flag is None else {'ACCESS_ENFORCE': flag}))
+                    self.assertIn('not enforced', str(raised.exception))
+
+    def test_the_image_bakes_the_gate_on(self):
+        self.assertIn('ACCESS_ENFORCE=1', (Path(settings.BASE_DIR) / 'Dockerfile').read_text(encoding='utf-8'))
 
 
 class ThrottleKeyTests(TestCase):

@@ -114,7 +114,7 @@ def hosted(**overrides):
         certs = os.path.join(tmp, 'certs.json')
         write_jwks(certs)
         env = {'ACCESS_AUD': AUD, 'ACCESS_ISSUER': ISS, 'ACCESS_JWKS_FILE': certs, 'CU_ALLOWED_HOSTS': HOST + ',127.0.0.1',
-               'ACCESS_SERVICE_CNS': 'svc-client.access'}
+               'ACCESS_SERVICE_CNS': 'svc-client.access', 'ACCESS_ENFORCE': '1'}      # the image bakes ACCESS_ENFORCE=1
         stack = [ACCESS_MIDDLEWARE] + [m for m in settings.MIDDLEWARE if m not in (ACCESS_MIDDLEWARE, LOCAL_MIDDLEWARE)]
         with mock.patch.dict(os.environ, env), override_settings(
                 HOSTED=True, LOCAL_ADMIN_ACCESS=False, MIDDLEWARE=stack, ALLOWED_HOSTS=[HOST, '127.0.0.1', 'testserver'],

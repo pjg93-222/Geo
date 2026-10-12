@@ -56,8 +56,12 @@ class AccessJwtMiddleware:
         request.access_reason = None
         # The gate's loopback exemption is for /healthz and /version. Here only /api/health may use it: that route is mapped onto
         # /healthz, and the gate's own two routes (which this app does not have) are changed to a path that is exempt from nothing.
-        path = '/healthz' if request.path == HEALTH else '/' if request.path in gate.HEALTH_ROUTES else request.path
-        decision = gate.check_request(self.cfg, request.method, path, request.headers, request.META.get('REMOTE_ADDR', ''))
+        # The gate wants real header names and path plus query: request.headers and request.get_full_path(). Never request.META
+        # as the headers: the gate denies HTTP_* names. (META is read for the peer address only.)
+        path, mark, query = request.get_full_path().partition('?')     # a "?" inside the path is percent-encoded by then
+        path = '/healthz' if path == HEALTH else '/' if path in gate.HEALTH_ROUTES else path
+        decision = gate.check_request(self.cfg, request.method, path + mark + query, request.headers,
+                                      request.META.get('REMOTE_ADDR', ''))
         if not decision.allowed:
             request.access_reason = decision.reason
             response = self.refuse()
