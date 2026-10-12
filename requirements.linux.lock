@@ -1,0 +1,36 @@
+# Hashed Linux lock for the Terrier hosted image (Dockerfile); do not edit by hand.
+# Input: requirements.linux.in (this repo).
+# Target: CPython 3.12, linux x86_64, glibc 2.36 (python:3.12-slim-bookworm); wheels only (manylinux2014 and manylinux_2_28 tags).
+# Generated 2026-10-12 with pip 25.0.1:
+#   python -m pip install --dry-run --ignore-installed --report report.json --platform manylinux2014_x86_64 --platform manylinux_2_28_x86_64 --python-version 3.12 --implementation cp --only-binary=:all: --target tgt -r requirements.linux.in
+# then, for each resolved name==version, every wheel of that version on PyPI (JSON API) that the platform tags above accept;
+# each hash is that file's sha256 from PyPI.
+# Install: pip install --require-hashes --no-deps -r requirements.linux.lock
+argon2-cffi==25.1.0 \
+    --hash=sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741
+argon2-cffi-bindings==26.1.0 \
+    --hash=sha256:27f1821903e2ceadcb88ec2b45ef190897b7682449c772f4d9b53e42c520cf29
+asgiref==3.12.1 \
+    --hash=sha256:fe386d1c2bff7259ea95929266d12a8cf9a8b5a1c2598402967d8792e7a7c094
+cffi==2.1.1 \
+    --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
+django==5.2.18 \
+    --hash=sha256:92ed81d500be6408ecd704d7bd1366c534f30427bffcc63c5fefb129561aec7c
+numpy==2.5.4 \
+    --hash=sha256:fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a
+pandas==3.0.6 \
+    --hash=sha256:0704044b676496b8350e023b09f174a26772456c974a2b11c36bebb558c9490d
+pycparser==3.11 \
+    --hash=sha256:51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80
+python-dateutil==2.9.0.post0 \
+    --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
+shapely==2.2.0 \
+    --hash=sha256:650a5f4d8a8e3c96982079d8c99b6ddbe6602bbd1e34c75c2b95dbc0d28ac997
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+sqlparse==0.6.0 \
+    --hash=sha256:b861c0288ce2fa56209a9a6412d2e066ac664b3873b89c26c9d8415e8e32996f
+tzdata==2026.5 \
+    --hash=sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac
+waitress==3.0.2 \
+    --hash=sha256:c56d67fd6e87c2ee598b76abdd4e96cfad1f24cacdea5078d382b1f9d7b5ed2e

@@ -109,8 +109,14 @@ rebuild a district's stores in a data directory that has lost it.
 
 ## Image, compose and release
 
-`Dockerfile`: node build of the frontend, hashed Python dependencies from `requirements.linux.lock` (compile it from
-`requirements.linux.in` with the command in that file), then `python:3.12-slim-bookworm` as uid 10001 with no login shell. No data is
-baked in. `compose.yaml` is an example for three districts sharing one image (read-only root, `cap_drop: ALL`, no published ports, a
-separate data volume, state volume and secrets file per district). `.github/workflows/release.yml` runs on a `v*` tag: tests, the image by
-digest to `ghcr.io/pjg93-222/terrier-web`, an SBOM, and `digests.json`, attached to a draft release.
+`Dockerfile`: node build of the frontend, hashed Python dependencies from `requirements.linux.lock` (CPython 3.12, linux x86_64,
+wheels only; the command that made it is in its header, the inputs are in `requirements.linux.in`), then `python:3.12-slim-bookworm`
+as uid 10001 with no login shell. Both base images are pinned by index digest (the same python and node digests as the platform
+repo's `ops/images.lock`). `ARG GIT_SHA` and `ARG BUILD_TIME` (set by CI) become the image's `GIT_SHA` and `BUILD_TIME`
+environment, which `access_gate.version_payload` reads. (Terrier has no `/version` route: the middleware sends it to `/`, so it answers 403; the
+platform's updater and `release status` expect `/version`, an open item.) No data is baked in. `compose.yaml` is an example for three districts sharing one image
+(read-only root, `cap_drop: ALL`, no published ports, a separate data volume, state volume and secrets file per district); the
+platform repo's `ops/compose.yaml` is the one the server runs. `.github/workflows/release.yml` runs on a `v*` tag, with every action
+pinned to a commit SHA: tests, the image by digest to `ghcr.io/pjg93-222/terrier-web` (a check that the image holds no data files),
+an SBOM, and `digests.json` (`{tag, commit, images: {"terrier-web": "<image>@sha256:..."}}`, the shape `ops/release.py` reads),
+attached to a draft release.

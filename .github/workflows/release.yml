@@ -1,8 +1,9 @@
 # Release: on a v* tag, test, build the hosted image, push it to GHCR by digest, write its SBOM and digests.json, and attach
 # both to a DRAFT release (publishing the release stays a manual step). CI is the only builder: no Docker is needed on the laptop.
 #
-# Before the first run: compile and commit requirements.linux.lock (see requirements.linux.in), and pin each `uses:` below to a
-# full commit SHA (tags are mutable; the security gate checks this).
+# requirements.linux.lock (hashed, from requirements.linux.in) is committed, and every `uses:` below is pinned to a full commit SHA
+# (the tag it was resolved from is the trailing comment; re-resolve with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
+# The platform's ops/release.py reads digests.json from the draft release (images.terrier-web) and the image's /version git_sha.
 name: release
 
 on:
@@ -20,10 +21,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
       # The exact versions the laptop tests with (requirements.lock.txt pins them; it has no hashes), including the build-time
@@ -56,35 +57,61 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: |
+          {
+            echo "epoch=$(git log -1 --format=%ct)"
+            echo "created=$(git log -1 --format=%cI)"
+          } >> "$GITHUB_OUTPUT"
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          push: true
-          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
+          outputs: type=image,name=${{ env.IMAGE }}:${{ github.ref_name }},push=true,rewrite-timestamp=true
           provenance: false
+          sbom: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.meta.outputs.epoch }}
+      # No voter data may ride in the image (the data arrives as a read-only mount). field_dictionary.csv is the column
+      # dictionary the app ships, not data.
+      - name: Image must hold no data
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull "$REF" >/dev/null
+          found=$(docker run --rm --entrypoint sh "$REF" -c \
+            'find /app /data /state -xdev \( -name "*.zip" -o -name "*.sqlite*" -o -name "*.parquet" -o -name "*.csv" \) ! -name field_dictionary.csv 2>/dev/null || true')
+          [ -z "$found" ] || { echo "::error::image contains data files:"; echo "$found"; exit 1; }
       - name: SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: terrier-web.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      # The shape ops/release.py parses (parse_digests): the same as the platform's digests.json, images.<name> = ref@digest.
       - name: digests.json
-        run: >
-          jq -n --arg image "$IMAGE" --arg digest "${{ steps.build.outputs.digest }}" --arg tag "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA"
-          '{image: $image, tag: $tag, digest: $digest, reference: ($image + "@" + $digest), git_sha: $sha}' > digests.json
-      - uses: actions/upload-artifact@v4
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg tag "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA" --arg image "$IMAGE@$DIGEST" \
+            '{tag: $tag, commit: $sha, images: {"terrier-web": $image}}' > digests.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-files
           path: |
@@ -98,7 +125,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-files
       - name: Attach to a draft release
