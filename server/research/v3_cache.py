@@ -25,6 +25,8 @@ from tools import districts as D
 from tools import field_labels as FL
 from tools.geography_levels import area_label
 
+from .state import state_dir
+
 log = logging.getLogger('cu.v3')
 
 DERIVED_VERSION = 'v3'                     # v3: every area is shown (status 'ok'; 'empty' = a polygon with no registered people)
@@ -66,7 +68,7 @@ def _lock(key, name):
 def snapshot_dir(key):
     if not SNAPSHOT_RE.fullmatch(key):
         raise ValueError('Invalid snapshot key')
-    return Path(settings.DATA_DIR) / 'snapshots' / key
+    return state_dir() / 'snapshots' / key
 
 
 def derived_path(key, name):

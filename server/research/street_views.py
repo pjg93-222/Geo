@@ -35,8 +35,13 @@ def response(payload, status=200):
     return result
 
 
-def local_denied(request):
-    """The 403 response unless this is a direct loopback request of the signed-in local administrator, else None."""
+def local_denied(request, field=False):
+    """The 403 response unless this is a direct loopback request of the signed-in local administrator, else None.
+    `field=True` (the few routes the walk-list flow needs) is the same rule locally; hosted, where there is no local
+    administrator and every other person-level route stays closed, it asks field_access.denied instead."""
+    if field and settings.HOSTED:
+        from . import field_access
+        return field_access.denied(request)
     try:
         loopback = ip_address(request.META.get("REMOTE_ADDR", "")).is_loopback
     except ValueError:
@@ -50,10 +55,13 @@ def local_denied(request):
     return None
 
 
-def local_only(function):
+def local_only(function=None, *, field=False):
+    if function is None:
+        return lambda inner: local_only(inner, field=field)
+
     @wraps(function)
     def wrapped(request, *args, **kwargs):
-        denied = local_denied(request)
+        denied = local_denied(request, field)
         if denied is not None:
             return denied
         if request.method != "GET":
@@ -69,11 +77,14 @@ def local_only(function):
     return wrapped
 
 
-def local_only_post(function):
+def local_only_post(function=None, *, field=False):
     """local_only for POST endpoints: the same loopback gate, POST required. CSRF stays with Django's middleware."""
+    if function is None:
+        return lambda inner: local_only_post(inner, field=field)
+
     @wraps(function)
     def wrapped(request, *args, **kwargs):
-        denied = local_denied(request)
+        denied = local_denied(request, field)
         if denied is not None:
             return denied
         if request.method != "POST":

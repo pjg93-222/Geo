@@ -9,6 +9,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from server.research import access_gate
 from server.wsgi import application
 from tools import districts as D
 
@@ -106,7 +107,8 @@ def warm():
 
 
 class Command(BaseCommand):
-    help = 'Run the local app on loopback with Waitress.'
+    help = ('Run the app with Waitress: on loopback, or on CU_BIND when CU_DEPLOYMENT=hosted (the container binds 0.0.0.0 '
+            'behind Cloudflare Access).')
 
     # v3 copy: the default is 8766 (CU_PORT overrides). 8765 belongs to the live app and is never a default here.
     def add_arguments(self, p):
@@ -115,16 +117,23 @@ class Command(BaseCommand):
 
     def handle(self, *args, **o):
         from waitress import serve
+        bind = (os.environ.get('CU_BIND') or '127.0.0.1').strip().lower()
+        if bind not in access_gate.LOOPBACK and not settings.HOSTED:
+            raise CommandError('CU_BIND=%s is not loopback: only a hosted deployment (CU_DEPLOYMENT=hosted, behind Cloudflare '
+                               'Access) may listen beyond this machine.' % bind)
         if os.environ.get('CU_DISTRICT'):               # the stores in this directory must be this district's
             try:
                 D.check_data_dir(settings.DISTRICT, settings.DATA_DIR)
             except ValueError as problem:
                 raise CommandError(str(problem)) from problem
-        self.stdout.write(f'Credit Union Geography: http://127.0.0.1:{o["port"]}')
-        enable_fault_log(o['port'])
+        self.stdout.write(f'Credit Union Geography: http://{"[" + bind + "]" if ":" in bind else bind}:{o["port"]}')
+        if settings.HOSTED:                             # the root file system is read-only: faults go to the container log
+            faulthandler.enable(all_threads=True)
+        else:
+            enable_fault_log(o['port'])
         if not o['no_warm']:
             threading.Thread(target=warm, name='warm', daemon=True).start()
         # Keep proxy headers visible so local-only middleware can reject them.
         # No proxy is trusted; REMOTE_ADDR remains the actual connection peer.
-        serve(application, host='127.0.0.1', port=o['port'], threads=8,
+        serve(application, host=bind, port=o['port'], threads=8,
               clear_untrusted_proxy_headers=False)

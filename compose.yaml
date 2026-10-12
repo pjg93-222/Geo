@@ -1,16 +1,82 @@
+# Terrier, hosted: three districts, one image. EXAMPLE: copy it, then fill in the hostnames and paths for the server.
+#
+# Per district: its own read-only data directory (the snapshot push writes /srv/terrier/<district>/data), its own writable
+# state volume (accounts, walk lists, door-knock results: the master copy of field results), and its own secrets file.
+# Nothing is published. cloudflared (its own service, on the `serve` network) reaches http://terrier-co05:8080 and so on;
+# every request must carry that district's Cloudflare Access token (one Access application, one AUD, per district).
+#
+#   TERRIER_IMAGE=ghcr.io/pjg93-222/terrier-web@sha256:<digest from digests.json> docker compose up -d --wait
+#
+# secrets/<district>.env (never in git, mode 0600) holds, per district:
+#   CU_SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(64))">     a different one for each district
+#   ACCESS_AUD=<the AUD tag of that district's Access application>
+# /srv/access/jwks.json is refreshed by a host timer from https://<team>.cloudflareaccess.com/cdn-cgi/access/certs (the app
+# refuses a file older than 24 hours).
+#
+# Invite field staff (inside the running container; the account name is the person's Access email address):
+#   docker compose exec terrier-co05 python manage.py invite name@example.org --field-staff --origin https://co05.example.org
+
+x-terrier: &terrier
+  image: ${TERRIER_IMAGE:?pin the image by digest, for example ghcr.io/pjg93-222/terrier-web@sha256:...}
+  restart: unless-stopped
+  read_only: true
+  user: "10001:10001"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=64m"]
+  mem_limit: 2g
+  networks: [serve]
+  environment: &terrier-env
+    ACCESS_ISSUER: ${ACCESS_ISSUER:?https://<team>.cloudflareaccess.com}
+    ACCESS_JWKS_FILE: /access/jwks.json
+    # The districts' own addresses, for the selector in the header (district=address, comma separated).
+    CU_DISTRICT_URLS: co-05=https://${CO05_HOST:?set CO05_HOST},or-05=https://${OR05_HOST:?set OR05_HOST},ct-01=https://${CT01_HOST:?set CT01_HOST}
+
 services:
-  app:
-    build: .
+  terrier-co05:
+    <<: *terrier
+    env_file: ./secrets/co05.env
     environment:
-      CU_DEPLOYMENT: hosted
-      CU_SECRET_KEY: ${CU_SECRET_KEY:?Set a unique secret in the deployment environment}
-      CU_ALLOWED_HOSTS: ${CU_ALLOWED_HOSTS:?Set the hosted domain},127.0.0.1
-      CU_TRUSTED_ORIGINS: ${CU_TRUSTED_ORIGINS:?Set the HTTPS origin}
-      CU_DATA_DIR: /data
-    ports:
-      - "127.0.0.1:8080:8080"
+      <<: *terrier-env
+      CU_DISTRICT: co-05
+      CU_ALLOWED_HOSTS: ${CO05_HOST:?set CO05_HOST},127.0.0.1
+      CU_TRUSTED_ORIGINS: https://${CO05_HOST:?set CO05_HOST}
     volumes:
-      - research-data:/data
-    restart: unless-stopped
+      - /srv/terrier/co05/data:/data:ro
+      - /srv/access:/access:ro
+      - co05-state:/state
+
+  terrier-or05:
+    <<: *terrier
+    env_file: ./secrets/or05.env
+    environment:
+      <<: *terrier-env
+      CU_DISTRICT: or-05
+      CU_ALLOWED_HOSTS: ${OR05_HOST:?set OR05_HOST},127.0.0.1
+      CU_TRUSTED_ORIGINS: https://${OR05_HOST:?set OR05_HOST}
+    volumes:
+      - /srv/terrier/or05/data:/data:ro
+      - /srv/access:/access:ro
+      - or05-state:/state
+
+  terrier-ct01:
+    <<: *terrier
+    env_file: ./secrets/ct01.env
+    environment:
+      <<: *terrier-env
+      CU_DISTRICT: ct-01
+      CU_ALLOWED_HOSTS: ${CT01_HOST:?set CT01_HOST},127.0.0.1
+      CU_TRUSTED_ORIGINS: https://${CT01_HOST:?set CT01_HOST}
+    volumes:
+      - /srv/terrier/ct01/data:/data:ro
+      - /srv/access:/access:ro
+      - ct01-state:/state
+
+networks:
+  serve:
+    internal: true      # no route out; cloudflared joins this network and holds the only egress
+
 volumes:
-  research-data:
+  co05-state:
+  or05-state:
+  ct01-state:

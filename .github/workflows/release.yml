@@ -1,0 +1,111 @@
+# Release: on a v* tag, test, build the hosted image, push it to GHCR by digest, write its SBOM and digests.json, and attach
+# both to a DRAFT release (publishing the release stays a manual step). CI is the only builder: no Docker is needed on the laptop.
+#
+# Before the first run: compile and commit requirements.linux.lock (see requirements.linux.in), and pin each `uses:` below to a
+# full commit SHA (tags are mutable; the security gate checks this).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}          # nothing by default; each job asks only for what it needs
+
+env:
+  IMAGE: ghcr.io/pjg93-222/terrier-web
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The exact versions the laptop tests with (requirements.lock.txt pins them; it has no hashes), including the build-time
+      # libraries the tests import. The hashed runtime lock is installed in the image build below.
+      - run: python -m pip install -r requirements.lock.txt
+      - run: python -m compileall -q server tools manage.py
+      - name: Django tests (synthetic data only)
+        run: >
+          python manage.py test
+          server.research.test_access server.research.test_hosted server.research.test_districts
+          server.research.test_walk_api server.research.test_v3_static tools.test_districts
+      - name: Deploy checks with a dummy hosted environment
+        env:
+          CU_DEPLOYMENT: hosted
+          CU_SECRET_KEY: ci-only-dummy-secret-key-not-used-anywhere-0123456789-abcdefghij-klmnopqrstu
+          CU_ALLOWED_HOSTS: terrier.example.test,127.0.0.1
+          CU_TRUSTED_ORIGINS: https://terrier.example.test
+          CU_DATA_DIR: ${{ runner.temp }}/data
+          CU_STATE_DIR: ${{ runner.temp }}/state
+          CU_HTTPS_REDIRECT: '0'
+        run: python manage.py check --deploy --fail-level WARNING
+
+  image:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
+          provenance: false
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: terrier-web.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: digests.json
+        run: >
+          jq -n --arg image "$IMAGE" --arg digest "${{ steps.build.outputs.digest }}" --arg tag "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA"
+          '{image: $image, tag: $tag, digest: $digest, reference: ($image + "@" + $digest), git_sha: $sha}' > digests.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: |
+            digests.json
+            terrier-web.spdx.json
+          if-no-files-found: error
+
+  draft-release:
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+      - name: Attach to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" \
+                 --notes "terrier-web $GITHUB_REF_NAME. Deploy by digest: see digests.json."
+          gh release upload "$GITHUB_REF_NAME" digests.json terrier-web.spdx.json --clobber

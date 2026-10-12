@@ -29,6 +29,7 @@ from . import scoresdb
 from . import untapped as UT
 from . import v3_cache
 from .models import Snapshot
+from .state import state_dir
 from .terrier_contacts import SourceStoreError
 from .v3_http import (BadRequest, IMMUTABLE, REVALIDATE, blob_response, error, get_only, json_etag_response, params,
                       signed_in)
@@ -101,16 +102,26 @@ def meta(request):
 def districts(request):
     """The districts of the header selector. One server process serves one district (settings.DISTRICT); each other
     district has its own instance at its port. `ready`: the district's data directory (this process's DATA_DIR for the
-    current district) holds scores.sqlite3, walk.sqlite3 and a snapshot, so choosing it opens a working app."""
+    current district) holds scores.sqlite3, walk.sqlite3 and a snapshot, so choosing it opens a working app.
+    CU_DISTRICT_URLS (settings.DISTRICT_URLS), when set, names each other district's own address: only those are listed, each
+    with `url`, and ready (this container cannot see their data)."""
     params(request, set())
     current = settings.DISTRICT['id']
+    urls = settings.DISTRICT_URLS
     listed = []
     for d in D.DISTRICTS.values():
+        if urls and d['id'] != current and d['id'] not in urls:
+            continue
         directory = Path(settings.DATA_DIR) if d['id'] == current else D.data_dir(d, settings.LOCAL_ROOT)
+        snapshots = (state_dir() if d['id'] == current else directory) / 'snapshots'
         ready = (all((directory / name).is_file() for name in ('scores.sqlite3', 'walk.sqlite3'))
-                 and any((directory / 'snapshots').glob(d['snapshot_prefix'] + '*')))
-        listed.append({'id': d['id'], 'label': d['label'], 'short_label': d['short_label'], 'state': d['state'],
-                       'port': d['port'], 'ready': ready, 'center': list(d['center']), 'zoom': d['zoom']})
+                 and any(snapshots.glob(d['snapshot_prefix'] + '*')))
+        entry = {'id': d['id'], 'label': d['label'], 'short_label': d['short_label'], 'state': d['state'],
+                 'port': d['port'], 'ready': ready or (d['id'] != current and d['id'] in urls),
+                 'center': list(d['center']), 'zoom': d['zoom']}
+        if d['id'] in urls:
+            entry['url'] = urls[d['id']]
+        listed.append(entry)
     return json_etag_response(request, {'schema': 'v3-districts-1', 'current': current, 'districts': listed}, REVALIDATE)
 
 

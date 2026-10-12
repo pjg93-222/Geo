@@ -18,6 +18,7 @@ class Invitation(models.Model):
     token_hash = models.CharField(max_length=64, unique=True)
     username = models.CharField(max_length=150)
     administrator = models.BooleanField(default=False)
+    field_staff = models.BooleanField(default=False)    # joins the "field-staff" group on acceptance (field_access.py)
     expires_at = models.DateTimeField()
     used_at = models.DateTimeField(null=True)
     reset = models.BooleanField(default=False)

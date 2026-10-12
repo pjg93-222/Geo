@@ -13,6 +13,7 @@ import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from server.research import walk_names as N
 
@@ -204,6 +205,37 @@ def block_aliases(d):
     """{old block id: planning-region block id} that prepare_geography writes for CT; {} when the file is missing."""
     path = Path(d['geography']) / 'block_aliases.json'
     return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+
+
+def district_urls(environ=os.environ):
+    """{district id: page address} from CU_DISTRICT_URLS, a JSON object or "co-05=https://a.example,or-05=https://b.example";
+    {} when unset (the selector then links to this host at the district's port). Hosted, each district is its own container
+    behind its own hostname. A bad value is an error, so a typo stops the server instead of sending staff to the wrong place."""
+    raw = (environ.get('CU_DISTRICT_URLS') or '').strip()
+    if not raw:
+        return {}
+    if raw.startswith('{'):
+        try:
+            found = json.loads(raw)
+        except ValueError:
+            raise ValueError('CU_DISTRICT_URLS is not valid JSON') from None
+    else:
+        found = {}
+        for part in filter(None, (piece.strip() for piece in raw.split(','))):
+            name, sep, url = part.partition('=')
+            if not sep:
+                raise ValueError('CU_DISTRICT_URLS: expected district=address, got %r' % part)
+            found[name.strip()] = url.strip()
+    if not isinstance(found, dict):
+        raise ValueError('CU_DISTRICT_URLS must be a JSON object or a district=address list')
+    for name, url in found.items():
+        if name not in DISTRICTS:
+            raise ValueError('CU_DISTRICT_URLS: unknown district %r (known: %s)' % (name, ', '.join(DISTRICTS)))
+        parts = urlsplit(url) if isinstance(url, str) else None
+        if (parts is None or parts.scheme not in ('http', 'https') or not parts.hostname or parts.username
+                or parts.password or parts.query or parts.fragment):
+            raise ValueError('CU_DISTRICT_URLS: %s needs a plain http or https address' % name)
+    return dict(found)
 
 
 def snapshot_pattern(d):

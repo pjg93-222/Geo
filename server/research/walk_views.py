@@ -24,7 +24,9 @@
 
 Every endpoint is local only (loopback owner, no proxy headers, not hosted), answers 403 in demo mode (lists carry real
 names and phones), is `no-store`, takes an exact list of query parameters and, for POST, a JSON object of at most 256 KB.
-Django enforces CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded
+Hosted (CU_DEPLOYMENT=hosted) there is no local owner and exactly three routes open, to field staff only (field_access.py):
+GET /walk/lists, GET /walk/lists/<key> and POST /walk/dispositions; every other route here, building and scoring included,
+answers 403. Django enforces CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded
 for a person on its roster, and the roster's voter keys travel privately inside the stored payload.
 """
 import hashlib
@@ -48,6 +50,7 @@ from django.utils import timezone
 from tools import districts as D
 from tools import field_labels as FL
 
+from . import field_access as FA
 from . import untapped as U
 from . import walk_context as C
 from . import walk_names as N
@@ -135,6 +138,16 @@ def read(function):
 
 def write(function):
     return local_only_post(guarded(function))
+
+
+def field_read(function):
+    """read(), also open to hosted field staff (field_access.py)."""
+    return local_only(guarded(function), field=True)
+
+
+def field_write(function):
+    """write(), also open to hosted field staff."""
+    return local_only_post(guarded(function), field=True)
 
 
 # ---- request parsing -----------------------------------------------------------------------------------------------
@@ -907,10 +920,11 @@ def create_list(request):
     return response({**saved, 'changed': shown != saved['fingerprint']}, 201)
 
 
-@read
+@field_read
 def list_lists(request):
     params(request, set())
     newest = list(WalkList.objects.order_by('-created_at', '-id').values_list('id', flat=True)[:LISTS_SHOWN])
+    FA.audit(request, 'walk.lists.read', lists=len(newest))
     rows = {row['id']: row for row in WalkList.objects.filter(id__in=newest)       # totals out of the payload: only for these
             .annotate(doors=KT('payload__totals__doors'), voters=KT('payload__totals__voters'))
             .values('id', 'key', 'title', 'kind', 'created_at', 'doors', 'voters')}
@@ -932,15 +946,17 @@ def lists(request):
     return result
 
 
-@read
+@field_read
 def saved_list(request, key):
     params(request, set())
     payload = dict(find_list(key).payload)
-    attach_last(payload, payload.pop(PRIVATE, {}) or {})
+    roster = payload.pop(PRIVATE, {}) or {}
+    FA.audit(request, 'walk.list.read', list=key, voters=len(roster))     # the list is frozen: its key says which voters were shown
+    attach_last(payload, roster)
     return response(C.attach(payload))
 
 
-@write
+@field_write
 def dispositions(request):
     params(request, set())
     body = json_body(request, {'list', 'on', 'entries'})
@@ -967,4 +983,5 @@ def dispositions(request):
         made.append(Disposition(walk_list=saved, person_id=person, voter_key=roster[person], code=code, contacted_on=day))
     with transaction.atomic():
         Disposition.objects.bulk_create(made)
+        FA.audit(request, 'walk.disposition.write', list=saved.key, n=len(made), voter_keys=sorted({d.voter_key for d in made}))
     return response({'saved': len(made)})

@@ -1,0 +1,13 @@
+# Runtime dependencies of the hosted image (Dockerfile). Only what the serving code imports: Django and its password
+# hasher, the WSGI server, numpy/pandas (score store, untapped) and shapely (area geometry, imported lazily).
+# geopandas, pyogrio, pyproj and requests build the stores on the laptop and are deliberately not in the image.
+#
+# Compile the hashed lock on Linux (CI or a build box), then commit it next to this file:
+#   uv pip compile requirements.linux.in --generate-hashes --python-version 3.12 --python-platform linux \
+#       --no-header -o requirements.linux.lock
+# The Dockerfile installs it with --require-hashes --no-deps, so every wheel is pinned by sha256.
+Django>=5.2,<5.3
+argon2-cffi>=25.1,<26
+waitress>=3.0,<4
+pandas>=2.2,<4
+shapely>=2.1,<3

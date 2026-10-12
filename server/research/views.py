@@ -1,6 +1,7 @@
 import csv, hashlib, io, json, mimetypes, re, secrets, time, zipfile
 from datetime import timedelta
 from functools import wraps, lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
@@ -14,7 +15,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from .models import Snapshot, SavedView, Invitation, LoginAttempt, AuditEvent
 from .bundles import load, import_bundle
-from . import static_files, v3_cache
+from . import field_access, static_files, v3_cache
 from .v3_http import blob_response
 from .terrier_contacts import csv_value
 from tools.measures import MEASURES
@@ -45,13 +46,25 @@ def protected(admin=False):
     return deco
 
 def who(request):
-    return JsonResponse({'authenticated':request.user.is_authenticated,'username':request.user.username if request.user.is_authenticated else None,'administrator':request.user.is_staff if request.user.is_authenticated else False,'local_admin_access':getattr(request,'local_admin_access',False),'csrf':get_token(request)})
+    session={'authenticated':request.user.is_authenticated,'username':request.user.username if request.user.is_authenticated else None,'administrator':request.user.is_staff if request.user.is_authenticated else False,'local_admin_access':getattr(request,'local_admin_access',False),'csrf':get_token(request)}
+    if settings.HOSTED:   # the page marks and watermarks what it prints with the Access identity; a local session has neither key
+        session['hosted']=True;session['email']=getattr(request,'access_email',None)
+    return JsonResponse(session)
+
+def client_address(request):
+    """Who is signing in, for the throttle. Hosted, REMOTE_ADDR is cloudflared for everyone, so a token-checked request's
+    CF-Connecting-IP (set by Cloudflare's edge, which overwrites any client value) is used when it is an address."""
+    peer=request.META.get('REMOTE_ADDR','unknown')
+    if settings.HOSTED and getattr(request,'access_email',None):
+        try:return str(ip_address(request.META.get('HTTP_CF_CONNECTING_IP','').strip()))
+        except ValueError:pass
+    return peer
 
 @require_http_methods(['POST'])
 def signin(request):
     try:data=body(request)
     except ValueError:return JsonResponse({'error':'Invalid sign-in request'},status=400)
-    username=str(data.get('username',''))[:150];address=request.META.get('REMOTE_ADDR','unknown')
+    username=str(data.get('username',''))[:150];address=client_address(request)
     # Independently limit source IP and account name; rotating usernames cannot bypass IP limits.
     names=['ip:'+address,'user:'+username.casefold()]
     limit=timezone.now()-timedelta(minutes=15)
@@ -88,18 +101,21 @@ def accept_invitation(request):
             if not user:user=User(username=invite.username,is_staff=invite.administrator)
             validate_password(data.get('password',''),user)
             user.set_password(data['password']);user.is_active=True;user.save()
+            if invite.field_staff:field_access.grant(user)
             invite.used_at=timezone.now();invite.save()
             AuditEvent.objects.create(actor=user.username,action='account.reset' if invite.reset else 'account.activate')
         login(request,user);return who(request)
     except ValidationError as e:return JsonResponse({'error':' '.join(e.messages)},status=400)
     except (ValueError,KeyError,TypeError):return JsonResponse({'error':'Invalid invitation request'},status=400)
 
-def create_invitation(username,administrator=False,reset=False):
+def create_invitation(username,administrator=False,reset=False,field_staff=False):
     if not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,150}',username):raise ValueError('Invalid username')
+    # Hosted, a person is who Cloudflare Access says they are: the account is named by that email (access.py compares them).
+    if settings.HOSTED and not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',username):raise ValueError('Hosted accounts are named by an email address')
     if User.objects.filter(username=username).exists()!=reset:raise ValueError('Use reset for an existing account, invitation for a new account')
     Invitation.objects.filter(username=username,used_at=None).update(expires_at=timezone.now())
     token=secrets.token_urlsafe(36)
-    Invitation.objects.create(token_hash=hashlib.sha256(token.encode()).hexdigest(),username=username,administrator=administrator,reset=reset,expires_at=timezone.now()+timedelta(hours=24))
+    Invitation.objects.create(token_hash=hashlib.sha256(token.encode()).hexdigest(),username=username,administrator=administrator,field_staff=field_staff,reset=reset,expires_at=timezone.now()+timedelta(hours=24))
     return '/?invite='+token
 
 @protected(admin=True)
@@ -108,8 +124,8 @@ def accounts(request):
     if request.method=='GET':return JsonResponse({'users':list(User.objects.values('id','username','is_staff','is_active'))})
     data=body(request);action=data.get('action','invite')
     if action in ['invite','reset']:
-        link=create_invitation(data['username'],bool(data.get('administrator',False)),action=='reset')
-        AuditEvent.objects.create(actor=request.user.username,action='account.'+action,detail={'username':data['username']})
+        link=create_invitation(data['username'],bool(data.get('administrator',False)),action=='reset',bool(data.get('field_staff',False)))
+        AuditEvent.objects.create(actor=request.user.username,action='account.'+action,detail={'username':data['username'],**({'field_staff':True} if data.get('field_staff') else {})})
         return JsonResponse({'link':link,'expires_in_hours':24})
     if action=='deactivate':
         target=User.objects.filter(username=data['username']).first()
@@ -215,6 +231,7 @@ _bundles.dependents.extend([_partitions.clear,_summary_blobs.clear,v3_cache.forg
 
 @protected()
 def summaries(request):
+    if settings.HOSTED and request.GET.get('format')=='csv':return JsonResponse({'error':'Downloads are turned off on the hosted app.'},status=403)
     snap=snapshot_for(request)
     if not snap:return JsonResponse({'error':'No summary snapshot has been imported'},status=404)
     basis,level,metric,scale=selection(request)

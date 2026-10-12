@@ -2,11 +2,12 @@ import sqlite3
 from pathlib import Path
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from server.research.state import state_dir
 class Command(BaseCommand):
     help='Create a consistent SQLite backup, or restore one while the app is stopped.'
     def add_arguments(self,p):p.add_argument('file');p.add_argument('--restore',action='store_true')
     def handle(self,*args,**o):
-        live=settings.DATA_DIR/'accounts.sqlite3';other=Path(o['file']).resolve()
+        live=state_dir()/'accounts.sqlite3';other=Path(o['file']).resolve()
         if other==live.resolve():raise CommandError('Use a separate backup path')
         source,dest=(other,live) if o['restore'] else (live,other)
         if not source.exists():raise CommandError('Source database does not exist')

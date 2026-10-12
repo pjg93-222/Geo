@@ -12,6 +12,7 @@ from tools.geography_levels import V4_GEOMETRY_LEVELS, area_label as v4_label, a
 from tools import area_layers as AL
 from tools import districts as D
 from .bundle_v4 import validate_v4
+from .state import state_dir
 
 FILES={'manifest.json','rows.json','geometry.json','streets.geojson','district.geojson'}
 # cu-summary-v4 = v3 + row-framework area indices (area_indices.json) and the adjacency of the area polygons.
@@ -239,7 +240,7 @@ def import_bundle(file, actor='local operator', expected_sha256=None):
         payload={name:json.loads(archive.read(name)) for name in expected}
     manifest=validate(payload);key=manifest['snapshot']
     files=FILES_FOR[manifest['schema']]
-    root=settings.DATA_DIR/'snapshots';root.mkdir(exist_ok=True)
+    root=state_dir()/'snapshots';root.mkdir(exist_ok=True)
     target=root/key
     if target.exists():
         existing=json.loads((target/'manifest.json').read_text(encoding='utf-8'))
@@ -282,7 +283,7 @@ def _lock_for(key,filename):
 @lru_cache(maxsize=14)
 def _load_cached(key,filename):
     if filename not in FILES_V4 or not re.fullmatch(D.snapshot_pattern(settings.DISTRICT),key):raise ValueError('Invalid snapshot resource')
-    return json.loads((settings.DATA_DIR/'snapshots'/key/filename).read_text(encoding='utf-8'))
+    return json.loads((state_dir()/'snapshots'/key/filename).read_text(encoding='utf-8'))
 
 def load(key,filename):
     # Cold concurrent requests must not parse the same large file repeatedly; different files load in parallel.
