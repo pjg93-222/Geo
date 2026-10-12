@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[1]
 LOCAL = REPO / '.local'
 # absolute, like build_scores_v3.ROOT: a git worktree of this repo sits elsewhere; the data does not move
 WORK = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\work')
-SIBLING_LOCAL = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography\.local')
+SIBLING_LOCAL = Path(r'C:\Users\pgoff\Documents\Codex\2026-09-27\we-are-going-to-have-an\outputs\cu-geography') / '.local'
 DOWNLOADS = Path(r'C:\Users\pgoff\Downloads')
 DEFAULT = 'co-05'
 
