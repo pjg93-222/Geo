@@ -4,8 +4,8 @@
 #
 # The hashed lock (requirements.linux.lock, committed next to this file) is for CPython 3.12 on linux x86_64, wheels only. Regenerate
 # it from any OS with pip alone (its header has the exact command): resolve with `pip install --dry-run --report` for
-# --platform manylinux2014_x86_64 and manylinux_2_28_x86_64, then list every PyPI wheel of each resolved version those tags accept
-# with its sha256. The Dockerfile installs it with --require-hashes --no-deps, so every wheel is pinned by sha256.
+# --platform manylinux2014_x86_64 and manylinux_2_28_x86_64 (constrained with -c requirements.lock.txt, so the image runs the very
+# versions CI tests), then list every PyPI wheel of each resolved version those tags accept with its sha256. The Dockerfile installs it with --require-hashes --no-deps, so every wheel is pinned by sha256.
 Django>=5.2,<5.3
 argon2-cffi>=25.1,<26
 waitress>=3.0,<4
