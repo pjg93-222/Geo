@@ -431,7 +431,7 @@ class BuildImageFilesTests(unittest.TestCase):
             self.assertRegex(ref, r'@sha256:[0-9a-f]{64}$')
         self.assertEqual(froms[0][0], froms[1][0])
         self.assertEqual(froms[2][0], froms[3][0])
-        self.assertEqual(text.count('apt-get -y --no-install-recommends upgrade'), 1)       # the frozen score base gets Debian's security updates
+        self.assertEqual(text.count('apt-get -y --no-install-recommends upgrade'), 2)       # both final stages get Debian's security updates
 
     def test_the_image_is_toolchain_only_non_root_and_runs_a_named_step(self):
         text = read('Dockerfile.build')

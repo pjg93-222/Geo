@@ -32,6 +32,9 @@ TIMEOUT = 1800                                      # seconds per trivy run
 SHOW = 40                                           # findings printed per image; the report carries all of them
 UNFIXED_SEVERITIES = ('CRITICAL', 'HIGH')           # D-181: counted and reported, never blocking
 LICENSE_SEVERITIES = ('CRITICAL', 'HIGH', 'UNKNOWN')   # forbidden, restricted, unrecognised: trivy's UNKNOWN is the unknown licence
+# SPDX-identified permissive licences that trivy's classifier has no category for, so it reports them UNKNOWN (cffi is MIT-0). A
+# language-package finding that is UNKNOWN and named here is reported, not blocking. Add a name only after reading the licence.
+KNOWN_PERMISSIVE = {'MIT-0'}
 # D-182. Trivy's licence scan puts every OS package in one result (Target "OS Packages", Class "license"); its vulnerability results
 # say Class "os-pkgs" and Type = the distro. Anything not recognisably an OS-package result is a language package (or unknown): it blocks.
 OS_LICENSE_TARGET = 'OS Packages'
@@ -63,7 +66,7 @@ def trivy(argv):
 
 
 def scan(ref, run, tmp):
-    """-> (blocking findings [str], OS-package licence counts, unfixed vulnerability counts)."""
+    """-> (blocking findings [str], OS-package licence counts, unfixed vulnerability counts, known-permissive licence names)."""
     name = ref.split('@')[0]
     out = Path(tmp) / 'report.json'
 
@@ -94,11 +97,13 @@ def scan(ref, run, tmp):
 
     # 2. licences, split by class (D-182); its own run so UNKNOWN is listed for licences without making UNKNOWN vulnerabilities findings
     _, data = report(['--scanners', 'license', '--severity', ','.join(LICENSE_SEVERITIES)], 'licence scan')
-    os_counts = dict.fromkeys(LICENSE_SEVERITIES, 0)
+    os_counts, known = dict.fromkeys(LICENSE_SEVERITIES, 0), set()
     for res in data.get('Results') or []:
         for lic in res.get('Licenses') or []:
             if is_os_package_result(res):
                 os_counts[lic.get('Severity') if lic.get('Severity') in os_counts else 'UNKNOWN'] += 1
+            elif lic.get('Severity') == 'UNKNOWN' and lic.get('Name') in KNOWN_PERMISSIVE:
+                known.add(f"{lic.get('Name')} {lic.get('PkgName')}")
             else:
                 findings.append(f"{res.get('Target', '?')}: license {lic.get('Name')} {lic.get('PkgName')} {lic.get('Severity')}")
 
@@ -112,7 +117,7 @@ def scan(ref, run, tmp):
                     unfixed[v['Severity']] += 1
     except GateError as e:
         unfixed = {'error': f'unfixed report unavailable ({e})'}
-    return findings, os_counts, unfixed
+    return findings, os_counts, unfixed, sorted(known)
 
 
 def parse_iso(s):
@@ -150,8 +155,8 @@ def main(argv=None, run=trivy):
             raise GateError(f'image reference not pinned by digest (REF@sha256:<64 hex>): {bad[0]}')
         with tempfile.TemporaryDirectory(prefix='imagegate-') as tmp:
             for ref in args.image:
-                findings, os_counts, unfixed = scan(ref, run, tmp)
-                doc['images'][ref] = {'findings': findings, 'os_licenses': os_counts, 'unfixed': unfixed}
+                findings, os_counts, unfixed, known = scan(ref, run, tmp)
+                doc['images'][ref] = {'findings': findings, 'os_licenses': os_counts, 'unfixed': unfixed, 'known_licenses': known}
         check_db(run)
     except GateError as e:
         doc['error'] = str(e)
@@ -163,6 +168,9 @@ def main(argv=None, run=trivy):
               + (unfixed['error'] if 'error' in unfixed else ', '.join(f'{s} {unfixed[s]}' for s in UNFIXED_SEVERITIES)))
         print(f'INFO images/trivy: {name} OS-package licences, not blocking (D-182): '
               + ', '.join(f"{s} {got['os_licenses'][s]}" for s in LICENSE_SEVERITIES))
+        if got['known_licenses']:
+            print(f"INFO images/trivy: {name} language-package licences known permissive that trivy cannot categorise, "
+                  f"not blocking (D-182): {', '.join(got['known_licenses'])}")
     for ref in failing:
         found = doc['images'][ref]['findings']
         print(f"FAIL images/trivy: {ref.split('@')[0]}: {len(found)} finding(s)")

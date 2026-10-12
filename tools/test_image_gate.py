@@ -101,6 +101,15 @@ class ImageGateTests(unittest.TestCase):
                 self.assertIn(f"{target}: license {bad['Name']} {bad['PkgName']} {bad['Severity']}", out)
                 self.assertNotIn('bash', out.split('FAIL images/trivy')[1])      # the OS licence is not among the findings
 
+    def test_a_known_permissive_licence_trivy_cannot_categorise_is_reported_not_blocking(self):
+        rc, out = self.go(FakeTrivy(lang_lics=[lic('MIT-0', 'cffi', 'UNKNOWN')]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('known permissive that trivy cannot categorise, not blocking (D-182): MIT-0 cffi', out)
+        for bad in (lic('MIT-0', 'cffi', 'HIGH'), lic('Foo License', 'other', 'UNKNOWN')):      # only the named licence AND UNKNOWN
+            with self.subTest(bad['Name']):
+                rc, out = self.go(FakeTrivy(lang_lics=[bad]))
+                self.assertEqual(rc, 1, out)
+
     def test_a_licence_result_not_provably_an_os_package_blocks(self):
         for res in ({'Target': 'mystery', 'Class': 'license-file'}, {'Target': 'mystery', 'Class': 'something-new'}, {}):
             with self.subTest(res):

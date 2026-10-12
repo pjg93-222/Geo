@@ -16,9 +16,11 @@
 #
 # Bases (D-181, Debian 13): geo is python:3.12.14-slim-trixie. score is still Debian 12 (bookworm): the registry has no
 # python:3.12.10-slim-trixie (GET manifests/3.12.10-slim-trixie is 404, 2026-10-12; trixie images start at later patch levels), and the
-# interpreter must stay the laptop's 3.12.10. That base was built 2025-05-08, so the score image applies Debian's security updates at
-# build time: the release scan (tools/image_gate.py) blocks on HIGH/CRITICAL findings that have a fix, and a fix that exists is an
-# update apt can install. Move score to trixie when the laptop's system Python moves to a 3.12.x that has a trixie image.
+# interpreter must stay the laptop's 3.12.10. Neither base is the newest patch release of its minor, so neither image is rebuilt when
+# Debian ships a fix (score's was built 2025-05-08, geo's 2026-09-19): both final stages apply Debian's security updates at build time.
+# The release scan (tools/image_gate.py) blocks on HIGH/CRITICAL findings that have a fix, and a fix that exists is an update apt can
+# install (the first scan found 4 fixable HIGH findings in geo, libpcre2 and openssl, and none in score once it was upgraded).
+# Move score to trixie when the laptop's system Python moves to a 3.12.x that has a trixie image.
 
 FROM python:3.12.14-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS geo-deps
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
@@ -30,7 +32,8 @@ ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="terrier-build" org.opencontainers.image.revision="${GIT_SHA}" org.opencontainers.image.created="${BUILD_TIME}"
 ENV GIT_SHA=${GIT_SHA} BUILD_TIME=${BUILD_TIME} PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH=/opt/venv/bin:$PATH HOME=/tmp
-RUN groupadd --gid 10001 app \
+RUN apt-get update && apt-get -y --no-install-recommends upgrade && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 10001 app \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \
  && mkdir /stage && chown 10001:10001 /stage
 COPY --from=geo-deps /opt/venv /opt/venv
