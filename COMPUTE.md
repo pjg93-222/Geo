@@ -90,8 +90,15 @@ Expected (4b): `A1: Windows build of roads`, `A2: ...`, `B: container build of r
 PASS  roads.sqlite3   5 tables, 77,930 rows; run-to-run variance (left out): none
                       equals the recorded co_baseline fixture: yes
 PASS  negative control roads.sqlite3   one row removed from roads: detected
-PARITY PASS: 2 artifact check(s), 0 failed; report ...\smoke-1\parity_report.json
+PASS  negative control roads.sqlite3 (value)   one roads.name value changed (TEXT in its last bit): detected
+PARITY PASS: 3 artifact check(s), 0 failed; report ...\smoke-1\parity_report.json
 ```
+
+The negative controls work on copies of B in the scratch folder, never on a live store: per SQLite store one row removed and, separately,
+one stored value changed by its smallest step (a REAL cell by one ULP, else an INTEGER by 1, a TEXT or BLOB in its last bit); per other
+file one bit flipped in the middle. Each must make the comparison FAIL (the line says "detected"). A store is compared exactly (the
+digest hashes `repr` of every cell, which round-trips a float), so a one-ULP change is seen: the harness has no ULP tolerance, and a
+float difference of D-177's "a few ULP" would show as a FAIL naming the table, to be judged by hand.
 
 `parity_report.json` also holds the interpreter and library versions of both sides (`build_step.py fingerprint`): record them with
 the result. A FAIL line names the table (never a row value). If A1 and A2 differ in a table, that table is the variance and is left

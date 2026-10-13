@@ -26,6 +26,7 @@
 import argparse
 import datetime
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -190,6 +191,51 @@ def remove_one_row(path, skip=()):
                 except sqlite3.Error:
                     continue
     raise ValueError('no table to remove a row from in %s' % path)
+
+
+def step_value(value):
+    """(the value changed by its smallest step, what that step is): a REAL by one ULP, an INTEGER by 1, a TEXT or BLOB in its last bit."""
+    if isinstance(value, float):
+        stepped = math.nextafter(value, math.inf)
+        return (stepped if stepped != value else math.nextafter(value, -math.inf)), 'REAL by one ULP'
+    if isinstance(value, int):
+        return value ^ 1, 'INTEGER by 1'
+    if isinstance(value, str):
+        return (value[:-1] + chr(ord(value[-1]) ^ 1) if value else 'x'), 'TEXT in its last bit'
+    return (value[:-1] + bytes([value[-1] ^ 1]) if value else b'\x00'), 'BLOB in its last bit'
+
+
+def perturb_one_value(path, skip=()):
+    """Negative control: change ONE stored value by its smallest step (step_value) in a copy of a store. Takes the last row of the first
+    ordinary table (not in `skip`, nor virtual, nor a shadow of one) that has a non-key column; a REAL cell by preference, else an
+    INTEGER, TEXT or BLOB one. Returns (table, column, what)."""
+    tables = B.store_digest(path)['tables']
+    virtual = [name for name, digest in tables.items() if digest.get('virtual')]
+    candidates = []
+    with closing(sqlite3.connect(path)) as connection:
+        for table, digest in sorted(tables.items()):
+            if not digest['rows'] or table in skip or digest.get('virtual') or any(table.startswith(v + '_') for v in virtual):
+                continue
+            try:
+                keys = {row[1] for row in connection.execute('PRAGMA table_info(%s)' % B.quote(table)) if row[5]}
+                cursor = connection.execute('SELECT rowid, * FROM %s WHERE rowid = (SELECT max(rowid) FROM %s)' % (B.quote(table), B.quote(table)))
+                row = cursor.fetchone()
+            except sqlite3.Error:                                   # WITHOUT ROWID: no rowid to find the row by
+                continue
+            names = [c[0] for c in cursor.description][1:]
+            for column, value in zip(names, row[1:]):
+                if column not in keys and value is not None:
+                    rank = 0 if isinstance(value, float) else 1 if isinstance(value, int) else 2 if isinstance(value, str) else 3
+                    candidates.append((rank, len(candidates), table, column, row[0], value))
+    for _rank, _order, table, column, rowid, value in sorted(candidates):
+        stepped, what = step_value(value)
+        with closing(sqlite3.connect(path)) as connection, connection:
+            try:
+                connection.execute('UPDATE %s SET %s = ? WHERE rowid = ?' % (B.quote(table), B.quote(column)), (stepped, rowid))
+                return table, column, what
+            except sqlite3.Error:
+                continue
+    raise ValueError('no value to change in %s' % path)
 
 
 def flip_one_byte(path):
@@ -408,11 +454,16 @@ def main(argv=None):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(folders['B'] / name, target)
             if name.endswith('.sqlite3'):
-                table = remove_one_row(target, noise_tables(name, folders['A1'], folders['A2']))
-                what, ok = 'one row removed from %s' % table, compare_store(name, folders['A1'], folders['A2'], control)[0]
+                skip = noise_tables(name, folders['A1'], folders['A2'])
+                what, ok = 'one row removed from %s' % remove_one_row(target, skip), compare_store(name, folders['A1'], folders['A2'], control)[0]
+                verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
+                shutil.copyfile(folders['B'] / name, target)
+                table, column, step = perturb_one_value(target, skip)
+                what, ok = 'one %s.%s value changed (%s)' % (table, column, step), compare_store(name, folders['A1'], folders['A2'], control)[0]
+                verdict('negative control ' + name + ' (value)', not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
             else:
                 what, ok = 'one byte changed at offset %d' % flip_one_byte(target), compare_file(name, folders['A1'], folders['A2'], control)[0]
-            verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
+                verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
     if args.api and not args.skip_container:
         results = {}
         for label in ('A1', 'B'):

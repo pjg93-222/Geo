@@ -7,6 +7,7 @@ compute.compose.yaml, the two hashed locks, the build job of .github/workflows/r
 import contextlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -476,6 +477,53 @@ class CompareTests(unittest.TestCase):
         self.assertEqual([i for i in range(len(before)) if before[i] != after[i]], [at])
         self.assertFalse(P.compare_file('area.csv', folders[0], folders[1], control)[0])
 
+    def real_store(self, label):
+        path = self.root / label / 'real.sqlite3'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.executescript('CREATE TABLE score (id INTEGER PRIMARY KEY, x REAL, n INTEGER, name TEXT);'
+                                     'CREATE TABLE keyed (k TEXT PRIMARY KEY, v REAL) WITHOUT ROWID;'
+                                     'CREATE VIRTUAL TABLE box USING rtree(id, west, east, south, north);'
+                                     'CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);'
+                                     "INSERT INTO score VALUES (1, 0.5, 7, 'a'), (2, 1.25, 8, 'b'); INSERT INTO keyed VALUES ('k', 2.5);"
+                                     'INSERT INTO box VALUES (1, 0, 1, 0, 1); '
+                                     "INSERT INTO metadata VALUES ('built_utc', 't')")
+        return path
+
+    def test_step_value_is_the_smallest_step_of_each_kind(self):
+        stepped, what = P.step_value(1.25)
+        self.assertEqual((stepped - 1.25, what), (math.ulp(1.25), 'REAL by one ULP'))
+        self.assertEqual(P.step_value(float('inf'))[0], math.nextafter(float('inf'), -math.inf))        # never "no change"
+        self.assertEqual(P.step_value(8), (9, 'INTEGER by 1'))
+        self.assertEqual(P.step_value(9)[0], 8)
+        self.assertEqual(P.step_value('b')[0], 'c')
+        self.assertEqual(P.step_value('')[0], 'x')
+        self.assertEqual(P.step_value(b'\x00\x02')[0], b'\x00\x03')
+        self.assertEqual(P.step_value(b'')[0], b'\x00')
+
+    def test_perturb_one_value_steps_one_real_cell_by_one_ulp_and_the_comparison_sees_it(self):
+        paths = [self.real_store(label) for label in ('A1', 'A2', 'B')]
+        control = self.root / 'NC'
+        control.mkdir()
+        shutil.copyfile(paths[2], control / 'real.sqlite3')
+        before = P.B.store_digest(control / 'real.sqlite3')
+        table, column, what = P.perturb_one_value(control / 'real.sqlite3')
+        self.assertEqual((table, column, what), ('score', 'x', 'REAL by one ULP'))
+        with closing(sqlite3.connect(control / 'real.sqlite3')) as connection:
+            self.assertEqual(connection.execute('SELECT x FROM score ORDER BY id').fetchall(), [(0.5,), (1.25 + math.ulp(1.25),)])
+            self.assertEqual(connection.execute('SELECT n, name FROM score ORDER BY id').fetchall(), [(7, 'a'), (8, 'b')])
+        after = P.B.store_digest(control / 'real.sqlite3')
+        self.assertEqual([t for t in before['tables'] if before['tables'][t] != after['tables'][t]], ['score'])
+        ok, detail = P.compare_store('real.sqlite3', paths[0].parent, paths[1].parent, control)
+        self.assertFalse(ok)
+        self.assertIn('table(s): score', detail)
+
+    def test_perturb_one_value_skips_the_variance_virtual_and_without_rowid_tables_and_falls_back_to_other_kinds(self):
+        path = self.real_store('A1')
+        self.assertEqual(P.perturb_one_value(path, skip={'score'})[0], 'metadata')          # keyed is WITHOUT ROWID, box is virtual
+        with self.assertRaises(ValueError):
+            P.perturb_one_value(path, skip={'score', 'metadata', 'keyed', 'box'})
+
     def test_negative_control_removes_one_row_and_is_detected(self):
         folders = self.stores()
         control = self.root / 'NC'
@@ -580,6 +628,7 @@ class RunTests(unittest.TestCase):
         self.assertRegex(text, r'PASS  area_scores_shown\.manifest\.json +byte-identical')
         self.assertRegex(text, r'negative control area_scores_shown\.csv +one byte changed at offset \d+: detected')
         self.assertRegex(text, r'negative control scores\.sqlite3 +one row removed from \w+: detected')
+        self.assertRegex(text, r'PASS  negative control scores\.sqlite3 \(value\) +one \w+\.\w+ value changed \(.+\): detected')
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
         self.assertEqual(sorted(report['fingerprint_container']), ['geo', 'score'])
         self.assertEqual(sorted(report['fingerprint_windows']), ['geo', 'score'])
