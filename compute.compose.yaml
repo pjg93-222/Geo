@@ -1,4 +1,7 @@
 # Terrier compute runs on the laptop: build a district's stores in the terrier-build container (Docker Desktop, WSL2 backend).
+# Two toolchains, one service each, the same mounts: `terrier-build` (the geo image: roads, street, contacts) and `terrier-score` (the
+# score image, CPython 3.12.10 with pandas and pyarrow: shown, scores). Compose parses every service, so both image variables must be set;
+# tools/compute_parity.py gives the one a run does not use the other image, which is never started.
 # Inputs are mounted READ-ONLY, each as narrowly as it can be; a build writes only to the `stage` volume (ext4 inside the Docker
 # VM, so SQLite is never written over the Windows file share); the stores leave the volume through `terrier-export`, which copies
 # them, with an integrity check, into a second named volume (`export_out`, also ext4: the check never crosses the file share either).
@@ -6,10 +9,11 @@
 # never mounted. No network. See COMPUTE.md. Native-Linux hosts can export straight into a bind-mounted folder instead:
 # `compute_parity.py --export-bind` adds compute.export-bind.compose.yaml, which swaps the /out mount for a bind of $HOST_OUT.
 #
-#   tools/compute_parity.py drives this file (it sets HOST_REPO, HOST_OUT, RUN_ID and TERRIER_BUILD_IMAGE). By hand:
-#   TERRIER_BUILD_IMAGE=ghcr.io/pjg93-222/terrier-build@sha256:<digest> HOST_REPO=C:/Users/pgoff/worktrees/dep-terrier-build \
+#   tools/compute_parity.py drives this file (it sets HOST_REPO, HOST_OUT, RUN_ID, TERRIER_BUILD_IMAGE and TERRIER_SCORE_IMAGE). By hand:
+#   TERRIER_BUILD_IMAGE=ghcr.io/pjg93-222/terrier-build@sha256:<digest> \
+#   TERRIER_SCORE_IMAGE=ghcr.io/pjg93-222/terrier-build-score@sha256:<digest> HOST_REPO=C:/Users/pgoff/worktrees/dep-terrier-build \
 #   HOST_OUT=C:/Users/pgoff/terrier-parity/B RUN_ID=B-manual docker compose -f compute.compose.yaml --profile terrier \
-#   run --rm terrier-build run roads --district co-05
+#   run --rm terrier-build run roads --district co-05        (shown and scores: `run --rm terrier-score run scores --district co-05`)
 #
 # Host paths default to the real folders (not the Codex junction, which Docker cannot follow). Override with HOST_* if they move.
 # Mount sources must exist (create_host_path: false): a wrong path is an error, never a quietly empty folder.
@@ -38,7 +42,7 @@ x-build: &build
 services:
   terrier-build:
     <<: *build
-    volumes:
+    volumes: &build-volumes
       # the tree to build from (code only; its .local is never read: TERRIER_LOCAL_DIR points into the stage volume)
       - type: bind
         source: ${HOST_REPO:?the tree to build from, mounted read-only}
@@ -80,6 +84,12 @@ services:
       - type: volume
         source: stage
         target: /stage
+
+  # The score steps: the same mounts as terrier-build, the score image. A step reads the earlier stores from the stage volume.
+  terrier-score:
+    <<: *build
+    image: ${TERRIER_SCORE_IMAGE:?pin the score image by digest, for example ghcr.io/pjg93-222/terrier-build-score@sha256:...}
+    volumes: *build-volumes
 
   # The only writer of the scratch folder, and it only reads the stage volume.
   terrier-export:

@@ -204,6 +204,56 @@ class BuildStepTests(unittest.TestCase):
         self.assertEqual(found['python'], '.'.join(map(str, sys.version_info[:3])))
         self.assertEqual(found['sqlite'], sqlite3.sqlite_version)
 
+    # The five steps, in the order Terrier's Windows runner (_build/run_nowithhold.ps1) runs them, each with its toolchain.
+
+    def test_the_steps_are_the_windows_runners_in_its_order_with_their_toolchains(self):
+        self.assertEqual(list(S.STEPS), ['roads', 'street', 'contacts', 'shown', 'scores'])
+        self.assertEqual({name: spec.image for name, spec in S.STEPS.items()},
+                         {'roads': 'geo', 'street': 'geo', 'contacts': 'geo', 'shown': 'score', 'scores': 'score'})
+        self.assertEqual((S.STEPS['shown'].script, S.STEPS['shown'].store), ('tools/shown_areas.py', 'area_scores_shown.csv'))
+        self.assertEqual((S.STEPS['scores'].script, S.STEPS['scores'].store), ('tools/build_scores_v3.py', 'scores.sqlite3'))
+        for spec in S.STEPS.values():
+            self.assertTrue((REPO / spec.script).is_file(), spec.script)
+            self.assertIn(spec.image, P.IMAGE_NAMES)
+        # the file name each tool itself writes: D.area_table, and the store the app and the bundle read
+        self.assertEqual(S.D.area_table(S.D.get('co-05')).name, S.STEPS['shown'].store)
+        self.assertEqual(S.D.area_table(S.D.get('co-05')).with_suffix('.manifest.json').name, S.STEPS['shown'].also[0])
+
+    def run_recorded(self, step, district='co-05', written=('area_scores_shown.csv', 'area_scores_shown.manifest.json', 'scores.sqlite3')):
+        """S.run(step) with the tool replaced by a recorder that writes `written` into the data directory; (exit code, command)."""
+        data = self.root / 'out'
+        shutil.rmtree(data, ignore_errors=True)
+        commands = []
+
+        def fake_call(command, **kwargs):
+            commands.append(command)
+            data.mkdir(parents=True, exist_ok=True)
+            for name in written:
+                (data / name).write_text('x', encoding='utf-8')
+            return 0
+
+        with mock.patch.dict(os.environ, {'TERRIER_LOCAL_DIR': str(data)}), mock.patch.object(S.D, 'data_dir', return_value=data), \
+                mock.patch.object(S.subprocess, 'call', fake_call), mock.patch.object(S, 'GlassBox'), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return S.run(step, district), commands[0]
+
+    def test_shown_and_scores_run_their_tools_plain_and_the_receipt_goes_beside_the_store(self):
+        code, command = self.run_recorded('shown')
+        self.assertEqual(code, 0)
+        self.assertEqual(command, [sys.executable, str(REPO / 'tools' / 'shown_areas.py'), '--district', 'co-05'])
+        code, command = self.run_recorded('scores')
+        self.assertEqual(code, 0)
+        # build_scores_v3 would write its receipt into the repo's _build, which is read-only in the container
+        self.assertEqual(command, [sys.executable, str(REPO / 'tools' / 'build_scores_v3.py'), '--district', 'co-05',
+                                   '--receipt', str(self.root / 'out' / 'scores_receipt.json')])
+
+    def test_a_step_that_names_two_files_has_run_only_when_both_exist(self):
+        code, _ = self.run_recorded('shown', written=('area_scores_shown.csv',))                 # the manifest is missing
+        self.assertEqual(code, 1)
+        code, _ = self.run_recorded('shown', written=('area_scores_shown.manifest.json',))      # the table is missing
+        self.assertEqual(code, 1)
+        self.assertEqual(self.run_recorded('scores', written=('scores.sqlite3',))[0], 0)
+
 
 # ---- the parity harness ------------------------------------------------------------------------------------------------------
 
@@ -224,6 +274,9 @@ def make_store(path, rows, stamp='t0', extra_column=False):
 ROWS = [(1, 'Main St'), (2, 'Oak Ave'), (3, '')]
 EXPLICIT = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64        # what a caller names with --image or $TERRIER_BUILD_IMAGE
 MANIFEST = 'ghcr.io/pjg93-222/terrier-build@sha256:' + 'b' * 64    # what the verified release manifest would name
+SCORE_EXPLICIT = 'ghcr.io/x/terrier-build-score@sha256:' + 'c' * 64        # --score-image or $TERRIER_SCORE_IMAGE
+SCORE_MANIFEST = 'ghcr.io/pjg93-222/terrier-build-score@sha256:' + 'd' * 64
+SHOWN_MANIFEST = '{\n "areas": 1,\n "rows": 2\n}'              # a manifest as the tool writes it: text mode, so CRLF on Windows
 
 
 class CompareTests(unittest.TestCase):
@@ -300,6 +353,40 @@ class CompareTests(unittest.TestCase):
         (folders[1] / 'b.zip').write_bytes(b'other')
         self.assertIn('reference is not stable', P.compare('b.zip', *folders)[1])
 
+    def put(self, name, a1, a2, b):
+        for label, payload in (('A1', a1), ('A2', a2), ('B', b)):
+            (self.root / label).mkdir(parents=True, exist_ok=True)
+            (self.root / label / name).write_bytes(payload)
+        return [self.root / label for label in ('A1', 'A2', 'B')]
+
+    def test_a_json_file_may_differ_in_line_endings_only_and_the_detail_says_so(self):
+        windows, box = SHOWN_MANIFEST.replace('\n', '\r\n').encode(), SHOWN_MANIFEST.encode()
+        ok, detail = P.compare('m.json', *self.put('m.json', windows, windows, box))
+        self.assertTrue(ok, detail)
+        self.assertIn('line endings differ only', detail)
+        ok, detail = P.compare('m.json', *self.put('m.json', windows, windows, box.replace(b'"rows": 2', b'"rows": 3')))
+        self.assertFalse(ok)
+        self.assertIn('B differs', detail)
+        ok, detail = P.compare('m.json', *self.put('m.json', windows, windows + b' ', box))
+        self.assertIn('reference is not stable', detail)
+
+    def test_only_a_json_file_gets_the_line_ending_allowance(self):
+        for name in ('area.csv', 'b.zip'):
+            ok, detail = P.compare(name, *self.put(name, b'a,b\r\n', b'a,b\r\n', b'a,b\n'))
+            self.assertFalse(ok, name)
+            self.assertIn('B differs', detail)
+
+    def test_flip_one_byte_changes_exactly_one_byte_and_a_file_comparison_sees_it(self):
+        folders = self.put('area.csv', b'a,b\n1,2\n3,4\n', b'a,b\n1,2\n3,4\n', b'a,b\n1,2\n3,4\n')
+        control = self.root / 'NC'
+        control.mkdir()
+        shutil.copyfile(folders[2] / 'area.csv', control / 'area.csv')
+        before = (control / 'area.csv').read_bytes()
+        at = P.flip_one_byte(control / 'area.csv')
+        after = (control / 'area.csv').read_bytes()
+        self.assertEqual([i for i in range(len(before)) if before[i] != after[i]], [at])
+        self.assertFalse(P.compare_file('area.csv', folders[0], folders[1], control)[0])
+
     def test_negative_control_removes_one_row_and_is_detected(self):
         folders = self.stores()
         control = self.root / 'NC'
@@ -321,37 +408,52 @@ class CompareTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
-    """main() with the two builds replaced by functions that write tiny stores."""
+    """main() with the two builds replaced by functions that write tiny stores (and, for `shown`, a tiny table and manifest)."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.calls = []
-        self.images = []
+        self.images = []            # the {'geo': ref, 'score': ref} of each container build
+        self.pythons = []           # the {'geo': path, 'score': path} of each Windows build
+
+    @staticmethod
+    def write_step(out, step, stamp, windows, rows):
+        out.mkdir(parents=True, exist_ok=True)
+        if step == 'shown':
+            (out / 'area_scores_shown.csv').write_bytes(b'area,score\n1,2\n')
+            (out / 'area_scores_shown.manifest.json').write_bytes((SHOWN_MANIFEST.replace('\n', '\r\n') if windows else SHOWN_MANIFEST).encode())
+        else:
+            make_store(out / S.STEPS[step].store, rows, stamp=stamp)
 
     def fakes(self, b_rows=ROWS):
-        def windows(python, repo, district, steps, out):
+        def windows(pythons, repo, district, steps, out):
             self.calls.append(('windows', out.name))
-            make_store(out / 'roads.sqlite3', ROWS, stamp='w%d' % len(self.calls))
+            self.pythons.append(pythons)
+            for step in steps:
+                self.write_step(out, step, 'w%d' % len(self.calls), True, ROWS)
 
-        def container(image, repo, district, steps, out, run_id, names, export_bind=False):
+        def container(images, repo, district, steps, out, run_id, names, export_bind=False):
             self.calls.append(('container', out.name, tuple(names), export_bind))
-            self.images.append(image)
-            make_store(out / 'roads.sqlite3', b_rows, stamp='c')
+            self.images.append(images)
+            for step in steps:
+                self.write_step(out, step, 'c', False, b_rows)
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
-                mock.patch.object(P, 'windows_fingerprint', lambda python, repo: {'python': 'win'}),
-                mock.patch.object(P, 'container_fingerprint', lambda image, repo, out, run_id: {'python': 'box'})]
+                mock.patch.object(P, 'windows_fingerprint', lambda pythons, repo, images: {i: {'python': 'win'} for i in images}),
+                mock.patch.object(P, 'container_fingerprint', lambda images, repo, out, run_id: {i: {'python': 'box'} for i in images})]
 
-    def main(self, *args, b_rows=ROWS, scratch=None, image=EXPLICIT, environ=None):
-        """`image=None`: no --image flag. `environ`: the process environment's TERRIER_BUILD_IMAGE (unset by default)."""
-        argv = ['--scratch', str(scratch or self.root / 'scratch'), *(['--image', image] if image else []), *args]
+    def main(self, *args, b_rows=ROWS, scratch=None, image=EXPLICIT, score_image=SCORE_EXPLICIT, environ=None):
+        """`image`, `score_image`: the --image / --score-image flags (None: no flag). `environ`: the process environment's
+        TERRIER_BUILD_IMAGE / TERRIER_SCORE_IMAGE (both unset by default)."""
+        argv = ['--scratch', str(scratch or self.root / 'scratch'), *(['--image', image] if image else []),
+                *(['--score-image', score_image] if score_image else []), *args]
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
             for patch in self.fakes(b_rows):
                 stack.enter_context(patch)
-            env = {k: v for k, v in os.environ.items() if k != 'TERRIER_BUILD_IMAGE'}
+            env = {k: v for k, v in os.environ.items() if k not in ('TERRIER_BUILD_IMAGE', 'TERRIER_SCORE_IMAGE')}
             stack.enter_context(mock.patch.dict(os.environ, {**env, **(environ or {})}, clear=True))
             stack.enter_context(contextlib.redirect_stdout(out))
             code = P.main(argv)
@@ -367,7 +469,99 @@ class RunTests(unittest.TestCase):
         self.assertIn('PARITY PASS', text)
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
         self.assertTrue(report['ok'])
-        self.assertEqual(report['fingerprint_container'], {'python': 'box'})
+        self.assertEqual(report['fingerprint_container'], {'geo': {'python': 'box'}})
+        self.assertEqual(report['fingerprint_windows'], {'geo': {'python': 'win'}})
+
+    # The full chain: each step in its own toolchain, the outputs of `shown` among the compared files, the controls on every artifact.
+
+    CHAIN = 'roads,street,contacts,shown,scores'
+
+    def test_the_full_chain_compares_every_output_and_controls_each_one(self):
+        code, text = self.main('--steps', self.CHAIN, '--negative-control')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.calls[2][2], ('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'area_scores_shown.csv',
+                                            'area_scores_shown.manifest.json', 'scores.sqlite3'))
+        for name in self.calls[2][2]:
+            self.assertRegex(text, r'PASS  %s ' % re.escape(name))
+            self.assertRegex(text, r'PASS  negative control %s .*detected' % re.escape(name))
+        self.assertRegex(text, r'PASS  area_scores_shown\.csv +byte-identical')
+        self.assertRegex(text, r'PASS  area_scores_shown\.manifest\.json +same text; the line endings differ only')
+        self.assertRegex(text, r'negative control area_scores_shown\.csv +one byte changed at offset \d+: detected')
+        self.assertRegex(text, r'negative control scores\.sqlite3 +one row removed from \w+: detected')
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(report['fingerprint_container']), ['geo', 'score'])
+        self.assertEqual(sorted(report['fingerprint_windows']), ['geo', 'score'])
+
+    def test_a_container_table_or_store_that_differs_fails_the_chain(self):
+        code, text = self.main('--steps', 'shown,scores', b_rows=ROWS[:2])
+        self.assertEqual(code, 1)
+        self.assertRegex(text, r'PASS  area_scores_shown\.csv ')                 # the fake writes the same table in A and B ...
+        self.assertRegex(text, r'FAIL  scores\.sqlite3 .*table\(s\): .*roads')     # ... and a different row set in B's store
+        self.assertIn('PARITY FAIL', text)
+
+    # Image and interpreter per step.
+
+    def test_each_step_runs_in_its_toolchains_image_and_interpreter(self):
+        code, text = self.main('--steps', self.CHAIN, '--python', 'C:/work/python.exe', '--score-python', 'C:/py312/python.exe')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.images, [{'geo': EXPLICIT, 'score': SCORE_EXPLICIT}])
+        self.assertEqual(self.pythons, [{'geo': 'C:/work/python.exe', 'score': 'C:/py312/python.exe'}] * 2)       # A1, A2
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['images'], {'geo': EXPLICIT, 'score': SCORE_EXPLICIT})
+        self.assertEqual(report['image_sources'], {'geo': 'explicit', 'score': 'explicit'})
+        self.assertEqual(report['python'], {'geo': 'C:/work/python.exe', 'score': 'C:/py312/python.exe'})
+
+    def test_the_windows_score_interpreter_defaults_to_the_one_terriers_own_scripts_use(self):
+        self.main('--steps', 'shown,scores')
+        self.assertEqual(self.pythons[0]['score'], str(P.H.PY312))
+        self.assertTrue(str(P.H.PY312).endswith(r'Python312\python.exe') or os.environ.get('TERRIER_PY312'))
+        self.assertEqual(self.pythons[0]['geo'], os.environ.get('CU_PYTHON') or str(P.H.WORK_PY))
+
+    def test_only_the_images_the_steps_need_are_asked_for(self):
+        for steps, wanted in (('roads,street', {'geo'}), ('shown,scores', {'score'}), ('street,scores', {'geo', 'score'})):
+            self.images.clear()
+            self.main('--steps', steps, scratch=self.root / steps)
+            self.assertEqual(set(self.images[0]), wanted, steps)
+
+    def test_a_score_step_with_no_score_image_and_no_verified_manifest_stops_before_any_build(self):
+        refusal = subprocess.CompletedProcess([], 1, stdout='', stderr='current: NO_CURRENT: no release has been published')
+        with mock.patch.object(P.subprocess, 'run', return_value=refusal) as run, self.assertRaises(SystemExit) as stop:
+            self.main('--steps', 'street,scores', score_image=None)           # the geo image is given; the score image is not
+        self.assertIn('no verified image for terrier-build-score: not running', str(stop.exception))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(run.call_count, 1)                                    # only current.py was asked, and only for the score image
+
+    def test_the_score_image_comes_from_the_flag_then_the_variable_then_the_manifest_by_its_own_name(self):
+        asked, patch = self.manifest(answer={'terrier-build': MANIFEST, 'terrier-build-score': SCORE_MANIFEST})
+        with patch:
+            self.assertEqual(self.main('--steps', 'street,scores', image=None, score_image=None, scratch=self.root / 'm')[0], 0)
+            self.assertEqual(asked, ['terrier-build', 'terrier-build-score'])
+            self.assertEqual(self.images[-1], {'geo': MANIFEST, 'score': SCORE_MANIFEST})
+            asked.clear()
+            self.assertEqual(self.main('--steps', 'street,scores', image=None, score_image=None, scratch=self.root / 'v',
+                                       environ={'TERRIER_SCORE_IMAGE': SCORE_EXPLICIT})[0], 0)
+            self.assertEqual(asked, ['terrier-build'])                                         # the variable beat the manifest
+            self.assertEqual(self.images[-1], {'geo': MANIFEST, 'score': SCORE_EXPLICIT})
+            asked.clear()
+            self.assertEqual(self.main('--steps', 'street,scores', image=EXPLICIT, score_image=SCORE_EXPLICIT,
+                                       scratch=self.root / 'f', environ={'TERRIER_SCORE_IMAGE': 'ghcr.io/x/y@sha256:' + 'e' * 64})[0], 0)
+            self.assertEqual((asked, self.images[-1]), ([], {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}))           # the flag beat both
+            asked.clear()
+            self.assertEqual(self.main('--steps', 'roads', image=None, score_image=None, scratch=self.root / 'g')[0], 0)
+            self.assertEqual(asked, ['terrier-build'])                                         # a geo-only run never asks for the score image
+
+    def test_a_score_image_that_is_not_pinned_by_digest_is_refused_before_any_build(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
+            self.main('--steps', 'shown', score_image='ghcr.io/pjg93-222/terrier-build-score:v1')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertEqual(self.calls, [])
+
+    def test_a_windows_only_run_needs_no_image_for_any_step(self):
+        asked, patch = self.manifest(answer=None)
+        with patch:
+            code, _ = self.main('--steps', self.CHAIN, '--skip-container', image=None, score_image=None)
+        self.assertEqual((code, asked, self.images), (0, [], []))
+        self.assertEqual(len(self.pythons), 2)
 
     def test_the_volume_export_is_the_default_and_export_bind_opts_out(self):
         self.main()
@@ -415,17 +609,19 @@ class RunTests(unittest.TestCase):
     # The container image: --image, then $TERRIER_BUILD_IMAGE, then the verified release manifest (Melange current.py); none = stop.
 
     def manifest(self, answer=MANIFEST):
+        """`answer`: what current.py would print for any name, or a {name: ref} dict."""
         asked = []
-        return asked, mock.patch.object(P, 'manifest_image', lambda name: asked.append(name) or answer)
+        reply = lambda name: asked.append(name) or (answer[name] if isinstance(answer, dict) else answer)      # noqa: E731
+        return asked, mock.patch.object(P, 'manifest_image', reply)
 
     def test_without_a_flag_or_variable_the_image_is_the_verified_manifests(self):
         asked, patch = self.manifest()
         with patch:
             code, text = self.main(image=None)
         self.assertEqual(code, 0, text)
-        self.assertEqual((asked, self.images), (['terrier-build'], [MANIFEST]))
+        self.assertEqual((asked, self.images), (['terrier-build'], [{'geo': MANIFEST}]))
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
-        self.assertEqual((report['image'], report['image_source']), (MANIFEST, 'manifest'))
+        self.assertEqual((report['images'], report['image_sources']), ({'geo': MANIFEST}, {'geo': 'manifest'}))
 
     def test_the_flag_and_then_the_variable_beat_the_manifest(self):
         asked, patch = self.manifest(answer=None)
@@ -433,9 +629,9 @@ class RunTests(unittest.TestCase):
             self.assertEqual(self.main(image='ghcr.io/x/terrier-build@sha256:' + 'c' * 64, environ={'TERRIER_BUILD_IMAGE': EXPLICIT})[0], 0)
             self.assertEqual(self.main(image=None, environ={'TERRIER_BUILD_IMAGE': EXPLICIT}, scratch=self.root / 'two')[0], 0)
         self.assertEqual(asked, [])
-        self.assertEqual(self.images, ['ghcr.io/x/terrier-build@sha256:' + 'c' * 64, EXPLICIT])
+        self.assertEqual(self.images, [{'geo': 'ghcr.io/x/terrier-build@sha256:' + 'c' * 64}, {'geo': EXPLICIT}])
         report = json.loads((self.root / 'two' / 'parity_report.json').read_text(encoding='utf-8'))
-        self.assertEqual(report['image_source'], 'explicit')
+        self.assertEqual(report['image_sources'], {'geo': 'explicit'})
 
     def test_windows_only_never_asks_the_manifest(self):
         asked, patch = self.manifest(answer=None)
@@ -480,15 +676,17 @@ class ExportViaVolumeTests(unittest.TestCase):
     """export_via_volume and container_build with the docker CLI replaced by a recorder: the order of the calls and the cleanup."""
 
     IMAGE = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64
+    SCORE = 'ghcr.io/x/terrier-build-score@sha256:' + 'c' * 64
 
-    def record(self, fail_on=None):
-        calls = []
+    def record(self, fail_on=None, stdout=''):
+        calls, self.envs = [], []
 
         def fake_run(argv, **kwargs):
             calls.append(argv[1:] if argv[0] == 'docker' else argv)
+            self.envs.append(kwargs.get('env'))
             if fail_on and argv[1:3] == fail_on:
                 raise subprocess.CalledProcessError(1, argv)
-            return subprocess.CompletedProcess(argv, 0, stdout='')
+            return subprocess.CompletedProcess(argv, 0, stdout=stdout)
 
         return calls, [mock.patch.object(P.shutil, 'which', lambda name: 'docker'), mock.patch.object(P.subprocess, 'run', fake_run)]
 
@@ -496,7 +694,7 @@ class ExportViaVolumeTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             for patch in patches:
                 stack.enter_context(patch)
-            P.export_via_volume(self.IMAGE, Path('repo'), Path('out'), 'B-1', ['street.sqlite3', 'contacts.sqlite3'])
+            P.export_via_volume({'geo': self.IMAGE}, Path('repo'), Path('out'), 'B-1', ['street.sqlite3', 'contacts.sqlite3'])
 
     def test_the_volume_is_made_owned_by_the_build_user_used_copied_out_and_removed(self):
         calls, patches = self.record()
@@ -522,11 +720,11 @@ class ExportViaVolumeTests(unittest.TestCase):
             self.export(patches)
         self.assertEqual(calls[-1], ['volume', 'rm', 'terrier-export-B-1'])
 
-    def build(self, patches, **kwargs):
+    def build(self, patches, images=None, steps=('street',), names=('street.sqlite3',), **kwargs):
         with contextlib.ExitStack() as stack:
             for patch in patches:
                 stack.enter_context(patch)
-            P.container_build(self.IMAGE, Path('repo'), 'co-05', ['street'], Path('out'), 'B-1', ['street.sqlite3'], **kwargs)
+            P.container_build(images or {'geo': self.IMAGE}, Path('repo'), 'co-05', list(steps), Path('out'), 'B-1', list(names), **kwargs)
 
     def test_a_container_build_exports_through_a_volume_unless_export_bind_is_given(self):
         calls, patches = self.record()
@@ -535,6 +733,45 @@ class ExportViaVolumeTests(unittest.TestCase):
         self.assertEqual([c[:2] for c in calls[1:]], [['volume', 'create'], ['run', '--rm'], ['compose', '-f'], ['create', '--name'],
                                                       ['cp', 'terrier-export-cp-B-1:/out/.'], ['rm', '-v'], ['volume', 'rm']])
         self.assertFalse(any(str(P.EXPORT_BIND_FILE) in c for c in calls))
+
+    # Image and service per step: the geo steps in terrier-build, the score steps in terrier-score, one stage volume for all.
+
+    def test_each_step_runs_in_the_service_of_its_toolchain_and_both_image_variables_are_set(self):
+        calls, patches = self.record()
+        self.build(patches, images={'geo': self.IMAGE, 'score': self.SCORE}, steps=('roads', 'street', 'contacts', 'shown', 'scores'),
+                   names=('scores.sqlite3',))
+        runs = calls[:5]
+        self.assertEqual([c[-5] for c in runs], ['terrier-build'] * 3 + ['terrier-score'] * 2)
+        self.assertEqual([c[-3] for c in runs], ['roads', 'street', 'contacts', 'shown', 'scores'])
+        self.assertTrue(all(c[-4] == 'run' and c[-2:] == ['--district', 'co-05'] for c in runs))
+        compose = [env for c, env in zip(calls, self.envs) if c[0] == 'compose']
+        self.assertEqual(len(compose), 6)                                                 # five steps and the export
+        for env in compose:
+            self.assertEqual((env['TERRIER_BUILD_IMAGE'], env['TERRIER_SCORE_IMAGE']), (self.IMAGE, self.SCORE))
+        self.assertEqual(calls[-1], ['volume', 'rm', 'terrier-export-B-1'])
+
+    def test_a_run_of_one_toolchain_gives_the_other_variable_the_same_image_and_exports_with_the_image_it_has(self):
+        calls, patches = self.record()
+        self.build(patches, images={'geo': self.IMAGE})
+        compose = [env for c, env in zip(calls, self.envs) if c[0] == 'compose']
+        self.assertTrue(all((e['TERRIER_BUILD_IMAGE'], e['TERRIER_SCORE_IMAGE']) == (self.IMAGE, self.IMAGE) for e in compose))
+        calls, patches = self.record()
+        self.build(patches, images={'score': self.SCORE}, steps=('shown', 'scores'), names=('scores.sqlite3',))
+        self.assertEqual([c[-5] for c in calls[:2]], ['terrier-score', 'terrier-score'])
+        compose = [env for c, env in zip(calls, self.envs) if c[0] == 'compose']
+        self.assertTrue(all((e['TERRIER_BUILD_IMAGE'], e['TERRIER_SCORE_IMAGE']) == (self.SCORE, self.SCORE) for e in compose))
+        self.assertIn(self.SCORE, calls[3])                                               # the chown of the export volume
+        self.assertIn(self.SCORE, calls[5])                                               # the holder `docker cp` reads from
+        self.assertFalse(any(self.IMAGE in c for c in calls))
+
+    def test_the_container_fingerprint_asks_each_toolchains_service(self):
+        calls, patches = self.record(stdout='noise\n{"python": "3.12.10"}\n')
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            found = P.container_fingerprint({'geo': self.IMAGE, 'score': self.SCORE}, Path('repo'), Path('out'), 'B-1')
+        self.assertEqual(found, {'geo': {'python': '3.12.10'}, 'score': {'python': '3.12.10'}})
+        self.assertEqual([(c[-2], c[-1]) for c in calls], [('terrier-build', 'fingerprint'), ('terrier-score', 'fingerprint')])
 
     def test_export_bind_exports_straight_into_the_scratch_folder_with_the_bind_override_and_no_volume(self):
         calls, patches = self.record()
@@ -558,6 +795,53 @@ class ExportViaVolumeTests(unittest.TestCase):
         self.assertIn('source: ${HOST_OUT:?', body)
         self.assertNotIn('type: volume', body)
         self.assertNotIn('cu-geography-v3', text)
+
+
+class WindowsBuildTests(unittest.TestCase):
+    """windows_build and windows_fingerprint with subprocess.run replaced by a recorder: which interpreter and environment each step gets."""
+
+    ENV = {'PYTHONPATH': 'elsewhere', 'CU_DATA_DIR': 'live', 'TERRIER_LOCAL_DIR': 'live', 'KEEP': '1'}
+    PYTHONS = {'geo': 'GEO.exe', 'score': 'SCORE.exe'}
+
+    def record(self, stdout='{"python": "3"}'):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs.get('env')))
+            return subprocess.CompletedProcess(argv, 0, stdout=stdout)
+
+        return calls, mock.patch.object(P.subprocess, 'run', fake_run)
+
+    def test_each_step_runs_in_the_interpreter_of_its_toolchain_into_the_scratch_folder_only(self):
+        calls, patch = self.record()
+        with patch, mock.patch.dict(os.environ, self.ENV, clear=True):
+            P.windows_build(self.PYTHONS, REPO, 'co-05', ['roads', 'street', 'contacts', 'shown', 'scores'], Path('scratch') / 'A1')
+        self.assertEqual([c[0][0] for c in calls], ['GEO.exe'] * 3 + ['SCORE.exe'] * 2)
+        self.assertEqual([c[0][1:] for c in calls], [[str(REPO / 'tools' / 'build_step.py'), 'run', step, '--district', 'co-05']
+                                                     for step in ('roads', 'street', 'contacts', 'shown', 'scores')])
+        for _argv, env in calls:
+            self.assertEqual(env['TERRIER_LOCAL_DIR'], str(Path('scratch') / 'A1'))      # never the live .local
+            self.assertNotIn('CU_DATA_DIR', env)
+            self.assertEqual(env['KEEP'], '1')
+
+    def test_the_score_steps_run_isolated_from_the_user_site_as_their_documented_command_line_has_it(self):
+        calls, patch = self.record()
+        with patch, mock.patch.dict(os.environ, self.ENV, clear=True):
+            P.windows_build(self.PYTHONS, REPO, 'co-05', ['street', 'shown'], Path('A1'))
+        geo, score = (env for _argv, env in calls)
+        self.assertEqual(geo['PYTHONPATH'], 'elsewhere')                                   # the geo steps keep the environment as it was
+        self.assertNotIn('PYTHONNOUSERSITE', geo)
+        self.assertNotIn('PYTHONPATH', score)                                              # env -u PYTHONPATH PYTHONNOUSERSITE=1 ...
+        self.assertEqual((score['PYTHONNOUSERSITE'], score['PYTHONDONTWRITEBYTECODE']), ('1', '1'))
+
+    def test_the_fingerprint_is_taken_in_each_toolchains_interpreter(self):
+        calls, patch = self.record()
+        with patch, mock.patch.dict(os.environ, self.ENV, clear=True):
+            found = P.windows_fingerprint(self.PYTHONS, REPO, ['geo', 'score'])
+        self.assertEqual(found, {'geo': {'python': '3'}, 'score': {'python': '3'}})
+        self.assertEqual([(c[0][0], c[0][-1]) for c in calls], [('GEO.exe', 'fingerprint'), ('SCORE.exe', 'fingerprint')])
+        self.assertEqual(calls[1][1]['PYTHONNOUSERSITE'], '1')
+        self.assertNotIn('TERRIER_LOCAL_DIR', calls[1][1])              # a fingerprint builds nothing: it is not pointed at any folder
 
 
 # ---- the image, the compose file, the locks, the workflow ------------------------------------------------------------------------
@@ -628,6 +912,19 @@ class BuildImageFilesTests(unittest.TestCase):
         self.assertEqual({m['target'] for m in mounts if m['type'] == 'bind' and m.get('read_only') == 'true'},
                          {'/terrier', '/sources/statara_co_cd005_20260904.csv', '/sources/terrier-sources', '/geography',
                           '/sibling/.local/.street-salt', '/sibling/.local/row-framework-20260930'})
+
+    def test_the_score_service_has_the_score_image_and_exactly_the_mounts_of_the_build_service(self):
+        text = read('compute.compose.yaml')
+        self.assertEqual(re.findall(r'(?m)^  (terrier-[a-z]+):$', text), ['terrier-build', 'terrier-score', 'terrier-export'])
+        build = text[text.index('  terrier-build:'):text.index('  terrier-score:')]
+        score = text[text.index('  terrier-score:'):text.index('  terrier-export:')]
+        self.assertRegex(build, r'(?m)^    volumes: &build-volumes\n')                        # one list of mounts, defined once ...
+        self.assertRegex(score, r'(?m)^    <<: \*build\n    image: \$\{TERRIER_SCORE_IMAGE:\?pin the score image by digest')
+        self.assertRegex(score, r'(?m)^    volumes: \*build-volumes\n')                       # ... and shared: the score steps mount nothing else
+        self.assertNotIn('- type:', score)
+        self.assertEqual(text.count('TERRIER_SCORE_IMAGE:?'), 1)                              # the same :? rule as TERRIER_BUILD_IMAGE
+        self.assertEqual(text.count('TERRIER_BUILD_IMAGE:?'), 1)
+        self.assertNotIn('cu-geography-v3', score)
 
     def test_the_release_workflow_builds_the_two_images_by_digest_with_pinned_actions(self):
         text = read('.github/workflows/release.yml')

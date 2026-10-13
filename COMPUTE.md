@@ -15,15 +15,18 @@ with the local ones. The export goes through a named volume by default (section 
 | `tools/hostpaths.py` | every machine path a build tool used to hard-code, as an environment variable (section 2). Defaults are today's Windows paths, so the laptop builds as before |
 | `tools/build_step.py` | `run <step> --district d` / `export <out> <files>` / `fingerprint`. The container entrypoint, and also what the Windows side runs, so both sides take the same code path |
 | `Dockerfile.build` | the toolchain, no code and no data: target `geo` (CPython 3.12.14, = `work\.venv`; `python:3.12.14-slim-trixie`) and target `score` (CPython 3.12.10, = system Python; still `python:3.12.10-slim-bookworm`, because the registry has no 3.12.10 trixie image); both apply Debian's security updates at build, hashed locks `requirements.build.lock` / `requirements.score.lock` |
-| `compute.compose.yaml` | services `terrier-build` (network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume) and `terrier-export` (copies stores from the `stage` volume into a second named volume, `terrier-export-<run id>`, with an integrity check; the harness `docker cp`s them to the scratch folder and removes it) |
+| `compute.compose.yaml` | services `terrier-build` (geo image) and `terrier-score` (score image, `TERRIER_SCORE_IMAGE`; the same mounts, shared through one YAML anchor): network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume; and `terrier-export` (copies stores from the `stage` volume into a second named volume, `terrier-export-<run id>`, with an integrity check; the harness `docker cp`s them to the scratch folder and removes it) |
 | `compute.export-bind.compose.yaml` | opt-out override (`--export-bind`): `terrier-export` writes `/out` into the bind-mounted scratch folder instead of the volume. Native-Linux hosts only |
-| `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact. The image is `--image`, else `$TERRIER_BUILD_IMAGE`, else the verified current release manifest (section 3, step 4) |
+| `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact. Each step has a toolchain: roads, street, contacts run in the geo image and, on Windows, the work venv (`--python`); shown, scores in the score image and, on Windows, the system Python 3.12 (`--score-python`, `$TERRIER_PY312`). An image is `--image` / `--score-image`, else `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest (section 3, step 4) |
 | `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release. Job `draft-release` folds both digests into the release's `digests.json`, which the platform's `ops/release.py` reads, so the signed manifest carries them |
 | `.github/workflows/release.yml` job `scan` + `tools/image_gate.py` | trivy on `terrier-web`, `terrier-build` and `terrier-build-score` by digest, the platform's image policy (D-181, D-182: fixable HIGH/CRITICAL vulnerabilities, misconfigurations, secrets and pip/npm licences that are forbidden, restricted or unknown block; unfixed vulnerabilities and OS-package licences are reported). The draft release waits for it. Tests: `tools/test_image_gate.py` |
 | `tools/test_compute.py` | the tests (also in the release workflow's test job) |
 
-Steps wired in `tools/build_step.py`: `roads` (the smoke; exercised by a synthetic test), `street` and `contacts` (their plain
-`--district` command lines; not run in a container yet). Each is one row of `STEPS`.
+Steps wired in `tools/build_step.py`, in the order Terrier's Windows runner (`_build/run_nowithhold.ps1`) runs them, each one row of
+`STEPS`: `roads`, `street`, `contacts` (toolchain `geo`), `shown` (`tools/shown_areas.py --district d`; writes `area_scores_shown.csv`
+and its `.manifest.json`) and `scores` (`tools/build_scores_v3.py --district d --receipt <data dir>/scores_receipt.json`; writes
+`scores.sqlite3`; the receipt would otherwise go into the repo's `_build`, which is read-only in a container) (toolchain `score`).
+`shown` and `scores` read the earlier stores (street, contacts, the shown table) from the same folder, so run them after those.
 
 ## 2. Path seams (`tools/hostpaths.py`)
 
@@ -53,8 +56,8 @@ literals (byte for byte on Windows) and that each variable moves what it names.
 4. Get the digest (a tag is refused by the harness, by design). Once a signed release carries the build images, you do not: the
    harness asks the Melange platform's `ops\release_lib\current.py image terrier-build` (the laptop's verified current manifest;
    `$env:MELANGE_RELEASE_CURRENT` moves the script; anything but a verified digest stops the run, with no fallback to a hand-edited
-   value). `terrier-build-score` resolves the same way for the score steps, when they are added (section 5). The one override is an
-   explicit `--image` / `$TERRIER_BUILD_IMAGE`, for a build no signed release names yet (the first parity runs):
+   value). `terrier-build-score` resolves the same way for the score steps. The one override is an
+   explicit `--image` / `$TERRIER_BUILD_IMAGE` (and `--score-image` / `$TERRIER_SCORE_IMAGE`), for a build no signed release names yet (the first parity runs):
 
 ```powershell
 python 'C:\Users\pgoff\OneDrive\Desktop\Melange Systems\ops\release_lib\current.py' image terrier-build   # the digest the harness uses by default
@@ -114,9 +117,12 @@ so the harness reports the check's own verdict, not a count).
   seconds on a volume. `--export-bind` (adds `compute.export-bind.compose.yaml`) restores the bind export; use it only where the folder is
   on a native file system (a Linux host). Measured 2026-10-12 (machine loaded by other jobs): street + contacts, A1 ~11 min,
   A2 ~9 min, B build ~21 min, export 31 s, comparison with both negative controls ~17 min (street alone: 6 min to digest three copies).
-- Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `shown` and `scores` (the **score** image: the
-  3.12.10 interpreter; resolve `terrier-build-score` with `compute_parity.manifest_image` and give compose its own variable,
-  `TERRIER_SCORE_IMAGE`, with the same `:?` rule as `TERRIER_BUILD_IMAGE`), `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
+- `shown` and `scores` are wired (`--steps roads,street,contacts,shown,scores`). Windows A runs use the system Python 3.12 (`--score-python`,
+  `$TERRIER_PY312`; the same one `_build/run_nowithhold.ps1` calls `$PY312`), isolated as the tools' own docstrings say
+  (`PYTHONPATH` unset, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`). Compose parses every service, so both image variables are always
+  set; a run that needs one toolchain gives the other variable the same image (that service never starts), and the export uses the geo image
+  when the run has one. A `.json` output (the shown manifest) may differ between Windows and the container in line endings only (Python's
+  text mode writes CRLF on Windows); the line says so. Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
   to `--out-dir` and `--receipt`, both outside `TERRIER_LOCAL_DIR`, and imports Django settings: set `CU_DATA_DIR` and `CU_SECRET_KEY` to
   scratch values). Live sizes: scores 551 MB, walk 311 MB. Compare the bundle with `--files data/<key>.zip`.
 - `--api` runs `co_baseline.py check --parts api --data-dir <folder>` on A1 and B (a spare server per folder, minutes each). It needs a

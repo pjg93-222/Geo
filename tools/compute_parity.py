@@ -1,19 +1,23 @@
 """Parity of a containerised store build against the Windows build (COMPUTE.md; design sections 4 and 6).
 
     <venv python> tools/compute_parity.py --scratch <new folder> [--steps roads] [--district co-05]
-                  [--image ghcr.io/pjg93-222/terrier-build@sha256:...] [--api] [--negative-control] [--skip-container]
-                  [--export-bind]
+                  [--image ghcr.io/pjg93-222/terrier-build@sha256:...] [--score-image ghcr.io/pjg93-222/terrier-build-score@sha256:...]
+                  [--api] [--negative-control] [--skip-container] [--export-bind]
 
-  The container image is, in this order: --image, $TERRIER_BUILD_IMAGE (an explicit build no signed release names yet: the first
-  parity runs), else the one the laptop's verified current release manifest names (Melange ops/RELEASE.md, "Compute jobs follow the
-  manifest"; `current.py image terrier-build`). None of the three: nothing runs.
+  Each step has a toolchain (tools/build_step.py STEPS): roads, street and contacts run in the geo image (terrier-build) and on Windows
+  in the work venv (--python); shown and scores run in the score image (terrier-build-score) and on Windows in the system Python 3.12
+  (--score-python, $TERRIER_PY312), as Terrier's own runner does. Only the images the chosen steps need are resolved.
+  An image is, in this order: --image / --score-image, $TERRIER_BUILD_IMAGE / $TERRIER_SCORE_IMAGE (an explicit build no signed release
+  names yet: the first parity runs), else the one the laptop's verified current release manifest names (Melange ops/RELEASE.md,
+  "Compute jobs follow the manifest"; `current.py image terrier-build` / `terrier-build-score`). None of the three: nothing runs.
 
   A1, A2  the Windows build of the steps, twice, into <scratch>/A1 and <scratch>/A2. What differs between them is the legitimate
           run-to-run variance (a stamp, a run id): those tables, and only those, are left out of the comparison with B
   B       the same steps in the container (compute.compose.yaml), built in the stage volume, exported through a named volume
           and `docker cp` to <scratch>/B (--export-bind: straight into the bind-mounted folder, for native-Linux hosts)
   Compared with co_baseline.store_digest per table (a logical comparison) for each SQLite store and byte for byte for every other
-  file (--files: the bundle zip, density.json, ...); --api adds co_baseline's golden endpoint check on A1 and B.
+  file (the shown-areas CSV, --files: the bundle zip, density.json, ...; a .json file by content: Python writes it with CRLF on
+  Windows and LF in the container); --api adds co_baseline's golden endpoint check on A1 and B.
   Prints PASS or FAIL per artifact and exits 0 only when every line passes. Counts and names only; no row is printed.
   One heavy job at a time: A1, then A2, then B. Never point --scratch at a .local folder.
 """
@@ -36,7 +40,8 @@ from tools import co_baseline as B           # noqa: E402
 from tools import districts as D             # noqa: E402
 from tools import hostpaths as H             # noqa: E402
 
-IMAGE_NAME = 'terrier-build'         # the name the release manifest gives the geo build image (the score image is terrier-build-score)
+IMAGE_NAMES = {'geo': 'terrier-build', 'score': 'terrier-build-score'}      # what the release manifest calls each build image
+SERVICES = {'geo': 'terrier-build', 'score': 'terrier-score'}                 # the compose service that runs each
 RELEASE_CURRENT = r'C:\Users\pgoff\OneDrive\Desktop\Melange Systems\ops\release_lib\current.py'      # $MELANGE_RELEASE_CURRENT moves it
 COMPOSE_FILE = REPO / 'compute.compose.yaml'
 EXPORT_BIND_FILE = REPO / 'compute.export-bind.compose.yaml'
@@ -80,7 +85,9 @@ def compare_store(name, a1, a2, b):
 
 
 def compare_file(name, a1, a2, b):
-    """(ok, detail) for a non-SQLite artifact: the bytes must be the same in all three folders."""
+    """(ok, detail) for a non-SQLite artifact: the bytes must be the same in all three folders. The one exception is a .json file
+    (a manifest the tool writes in text mode: CRLF on Windows, LF in the container) whose bytes differ in line endings and nowhere
+    else; the detail line says so."""
     paths = {label: Path(folder) / name for label, folder in (('A1', a1), ('A2', a2), ('B', b))}
     missing = [label for label, path in paths.items() if not path.is_file()]
     if missing:
@@ -89,6 +96,9 @@ def compare_file(name, a1, a2, b):
     if shas['A1'] != shas['A2']:
         return False, 'the two Windows builds differ byte for byte: the reference is not stable'
     if shas['A1'] != shas['B']:
+        windows, box = (paths[label].read_bytes().replace(b'\r\n', b'\n') for label in ('A1', 'B'))
+        if name.endswith('.json') and windows == box:
+            return True, 'same text; the line endings differ only (Windows CRLF, container LF), sha256 %s / %s' % (shas['A1'][:12], shas['B'][:12])
         return False, 'B differs from the Windows build byte for byte'
     return True, 'byte-identical, sha256 %s' % shas['B'][:12]
 
@@ -131,23 +141,41 @@ def remove_one_row(path, skip=()):
     raise ValueError('no table to remove a row from in %s' % path)
 
 
+def flip_one_byte(path):
+    """Negative control for any other file: change one byte in the middle of it (one bit). Returns the offset."""
+    data = bytearray(Path(path).read_bytes())
+    at = len(data) // 2
+    data[at] ^= 0x01
+    Path(path).write_bytes(bytes(data))
+    return at
+
+
 # ---- the two builds ---------------------------------------------------------------------------------------------------
 
-def windows_env(out):
+def windows_env(image, out=None):
+    """The environment of a Windows build step. The score steps run in the interpreter's own world, as the documented command line of
+    shown_areas.py and build_scores_v3.py has it (`env -u PYTHONPATH PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 <python>`)."""
     env = {k: v for k, v in os.environ.items() if k not in ('CU_DATA_DIR', 'TERRIER_LOCAL_DIR')}
-    env['TERRIER_LOCAL_DIR'] = str(out)
+    if out is not None:
+        env['TERRIER_LOCAL_DIR'] = str(out)
+    if image == 'score':
+        env.pop('PYTHONPATH', None)
+        env.update(PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1')
     return env
 
 
-def windows_build(python, repo, district, steps, out):
+def windows_build(pythons, repo, district, steps, out):
+    """Each step in its own interpreter: pythons = {'geo': work venv, 'score': system Python 3.12}."""
     for step in steps:
-        subprocess.run([python, str(repo / 'tools' / 'build_step.py'), 'run', step, '--district', district],
-                       cwd=str(repo), env=windows_env(out), check=True)
+        image = S.STEPS[step].image
+        subprocess.run([pythons[image], str(repo / 'tools' / 'build_step.py'), 'run', step, '--district', district],
+                       cwd=str(repo), env=windows_env(image, out), check=True)
 
 
-def windows_fingerprint(python, repo):
-    return json.loads(subprocess.run([python, str(repo / 'tools' / 'build_step.py'), 'fingerprint'], cwd=str(repo),
-                                     check=True, capture_output=True, text=True).stdout)
+def windows_fingerprint(pythons, repo, images):
+    return {image: json.loads(subprocess.run([pythons[image], str(repo / 'tools' / 'build_step.py'), 'fingerprint'], cwd=str(repo),
+                                             env=windows_env(image), check=True, capture_output=True, text=True).stdout)
+            for image in images}
 
 
 def manifest_image(name):
@@ -169,17 +197,25 @@ def docker_exe():
     return docker
 
 
-def compose(image, repo, out, run_id, *args, capture=False, files=()):
-    env = {**os.environ, 'TERRIER_BUILD_IMAGE': image, 'HOST_REPO': str(repo), 'HOST_OUT': str(out), 'RUN_ID': run_id}
+def export_image(images):
+    """The image that exports (stdlib only, so either does): the geo image when the run has one."""
+    return images.get('geo') or images['score']
+
+
+def compose(images, repo, out, run_id, *args, capture=False, files=()):
+    """`images`: {'geo': ref, 'score': ref}, the toolchains the run needs. Compose parses every service, so both variables are set; the one
+    the run does not need is given the other image (its service is never started)."""
+    env = {**os.environ, 'TERRIER_BUILD_IMAGE': images.get('geo') or images['score'],
+           'TERRIER_SCORE_IMAGE': images.get('score') or images['geo'], 'HOST_REPO': str(repo), 'HOST_OUT': str(out), 'RUN_ID': run_id}
     overrides = [part for f in files for part in ('-f', str(f))]
     return subprocess.run([docker_exe(), 'compose', '-f', str(COMPOSE_FILE), *overrides, '--profile', 'terrier', *args], env=env,
                           check=True, capture_output=capture, text=True).stdout
 
 
-def export_via_volume(image, repo, out, run_id, names):
+def export_via_volume(images, repo, out, run_id, names):
     """The export with /out in a named volume (compute.compose.yaml), then `docker cp` into `out`. The volume is created here
     and given to uid 10001 (a new volume is root's), and is removed again, also when the export fails."""
-    docker, volume, holder = docker_exe(), 'terrier-export-' + run_id, 'terrier-export-cp-' + run_id
+    docker, volume, holder, image = docker_exe(), 'terrier-export-' + run_id, 'terrier-export-cp-' + run_id, export_image(images)
 
     def run(*argv):
         subprocess.run([docker, *argv], check=True, stdout=subprocess.DEVNULL)
@@ -188,7 +224,7 @@ def export_via_volume(image, repo, out, run_id, names):
     try:
         run('run', '--rm', '--pull', 'never', '--network', 'none', '--user', '0', '-v', volume + ':/out', '--entrypoint', 'chown',
             image, '10001:10001', '/out')
-        compose(image, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names)
+        compose(images, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names)
         run('create', '--name', holder, '--pull', 'never', '--network', 'none', '-v', volume + ':/out:ro', image)
         try:
             run('cp', holder + ':/out/.', str(out))
@@ -198,17 +234,19 @@ def export_via_volume(image, repo, out, run_id, names):
         run('volume', 'rm', volume)
 
 
-def container_build(image, repo, district, steps, out, run_id, names, export_bind=False):
+def container_build(images, repo, district, steps, out, run_id, names, export_bind=False):
+    """Each step in the service of its toolchain (SERVICES), all into the same stage volume, then the export."""
     for step in steps:
-        compose(image, repo, out, run_id, 'run', '--rm', 'terrier-build', 'run', step, '--district', district)
+        compose(images, repo, out, run_id, 'run', '--rm', SERVICES[S.STEPS[step].image], 'run', step, '--district', district)
     if export_bind:
-        compose(image, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names, files=[EXPORT_BIND_FILE])
+        compose(images, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names, files=[EXPORT_BIND_FILE])
     else:
-        export_via_volume(image, repo, out, run_id, names)
+        export_via_volume(images, repo, out, run_id, names)
 
 
-def container_fingerprint(image, repo, out, run_id):
-    return json.loads(compose(image, repo, out, run_id, 'run', '--rm', 'terrier-build', 'fingerprint', capture=True).splitlines()[-1])
+def container_fingerprint(images, repo, out, run_id):
+    return {image: json.loads(compose(images, repo, out, run_id, 'run', '--rm', SERVICES[image], 'fingerprint',
+                                      capture=True).splitlines()[-1]) for image in images}
 
 
 def api_check(python, repo, folder, log):
@@ -226,11 +264,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--scratch', required=True, type=Path, help='a NEW folder for A1, A2, B and the report')
     parser.add_argument('--district', default=D.DEFAULT, choices=list(D.DISTRICTS))
-    parser.add_argument('--steps', default='roads', help='comma list of %s (default roads, the smoke)' % ', '.join(sorted(S.STEPS)))
+    parser.add_argument('--steps', default='roads', help='comma list of %s, in build order (default roads, the smoke)' % ', '.join(S.STEPS))
     parser.add_argument('--files', default='', help='comma list of other files to compare byte for byte (relative to the data folder)')
-    parser.add_argument('--python', default=os.environ.get('CU_PYTHON') or str(H.WORK_PY), help='the Windows build interpreter')
+    parser.add_argument('--python', default=os.environ.get('CU_PYTHON') or str(H.WORK_PY),
+                        help='the Windows interpreter of the geo steps (roads, street, contacts)')
+    parser.add_argument('--score-python', default=str(H.PY312),
+                        help='the Windows interpreter of the score steps (shown, scores): the system Python 3.12 ($TERRIER_PY312)')
     parser.add_argument('--image', default=os.environ.get('TERRIER_BUILD_IMAGE'),
                         help='terrier-build image, pinned by digest (default: $TERRIER_BUILD_IMAGE, else the verified release manifest)')
+    parser.add_argument('--score-image', default=os.environ.get('TERRIER_SCORE_IMAGE'),
+                        help='terrier-build-score image, pinned by digest (default: $TERRIER_SCORE_IMAGE, else the verified release manifest)')
     parser.add_argument('--repo', type=Path, default=REPO, help='the tree both builds run (default: this one)')
     parser.add_argument('--api', action='store_true', help='also run co_baseline\'s golden endpoint check on A1 and B (co-05, full set)')
     parser.add_argument('--negative-control', action='store_true', help='also prove the comparison fails when one row is removed')
@@ -250,17 +293,27 @@ def main(argv=None):
         parser.error('--scratch must not be inside a .local folder')
     if scratch.exists() and any(scratch.iterdir()) and not args.reuse_windows:
         parser.error('--scratch %s is not empty; a parity run starts from a new folder' % scratch)
-    source = 'explicit'
-    if not args.skip_container and not args.image:
-        args.image, source = manifest_image(IMAGE_NAME), 'manifest'
-    if not args.skip_container and '@sha256:' not in args.image:
-        parser.error('--image (or $TERRIER_BUILD_IMAGE) must be pinned by digest: ghcr.io/pjg93-222/terrier-build@sha256:...')
+    toolchains = [t for t in IMAGE_NAMES if any(S.STEPS[s].image == t for s in steps)]          # geo first
+    pythons = {'geo': args.python, 'score': args.score_python}
+    images, sources = {}, {}
+    if not args.skip_container:
+        explicit = {'geo': args.image, 'score': args.score_image}
+        for toolchain in toolchains:
+            images[toolchain], sources[toolchain] = ((explicit[toolchain], 'explicit') if explicit[toolchain]
+                                                     else (manifest_image(IMAGE_NAMES[toolchain]), 'manifest'))
+        for toolchain, image in images.items():
+            if '@sha256:' not in image:
+                parser.error('the %s image (%s) must be pinned by digest: ghcr.io/pjg93-222/%s@sha256:...' % (
+                    toolchain, '--image or $TERRIER_BUILD_IMAGE' if toolchain == 'geo' else '--score-image or $TERRIER_SCORE_IMAGE',
+                    IMAGE_NAMES[toolchain]))
     d = D.get(args.district)
     sub = D.data_dir(d, Path('.'))                      # co-05: the folder itself; another district: its folder below it
-    names = [(sub / S.STEPS[s].store).as_posix() for s in steps] + [(sub / f).as_posix() for f in args.files.split(',') if f]
+    names = [(sub / f).as_posix() for s in steps for f in (S.STEPS[s].store, *S.STEPS[s].also)]
+    names += [(sub / f).as_posix() for f in args.files.split(',') if f]
     folders = {label: scratch / label for label in ('A1', 'A2', 'B')}
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    report = {'district': d['id'], 'steps': steps, 'image': args.image, 'image_source': source, 'results': []}
+    report = {'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources,
+              'python': {t: pythons[t] for t in toolchains}, 'results': []}
 
     for label in ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():
@@ -268,13 +321,13 @@ def main(argv=None):
             continue
         print('%s: Windows build of %s' % (label, ', '.join(steps)), flush=True)
         folders[label].mkdir(parents=True, exist_ok=True)
-        windows_build(args.python, args.repo, d['id'], steps, folders[label])
-    report['fingerprint_windows'] = windows_fingerprint(args.python, args.repo)
+        windows_build(pythons, args.repo, d['id'], steps, folders[label])
+    report['fingerprint_windows'] = windows_fingerprint(pythons, args.repo, toolchains)
     if not args.skip_container:
         print('B: container build of %s (stage volume %s)' % (', '.join(steps), run_id), flush=True)
         folders['B'].mkdir(parents=True, exist_ok=True)
-        container_build(args.image, args.repo, d['id'], steps, folders['B'], run_id, names, export_bind=args.export_bind)
-        report['fingerprint_container'] = container_fingerprint(args.image, args.repo, folders['B'], run_id)
+        container_build(images, args.repo, d['id'], steps, folders['B'], run_id, names, export_bind=args.export_bind)
+        report['fingerprint_container'] = container_fingerprint(images, args.repo, folders['B'], run_id)
 
     def verdict(name, ok, detail):
         print('%-5s %-34s %s' % ('PASS' if ok else 'FAIL', name, detail), flush=True)
@@ -291,14 +344,17 @@ def main(argv=None):
         if note:
             print('      %-34s %s' % ('', note), flush=True)
     if not args.skip_container and args.negative_control:
-        for name in (n for n in names if n.endswith('.sqlite3')):
+        for name in names:
             control = scratch / 'NC'
             target = control / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(folders['B'] / name, target)
-            table = remove_one_row(target, noise_tables(name, folders['A1'], folders['A2']))
-            ok, detail = compare_store(name, folders['A1'], folders['A2'], control)
-            verdict('negative control ' + name, not ok, 'one row removed from %s: %s' % (table, 'detected' if not ok else 'NOT detected'))
+            if name.endswith('.sqlite3'):
+                table = remove_one_row(target, noise_tables(name, folders['A1'], folders['A2']))
+                what, ok = 'one row removed from %s' % table, compare_store(name, folders['A1'], folders['A2'], control)[0]
+            else:
+                what, ok = 'one byte changed at offset %d' % flip_one_byte(target), compare_file(name, folders['A1'], folders['A2'], control)[0]
+            verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
     if args.api and not args.skip_container:
         results = {}
         for label in ('A1', 'B'):

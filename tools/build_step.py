@@ -32,13 +32,20 @@ class Step(NamedTuple):
     script: str
     store: str          # the file it writes, in the district's data directory
     salt: bool = False  # needs the district's street salt to exist already
+    image: str = 'geo'  # which toolchain: 'geo' = work\.venv / terrier-build, 'score' = system Python 3.12 / terrier-build-score
+    receipt: str = ''   # a tool whose receipt defaults to a folder of the repo gets this file in the data directory instead
+                        # (the repo is mounted read-only in the container); counts and timings, never compared
+    also: tuple = ()    # other files it writes in the data directory: they must exist, and are compared and exported with the store
 
 
-# Only roads is exercised in a container so far (the smoke); the others are the tools' plain `--district` command lines.
+# The tools' plain `--district` command lines, in the order Terrier's Windows runner (_build/run_nowithhold.ps1) runs them: roads,
+# street and contacts (work venv), then shown and scores (system Python 3.12: pandas and pyarrow, which the work venv has not).
 STEPS = {
     'roads': Step('tools/build_road_context.py', 'roads.sqlite3'),
     'street': Step('tools/build_street.py', 'street.sqlite3', salt=True),
     'contacts': Step('tools/build_contacts.py', 'contacts.sqlite3', salt=True),
+    'shown': Step('tools/shown_areas.py', 'area_scores_shown.csv', image='score', also=('area_scores_shown.manifest.json',)),
+    'scores': Step('tools/build_scores_v3.py', 'scores.sqlite3', image='score', receipt='scores_receipt.json'),
 }
 LIBRARIES = ('numpy', 'pandas', 'geopandas', 'shapely', 'pyogrio', 'pyproj', 'pyarrow', 'scipy', 'joblib', 'Django')
 
@@ -68,10 +75,14 @@ def run(step, district):
     Path(local).mkdir(parents=True, exist_ok=True)
     box = GlassBox(new_run_id('terrier-build-%s-%s' % (d['id'], step)), 'cu-geography-v3/tools/build_step.py')
     box.run('running', step, 'build step started', metadata={'district': d['id'], 'local': local})
-    code = subprocess.call([sys.executable, str(REPO / spec.script), '--district', d['id']], cwd=str(REPO))
-    if code == 0 and not (target.is_file() and target.stat().st_size > 0):
-        code = 1
-        print('build_step: %s exited 0 but %s was not written' % (step, target), file=sys.stderr)
+    command = [sys.executable, str(REPO / spec.script), '--district', d['id']]
+    if spec.receipt:
+        command += ['--receipt', str(D.data_dir(d) / spec.receipt)]
+    code = subprocess.call(command, cwd=str(REPO))
+    for written in (target, *(D.data_dir(d) / name for name in spec.also)):
+        if code == 0 and not (written.is_file() and written.stat().st_size > 0):
+            code = 1
+            print('build_step: %s exited 0 but %s was not written' % (step, written), file=sys.stderr)
     box.run('ok' if code == 0 else 'failed', step, 'build step finished', metadata={'exit': code})
     if code == 0:
         print(json.dumps({'step': step, 'district': d['id'], 'store': spec.store, 'bytes': target.stat().st_size}))
