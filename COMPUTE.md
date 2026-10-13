@@ -17,8 +17,8 @@ with the local ones. The export goes through a named volume by default (section 
 | `Dockerfile.build` | the toolchain, no code and no data: target `geo` (CPython 3.12.14, = `work\.venv`; `python:3.12.14-slim-trixie`) and target `score` (CPython 3.12.10, = system Python; still `python:3.12.10-slim-bookworm`, because the registry has no 3.12.10 trixie image); both apply Debian's security updates at build, hashed locks `requirements.build.lock` / `requirements.score.lock` |
 | `compute.compose.yaml` | services `terrier-build` (network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume) and `terrier-export` (copies stores from the `stage` volume into a second named volume, `terrier-export-<run id>`, with an integrity check; the harness `docker cp`s them to the scratch folder and removes it) |
 | `compute.export-bind.compose.yaml` | opt-out override (`--export-bind`): `terrier-export` writes `/out` into the bind-mounted scratch folder instead of the volume. Native-Linux hosts only |
-| `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact |
-| `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release |
+| `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact. The image is `--image`, else `$TERRIER_BUILD_IMAGE`, else the verified current release manifest (section 3, step 4) |
+| `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release. Job `draft-release` folds both digests into the release's `digests.json`, which the platform's `ops/release.py` reads, so the signed manifest carries them |
 | `.github/workflows/release.yml` job `scan` + `tools/image_gate.py` | trivy on `terrier-web`, `terrier-build` and `terrier-build-score` by digest, the platform's image policy (D-181, D-182: fixable HIGH/CRITICAL vulnerabilities, misconfigurations, secrets and pip/npm licences that are forbidden, restricted or unknown block; unfixed vulnerabilities and OS-package licences are reported). The draft release waits for it. Tests: `tools/test_image_gate.py` |
 | `tools/test_compute.py` | the tests (also in the release workflow's test job) |
 
@@ -50,9 +50,14 @@ literals (byte for byte on Windows) and that each variable moves what it names.
    Both images appear in GHCR by digest; `terrier-build.digests.json` and the SBOMs are attached to the draft release.
 3. First CI run: the build is untested (no Docker was available when this was written). If `build-image` fails, the log names the
    step: a lock that will not install, a base digest, or the import check. Fix, tag again.
-4. Get the digest (a tag is refused by the harness, by design):
+4. Get the digest (a tag is refused by the harness, by design). Once a signed release carries the build images, you do not: the
+   harness asks the Melange platform's `ops\release_lib\current.py image terrier-build` (the laptop's verified current manifest;
+   `$env:MELANGE_RELEASE_CURRENT` moves the script; anything but a verified digest stops the run, with no fallback to a hand-edited
+   value). `terrier-build-score` resolves the same way for the score steps, when they are added (section 5). The one override is an
+   explicit `--image` / `$TERRIER_BUILD_IMAGE`, for a build no signed release names yet (the first parity runs):
 
 ```powershell
+python 'C:\Users\pgoff\OneDrive\Desktop\Melange Systems\ops\release_lib\current.py' image terrier-build   # the digest the harness uses by default
 gh release download v2026.10.12.1 -R pjg93-222/Geo -p terrier-build.digests.json -D $env:TEMP
 $env:TERRIER_BUILD_IMAGE = (Get-Content $env:TEMP\terrier-build.digests.json | ConvertFrom-Json).images.'terrier-build'
 docker pull $env:TERRIER_BUILD_IMAGE
@@ -110,7 +115,8 @@ so the harness reports the check's own verdict, not a count).
   on a native file system (a Linux host). Measured 2026-10-12 (machine loaded by other jobs): street + contacts, A1 ~11 min,
   A2 ~9 min, B build ~21 min, export 31 s, comparison with both negative controls ~17 min (street alone: 6 min to digest three copies).
 - Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `shown` and `scores` (the **score** image: the
-  3.12.10 interpreter), `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
+  3.12.10 interpreter; resolve `terrier-build-score` with `compute_parity.manifest_image` and give compose its own variable,
+  `TERRIER_SCORE_IMAGE`, with the same `:?` rule as `TERRIER_BUILD_IMAGE`), `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
   to `--out-dir` and `--receipt`, both outside `TERRIER_LOCAL_DIR`, and imports Django settings: set `CU_DATA_DIR` and `CU_SECRET_KEY` to
   scratch values). Live sizes: scores 551 MB, walk 311 MB. Compare the bundle with `--files data/<key>.zip`.
 - `--api` runs `co_baseline.py check --parts api --data-dir <folder>` on A1 and B (a spare server per folder, minutes each). It needs a
@@ -142,3 +148,6 @@ so the harness reports the check's own verdict, not a count).
   values (for example `scores.metadata`) hides the whole table; refine with a column mask once a Windows A1/A2 pair shows what varies.
 - The score image's package set is the design's list (numpy, pandas, pyarrow, scipy, joblib); if `shown_areas` or the rowfw children
   import anything else, add it to `requirements.score.in` and regenerate the lock.
+- `current.py` (the manifest reader) is Melange's `ops/release_lib/current.py`. Until a signed release names `terrier-build` (the Geo workflow
+  must run on a `v*` tag with the folded `digests.json`) and that script is in the Melange tree at the default path, the harness stops unless
+  `--image` or `$TERRIER_BUILD_IMAGE` names a digest.

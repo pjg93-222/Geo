@@ -222,6 +222,8 @@ def make_store(path, rows, stamp='t0', extra_column=False):
 
 
 ROWS = [(1, 'Main St'), (2, 'Oak Ave'), (3, '')]
+EXPLICIT = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64        # what a caller names with --image or $TERRIER_BUILD_IMAGE
+MANIFEST = 'ghcr.io/pjg93-222/terrier-build@sha256:' + 'b' * 64    # what the verified release manifest would name
 
 
 class CompareTests(unittest.TestCase):
@@ -326,6 +328,7 @@ class RunTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.calls = []
+        self.images = []
 
     def fakes(self, b_rows=ROWS):
         def windows(python, repo, district, steps, out):
@@ -334,18 +337,22 @@ class RunTests(unittest.TestCase):
 
         def container(image, repo, district, steps, out, run_id, names, export_bind=False):
             self.calls.append(('container', out.name, tuple(names), export_bind))
+            self.images.append(image)
             make_store(out / 'roads.sqlite3', b_rows, stamp='c')
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
                 mock.patch.object(P, 'windows_fingerprint', lambda python, repo: {'python': 'win'}),
                 mock.patch.object(P, 'container_fingerprint', lambda image, repo, out, run_id: {'python': 'box'})]
 
-    def main(self, *args, b_rows=ROWS, scratch=None):
-        argv = ['--scratch', str(scratch or self.root / 'scratch'), '--image', 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64, *args]
+    def main(self, *args, b_rows=ROWS, scratch=None, image=EXPLICIT, environ=None):
+        """`image=None`: no --image flag. `environ`: the process environment's TERRIER_BUILD_IMAGE (unset by default)."""
+        argv = ['--scratch', str(scratch or self.root / 'scratch'), *(['--image', image] if image else []), *args]
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
             for patch in self.fakes(b_rows):
                 stack.enter_context(patch)
+            env = {k: v for k, v in os.environ.items() if k != 'TERRIER_BUILD_IMAGE'}
+            stack.enter_context(mock.patch.dict(os.environ, {**env, **(environ or {})}, clear=True))
             stack.enter_context(contextlib.redirect_stdout(out))
             code = P.main(argv)
         return code, out.getvalue()
@@ -403,6 +410,70 @@ class RunTests(unittest.TestCase):
             (self.root / 'full' / 'file').write_text('x')
             with self.assertRaises(SystemExit):
                 P.main(['--scratch', str(self.root / 'full'), '--image', 'x@sha256:' + 'a' * 64])
+
+
+    # The container image: --image, then $TERRIER_BUILD_IMAGE, then the verified release manifest (Melange current.py); none = stop.
+
+    def manifest(self, answer=MANIFEST):
+        asked = []
+        return asked, mock.patch.object(P, 'manifest_image', lambda name: asked.append(name) or answer)
+
+    def test_without_a_flag_or_variable_the_image_is_the_verified_manifests(self):
+        asked, patch = self.manifest()
+        with patch:
+            code, text = self.main(image=None)
+        self.assertEqual(code, 0, text)
+        self.assertEqual((asked, self.images), (['terrier-build'], [MANIFEST]))
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual((report['image'], report['image_source']), (MANIFEST, 'manifest'))
+
+    def test_the_flag_and_then_the_variable_beat_the_manifest(self):
+        asked, patch = self.manifest(answer=None)
+        with patch:
+            self.assertEqual(self.main(image='ghcr.io/x/terrier-build@sha256:' + 'c' * 64, environ={'TERRIER_BUILD_IMAGE': EXPLICIT})[0], 0)
+            self.assertEqual(self.main(image=None, environ={'TERRIER_BUILD_IMAGE': EXPLICIT}, scratch=self.root / 'two')[0], 0)
+        self.assertEqual(asked, [])
+        self.assertEqual(self.images, ['ghcr.io/x/terrier-build@sha256:' + 'c' * 64, EXPLICIT])
+        report = json.loads((self.root / 'two' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['image_source'], 'explicit')
+
+    def test_windows_only_never_asks_the_manifest(self):
+        asked, patch = self.manifest(answer=None)
+        with patch:
+            self.assertEqual(self.main('--skip-container', image=None)[0], 0)
+        self.assertEqual((asked, self.images), ([], []))
+
+    def test_no_verified_manifest_and_no_explicit_image_stops_before_any_build(self):
+        refusal = subprocess.CompletedProcess([], 1, stdout='', stderr='current: NO_CURRENT: no release has been published')
+        with mock.patch.object(P.subprocess, 'run', return_value=refusal) as run, self.assertRaises(SystemExit) as stop:
+            self.main(image=None)
+        self.assertIn('no verified image for terrier-build: not running (current: NO_CURRENT', str(stop.exception))
+        self.assertEqual(self.calls, [])                                     # neither Windows build ran, nor the container
+        self.assertEqual(run.call_count, 1)                                  # the only subprocess was current.py: no docker
+
+    def test_a_manifest_answer_that_is_not_pinned_by_digest_is_still_refused(self):
+        asked, patch = self.manifest(answer='ghcr.io/pjg93-222/terrier-build:v1')
+        with patch, contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
+            self.main(image=None)
+        self.assertEqual(stop.exception.code, 2)
+        self.assertEqual(self.calls, [])
+
+    def test_manifest_image_asks_current_py_by_name_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tool = Path(folder) / 'current.py'
+            tool.write_text('import sys\nif sys.argv[1:] == ["image", "terrier-build"]:\n    print("%s")\nelse:\n    sys.exit(1)\n' % MANIFEST)
+            with mock.patch.dict(os.environ, {'MELANGE_RELEASE_CURRENT': str(tool)}):
+                self.assertEqual(P.manifest_image('terrier-build'), MANIFEST)
+                with self.assertRaises(SystemExit) as stop:                   # a name the manifest does not have: exit 1, no output
+                    P.manifest_image('nope')
+                self.assertIn('no verified image for nope', str(stop.exception))
+            tool.write_text('')                                              # exit 0 and nothing printed is a refusal too
+            with mock.patch.dict(os.environ, {'MELANGE_RELEASE_CURRENT': str(tool)}), self.assertRaises(SystemExit) as stop:
+                P.manifest_image('terrier-build')
+            self.assertIn('current.py printed nothing', str(stop.exception))
+            with mock.patch.dict(os.environ, {'MELANGE_RELEASE_CURRENT': str(Path(folder) / 'missing.py')}), self.assertRaises(SystemExit):
+                P.manifest_image('terrier-build')                            # no release tool at all
+        self.assertTrue(P.RELEASE_CURRENT.endswith(r'ops\release_lib\current.py'))
 
 
 class ExportViaVolumeTests(unittest.TestCase):
@@ -570,6 +641,41 @@ class BuildImageFilesTests(unittest.TestCase):
         self.assertIn('python tools/image_gate.py "$WEB" "$GEO" "$SCORE"', text)
         self.assertRegex(text, r'TRIVY_SHA256: [0-9a-f]{64}')
         self.assertEqual(text.count('no-cache: true'), 3)           # the web image and both build images
+
+    def test_the_draft_release_folds_the_build_images_into_digests_json_for_the_platform_manifest(self):
+        """ops/release.py reads ONE digests.json: images.terrier-web plus every other images.<name> whose ref is
+        ghcr.io/pjg93-222/<name>@sha256:... (extra_images). The merge step is run here with the workflow's own jq programs."""
+        text = read('.github/workflows/release.yml')
+        step = text[text.index('- name: Attach to a draft release'):]
+        check, merge = re.findall(r"jq (?:-e )?-s '([^']+)' digests\.json terrier-build\.digests\.json", step)
+        self.assertLess(step.index(merge), step.index('gh release upload'))                 # folded before anything is attached
+        self.assertIn('terrier-build.digests.json', step[step.index('gh release upload'):])  # and the separate file is still attached
+        self.assertIn('IMAGE: ghcr.io/pjg93-222/terrier-web\n', text)
+        self.assertIn('BUILD_IMAGE: ghcr.io/pjg93-222/terrier-build\n', text)
+        self.assertIn('SCORE_IMAGE: ghcr.io/pjg93-222/terrier-build-score\n', text)         # repository name == manifest image name
+        jq = shutil.which('jq')
+        if not jq:
+            self.skipTest('jq is not installed (the release workflow runs this on ubuntu, where it is)')
+
+        def run(program, *files, flags=()):
+            with tempfile.TemporaryDirectory() as folder:
+                for name, doc in zip(('digests.json', 'terrier-build.digests.json'), files):
+                    (Path(folder) / name).write_text(json.dumps(doc), encoding='utf-8')
+                return subprocess.run([jq, *flags, '-s', program, 'digests.json', 'terrier-build.digests.json'], cwd=folder,
+                                      capture_output=True, text=True)
+
+        head = {'tag': 'v2026.10.12.9', 'commit': 'c' * 40}
+        web = {**head, 'images': {'terrier-web': 'ghcr.io/pjg93-222/terrier-web@sha256:' + '1' * 64}}
+        build = {**head, 'images': {'terrier-build': 'ghcr.io/pjg93-222/terrier-build@sha256:' + '2' * 64,
+                                    'terrier-build-score': 'ghcr.io/pjg93-222/terrier-build-score@sha256:' + '3' * 64}}
+        self.assertEqual(run(check, web, build, flags=['-e']).returncode, 0)
+        merged = json.loads(run(merge, web, build).stdout)
+        self.assertEqual({k: merged[k] for k in head}, head)
+        self.assertEqual(merged['images'], {**web['images'], **build['images']})
+        for name, ref in merged['images'].items():                                          # the shape release.extra_images accepts
+            self.assertRegex(ref, r'^ghcr\.io/pjg93-222/%s@sha256:[0-9a-f]{64}$' % re.escape(name))
+        for other in ({'tag': 'v2026.10.12.8'}, {'commit': 'd' * 40}):                      # two builds of different tags or commits
+            self.assertNotEqual(run(check, web, {**build, **other}, flags=['-e']).returncode, 0, other)
 
 
 if __name__ == '__main__':

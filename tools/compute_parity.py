@@ -4,6 +4,10 @@
                   [--image ghcr.io/pjg93-222/terrier-build@sha256:...] [--api] [--negative-control] [--skip-container]
                   [--export-bind]
 
+  The container image is, in this order: --image, $TERRIER_BUILD_IMAGE (an explicit build no signed release names yet: the first
+  parity runs), else the one the laptop's verified current release manifest names (Melange ops/RELEASE.md, "Compute jobs follow the
+  manifest"; `current.py image terrier-build`). None of the three: nothing runs.
+
   A1, A2  the Windows build of the steps, twice, into <scratch>/A1 and <scratch>/A2. What differs between them is the legitimate
           run-to-run variance (a stamp, a run id): those tables, and only those, are left out of the comparison with B
   B       the same steps in the container (compute.compose.yaml), built in the stage volume, exported through a named volume
@@ -32,6 +36,8 @@ from tools import co_baseline as B           # noqa: E402
 from tools import districts as D             # noqa: E402
 from tools import hostpaths as H             # noqa: E402
 
+IMAGE_NAME = 'terrier-build'         # the name the release manifest gives the geo build image (the score image is terrier-build-score)
+RELEASE_CURRENT = r'C:\Users\pgoff\OneDrive\Desktop\Melange Systems\ops\release_lib\current.py'      # $MELANGE_RELEASE_CURRENT moves it
 COMPOSE_FILE = REPO / 'compute.compose.yaml'
 EXPORT_BIND_FILE = REPO / 'compute.export-bind.compose.yaml'
 STORE_META = ('schema_sha256', 'objects', 'user_version')
@@ -144,6 +150,18 @@ def windows_fingerprint(python, repo):
                                      check=True, capture_output=True, text=True).stdout)
 
 
+def manifest_image(name):
+    """The image the laptop's verified current release manifest names. No manifest, a bad signature or no such name is a refusal
+    here, never a guess: the container build does not start."""
+    tool = H.env_path('MELANGE_RELEASE_CURRENT', RELEASE_CURRENT)
+    done = subprocess.run([sys.executable, str(tool), 'image', name], capture_output=True, text=True, timeout=60)
+    image = done.stdout.strip()
+    if done.returncode or not image:
+        raise SystemExit('compute_parity: no verified image for %s: not running (%s). For a build no signed release names yet, pass '
+                         '--image or set TERRIER_BUILD_IMAGE to its digest.' % (name, done.stderr.strip() or 'current.py printed nothing'))
+    return image
+
+
 def docker_exe():
     docker = shutil.which('docker')
     if not docker:
@@ -211,7 +229,8 @@ def main(argv=None):
     parser.add_argument('--steps', default='roads', help='comma list of %s (default roads, the smoke)' % ', '.join(sorted(S.STEPS)))
     parser.add_argument('--files', default='', help='comma list of other files to compare byte for byte (relative to the data folder)')
     parser.add_argument('--python', default=os.environ.get('CU_PYTHON') or str(H.WORK_PY), help='the Windows build interpreter')
-    parser.add_argument('--image', default=os.environ.get('TERRIER_BUILD_IMAGE'), help='terrier-build image, pinned by digest')
+    parser.add_argument('--image', default=os.environ.get('TERRIER_BUILD_IMAGE'),
+                        help='terrier-build image, pinned by digest (default: $TERRIER_BUILD_IMAGE, else the verified release manifest)')
     parser.add_argument('--repo', type=Path, default=REPO, help='the tree both builds run (default: this one)')
     parser.add_argument('--api', action='store_true', help='also run co_baseline\'s golden endpoint check on A1 and B (co-05, full set)')
     parser.add_argument('--negative-control', action='store_true', help='also prove the comparison fails when one row is removed')
@@ -231,14 +250,17 @@ def main(argv=None):
         parser.error('--scratch must not be inside a .local folder')
     if scratch.exists() and any(scratch.iterdir()) and not args.reuse_windows:
         parser.error('--scratch %s is not empty; a parity run starts from a new folder' % scratch)
-    if not args.skip_container and not (args.image and '@sha256:' in args.image):
+    source = 'explicit'
+    if not args.skip_container and not args.image:
+        args.image, source = manifest_image(IMAGE_NAME), 'manifest'
+    if not args.skip_container and '@sha256:' not in args.image:
         parser.error('--image (or $TERRIER_BUILD_IMAGE) must be pinned by digest: ghcr.io/pjg93-222/terrier-build@sha256:...')
     d = D.get(args.district)
     sub = D.data_dir(d, Path('.'))                      # co-05: the folder itself; another district: its folder below it
     names = [(sub / S.STEPS[s].store).as_posix() for s in steps] + [(sub / f).as_posix() for f in args.files.split(',') if f]
     folders = {label: scratch / label for label in ('A1', 'A2', 'B')}
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    report = {'district': d['id'], 'steps': steps, 'image': args.image, 'results': []}
+    report = {'district': d['id'], 'steps': steps, 'image': args.image, 'image_source': source, 'results': []}
 
     for label in ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():

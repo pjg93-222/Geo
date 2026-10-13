@@ -1,11 +1,14 @@
 # Release: on a v* tag, test, build the hosted image, push it to GHCR by digest, write its SBOM and digests.json, and attach
 # both to a DRAFT release (publishing the release stays a manual step). CI is the only builder: no Docker is needed on the laptop.
 # The same tag also builds the two Terrier BUILD images (Dockerfile.build: terrier-build, terrier-build-score; toolchain only, no
-# code and no data) and attaches terrier-build.digests.json and their SBOMs; the laptop runs them by digest (COMPUTE.md).
+# code and no data) and attaches terrier-build.digests.json and their SBOMs; the laptop runs them by digest (COMPUTE.md). The
+# draft-release job folds both into digests.json too (images.terrier-build, images.terrier-build-score), so they reach the platform's
+# signed manifest and `ops/release_lib/current.py image terrier-build` resolves them.
 #
 # requirements.linux.lock (hashed, from requirements.linux.in) is committed, and every `uses:` below is pinned to a full commit SHA
 # (the tag it was resolved from is the trailing comment; re-resolve with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
-# The platform's ops/release.py reads digests.json from the draft release (images.terrier-web) and the image's /version git_sha.
+# The platform's ops/release.py reads digests.json from the draft release (images.terrier-web, and any other images.<name> whose ref is
+# ghcr.io/pjg93-222/<name>@sha256:...) and the image's /version git_sha.
 # A `scan` job runs the platform's image policy (D-181/D-182: tools/image_gate.py, trivy pinned by sha256) on all three images by digest;
 # the draft release waits for it, so a failing image gets no release to attach to.
 name: release
@@ -231,7 +234,8 @@ jobs:
           output-file: terrier-build-score.spdx.json
           upload-artifact: false
           upload-release-assets: false
-      # Same shape as digests.json (images.<name> = ref@digest), but its own file: ops/release.py reads digests.json for terrier-web only.
+      # Same shape as digests.json (images.<name> = ref@digest). The draft-release job folds it into digests.json, which is what
+      # ops/release.py reads; the file itself is attached too (COMPUTE.md step 4 reads it).
       - name: terrier-build.digests.json
         env:
           GEO_DIGEST: ${{ steps.geo.outputs.digest }}
@@ -311,6 +315,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          # One digests.json for ops/release.py: terrier-web (job image) + terrier-build + terrier-build-score (job build-image).
+          # Both files must name the same tag and commit, or nothing is attached.
+          jq -e -s '.[0].tag == .[1].tag and .[0].commit == .[1].commit' digests.json terrier-build.digests.json >/dev/null
+          jq -s '.[0] + {images: (.[0].images + .[1].images)}' digests.json terrier-build.digests.json > merged.json
+          mv merged.json digests.json
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" \
                  --notes "terrier-web $GITHUB_REF_NAME. Deploy by digest: see digests.json."
