@@ -36,6 +36,7 @@ class Step(NamedTuple):
     receipt: str = ''   # a tool whose receipt defaults to a folder of the repo gets this file in the data directory instead
                         # (the repo is mounted read-only in the container); counts and timings, never compared
     also: tuple = ()    # other files it writes in the data directory: they must exist, and are compared and exported with the store
+    demo_key: bool = False      # makes a random .demo-key in the data directory when there is none (see seed_demo_key)
 
 
 # The tools' plain `--district` command lines, in the order Terrier's Windows runner (_build/run_nowithhold.ps1) runs them: roads,
@@ -45,7 +46,7 @@ STEPS = {
     'street': Step('tools/build_street.py', 'street.sqlite3', salt=True),
     'contacts': Step('tools/build_contacts.py', 'contacts.sqlite3', salt=True),
     'shown': Step('tools/shown_areas.py', 'area_scores_shown.csv', image='score', also=('area_scores_shown.manifest.json',)),
-    'scores': Step('tools/build_scores_v3.py', 'scores.sqlite3', image='score', receipt='scores_receipt.json'),
+    'scores': Step('tools/build_scores_v3.py', 'scores.sqlite3', image='score', receipt='scores_receipt.json', demo_key=True),
 }
 LIBRARIES = ('numpy', 'pandas', 'geopandas', 'shapely', 'pyogrio', 'pyproj', 'pyarrow', 'scipy', 'joblib', 'Django')
 
@@ -65,6 +66,18 @@ def local_dir():
     return local
 
 
+def seed_demo_key(folder, hexkey):
+    """$TERRIER_DEMO_KEY (64 hex digits) becomes `folder`/.demo-key unless one is there. build_scores_v3 makes a random key per folder and
+    derives the demo names, their search index and the stored key from it, so builds in different folders never agree; a parity run
+    gives every build the same throwaway key to make them comparable. Never replaces a key."""
+    key = bytes.fromhex(hexkey)
+    if len(key) != 32:
+        raise SystemExit('build_step: TERRIER_DEMO_KEY must be 64 hex digits (32 bytes)')
+    path = Path(folder) / '.demo-key'
+    if not path.exists():
+        path.write_bytes(key)
+
+
 def run(step, district):
     local = local_dir()
     spec, d = STEPS[step], D.get(district)
@@ -73,6 +86,9 @@ def run(step, district):
         raise SystemExit('build_step: the street salt of %s is missing (%s); a new one would re-key every person id'
                          % (d['id'], D.street_salt(d)))
     Path(local).mkdir(parents=True, exist_ok=True)
+    if spec.demo_key and os.environ.get('TERRIER_DEMO_KEY'):
+        D.data_dir(d).mkdir(parents=True, exist_ok=True)
+        seed_demo_key(D.data_dir(d), os.environ['TERRIER_DEMO_KEY'])
     box = GlassBox(new_run_id('terrier-build-%s-%s' % (d['id'], step)), 'cu-geography-v3/tools/build_step.py')
     box.run('running', step, 'build step started', metadata={'district': d['id'], 'local': local})
     command = [sys.executable, str(REPO / spec.script), '--district', d['id']]

@@ -247,6 +247,45 @@ class BuildStepTests(unittest.TestCase):
         self.assertEqual(command, [sys.executable, str(REPO / 'tools' / 'build_scores_v3.py'), '--district', 'co-05',
                                    '--receipt', str(self.root / 'out' / 'scores_receipt.json')])
 
+    def test_seed_demo_key_writes_a_32_byte_key_once_and_never_replaces_one(self):
+        key = 'ab' * 32
+        S.seed_demo_key(self.root, key)
+        self.assertEqual((self.root / '.demo-key').read_bytes(), bytes.fromhex(key))
+        S.seed_demo_key(self.root, 'cd' * 32)
+        self.assertEqual((self.root / '.demo-key').read_bytes(), bytes.fromhex(key))                  # the first key stays
+        for bad in ('ab' * 31, 'ab' * 33, ''):
+            with self.assertRaises(SystemExit):
+                S.seed_demo_key(self.root / 'elsewhere', bad)
+        with self.assertRaises(ValueError):
+            S.seed_demo_key(self.root / 'elsewhere', 'not hex')
+        self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_the_scores_step_seeds_the_key_before_its_tool_runs_and_only_when_asked_to(self):
+        key = 'ab' * 32
+        seen = []
+
+        def fake_call(command, **kwargs):
+            seen.append((Path(command[1]).name, (self.root / 'out' / '.demo-key').is_file()))
+            for name in ('area_scores_shown.csv', 'area_scores_shown.manifest.json', 'scores.sqlite3', 'roads.sqlite3'):
+                (self.root / 'out' / name).write_text('x', encoding='utf-8')
+            return 0
+
+        def run(step, **env):
+            shutil.rmtree(self.root / 'out', ignore_errors=True)
+            seen.clear()
+            with mock.patch.dict(os.environ, {'TERRIER_LOCAL_DIR': str(self.root / 'out'), **env}), \
+                    mock.patch.object(S.D, 'data_dir', return_value=self.root / 'out'), mock.patch.object(S.subprocess, 'call', fake_call), \
+                    mock.patch.object(S, 'GlassBox'), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(S.run(step, 'co-05'), 0)
+            return seen[0], (self.root / 'out' / '.demo-key')
+
+        (tool, present_at_start), path = run('scores', TERRIER_DEMO_KEY=key)
+        self.assertEqual((tool, present_at_start, path.read_bytes()), ('build_scores_v3.py', True, bytes.fromhex(key)))
+        self.assertFalse(run('scores')[1].exists())                                           # no variable: the tool makes its own key
+        self.assertFalse(run('scores', TERRIER_DEMO_KEY='')[1].exists())
+        self.assertFalse(run('shown', TERRIER_DEMO_KEY=key)[1].exists())                      # only the step that has a demo key
+        self.assertEqual([name for name, spec in S.STEPS.items() if spec.demo_key], ['scores'])
+
     def test_a_step_that_names_two_files_has_run_only_when_both_exist(self):
         code, _ = self.run_recorded('shown', written=('area_scores_shown.csv',))                 # the manifest is missing
         self.assertEqual(code, 1)
@@ -276,7 +315,7 @@ EXPLICIT = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64        # what a caller n
 MANIFEST = 'ghcr.io/pjg93-222/terrier-build@sha256:' + 'b' * 64    # what the verified release manifest would name
 SCORE_EXPLICIT = 'ghcr.io/x/terrier-build-score@sha256:' + 'c' * 64        # --score-image or $TERRIER_SCORE_IMAGE
 SCORE_MANIFEST = 'ghcr.io/pjg93-222/terrier-build-score@sha256:' + 'd' * 64
-SHOWN_MANIFEST = '{\n "areas": 1,\n "rows": 2\n}'              # a manifest as the tool writes it: text mode, so CRLF on Windows
+SHOWN_MANIFEST = '{\n "areas": 1,\n "rows": 2\n}'              # the shown-areas manifest as the tool writes it: LF on Windows too
 
 
 class CompareTests(unittest.TestCase):
@@ -308,6 +347,65 @@ class CompareTests(unittest.TestCase):
         ok, detail = self.compare(*self.stores(b={'stamp': 'other'}))
         self.assertFalse(ok)
         self.assertIn('metadata', detail)
+
+    # The metadata table of a scores store: stamps beside facts. Only what varies between the two Windows builds is left out.
+
+    W1 = '{"matches":3,"rows_checked":3,"seconds":%s,"status":"verified"}'
+
+    def scores_like(self, label, stamp, seconds, matches=3, facts='abc'):
+        make_store(self.root / label / 'scores.sqlite3', ROWS, stamp=stamp)
+        with closing(sqlite3.connect(self.root / label / 'scores.sqlite3')) as connection, connection:
+            connection.execute("INSERT INTO metadata VALUES ('w1', ?)", (self.W1.replace('3,"rows', '%d,"rows' % matches) % seconds,))
+            connection.execute("INSERT INTO metadata VALUES ('inputs', ?)", (facts,))
+        return label
+
+    def stores_like(self, a1=(), a2=(), b=()):
+        for label in ('A1', 'A2', 'B'):
+            shutil.rmtree(self.root / label, ignore_errors=True)
+        defaults = {'A1': ('t1', 60.0), 'A2': ('t2', 61.5), 'B': ('t3', 232.0)}
+        for label, extra in (('A1', a1), ('A2', a2), ('B', b)):
+            kwargs = dict(zip(('stamp', 'seconds'), defaults[label]))
+            kwargs.update(dict(extra))
+            self.scores_like(label, **kwargs)
+        return [self.root / label for label in ('A1', 'A2', 'B')]
+
+    def test_metadata_leaves_out_the_stamps_and_the_timings_and_nothing_beside_them(self):
+        ok, detail = P.compare('scores.sqlite3', *self.stores_like())
+        self.assertTrue(ok, detail)
+        self.assertIn('run-to-run variance (left out): metadata[built_utc, w1.seconds]', detail)      # named, never hidden
+
+    def test_a_fact_in_metadata_that_differs_in_the_container_fails_even_though_the_table_is_noisy(self):
+        ok, detail = P.compare('scores.sqlite3', *self.stores_like(b={'facts': 'changed'}))
+        self.assertFalse(ok)
+        self.assertIn('table(s): metadata (key(s) inputs)', detail)
+        ok, detail = P.compare('scores.sqlite3', *self.stores_like(b={'matches': 2}))               # inside the JSON value that also holds a timing
+        self.assertFalse(ok)
+        self.assertIn('metadata (key(s) w1)', detail)
+
+    def test_metadata_variance_cases(self):
+        v = P.metadata_variance
+        self.assertEqual(v({'a': 'x'}, {'a': 'x'}, {'a': 'x'}), ([], []))
+        self.assertEqual(v({'a': 'x'}, {'a': 'x'}, {'a': 'y'}), ([], ['a']))                       # stable on Windows: B must match
+        self.assertEqual(v({'a': 'x'}, {'a': 'y'}, {'a': 'z'}), (['a'], []))                       # a plain value that varies
+        self.assertEqual(v({'a': 'x'}, {'a': 'y'}, {}), ([], ['a']))                               # ... but B must have the key
+        self.assertEqual(v({'a': 'x'}, {'a': 'x'}, {}), ([], ['a']))
+        self.assertEqual(v({'a': '{"n":1,"s":5}'}, {'a': '{"n":1,"s":6}'}, {'a': '{"n":1,"s":9}'}), (['a.s'], []))
+        self.assertEqual(v({'a': '{"n":1,"s":5}'}, {'a': '{"n":1,"s":6}'}, {'a': '{"n":2,"s":9}'}), (['a.s'], ['a']))
+        self.assertEqual(v({'a': '{"n":1,"s":5}'}, {'a': '{"n":1,"s":6}'}, {'a': '{"n":1}'}), (['a.s'], []))    # a field only on the varying side
+        self.assertEqual(v({'a': '{"n":1,"s":5}'}, {'a': '{"n":1,"s":6}'}, {'a': 'text'}), (['a.s'], ['a']))
+        self.assertEqual(v({'only': '1'}, {}, {}), ([], ['only']))
+
+    def test_a_metadata_table_that_is_not_key_value_is_left_out_whole_as_before(self):
+        folders = self.stores(a1={'stamp': 't1'}, a2={'stamp': 't2'})
+        with closing(sqlite3.connect(folders[0] / 'roads.sqlite3')) as connection, connection:
+            connection.executescript('DROP TABLE metadata; CREATE TABLE metadata (stamp TEXT); INSERT INTO metadata VALUES ("t1");')
+        with closing(sqlite3.connect(folders[1] / 'roads.sqlite3')) as connection, connection:
+            connection.executescript('DROP TABLE metadata; CREATE TABLE metadata (stamp TEXT); INSERT INTO metadata VALUES ("t2");')
+        with closing(sqlite3.connect(folders[2] / 'roads.sqlite3')) as connection, connection:
+            connection.executescript('DROP TABLE metadata; CREATE TABLE metadata (stamp TEXT); INSERT INTO metadata VALUES ("t3");')
+        ok, detail = self.compare(*folders)
+        self.assertTrue(ok, detail)
+        self.assertTrue(detail.endswith('variance (left out): metadata'), detail)
 
     def test_one_changed_row_fails_in_its_table_only(self):
         ok, detail = self.compare(*self.stores(b={'rows': ROWS[:2] + [(3, 'Elm Rd')]}))
@@ -359,22 +457,13 @@ class CompareTests(unittest.TestCase):
             (self.root / label / name).write_bytes(payload)
         return [self.root / label for label in ('A1', 'A2', 'B')]
 
-    def test_a_json_file_may_differ_in_line_endings_only_and_the_detail_says_so(self):
-        windows, box = SHOWN_MANIFEST.replace('\n', '\r\n').encode(), SHOWN_MANIFEST.encode()
-        ok, detail = P.compare('m.json', *self.put('m.json', windows, windows, box))
-        self.assertTrue(ok, detail)
-        self.assertIn('line endings differ only', detail)
-        ok, detail = P.compare('m.json', *self.put('m.json', windows, windows, box.replace(b'"rows": 2', b'"rows": 3')))
-        self.assertFalse(ok)
-        self.assertIn('B differs', detail)
-        ok, detail = P.compare('m.json', *self.put('m.json', windows, windows + b' ', box))
-        self.assertIn('reference is not stable', detail)
-
-    def test_only_a_json_file_gets_the_line_ending_allowance(self):
-        for name in ('area.csv', 'b.zip'):
+    def test_no_file_gets_a_line_ending_allowance(self):
+        for name in ('m.json', 'area.csv', 'b.zip'):
             ok, detail = P.compare(name, *self.put(name, b'a,b\r\n', b'a,b\r\n', b'a,b\n'))
             self.assertFalse(ok, name)
             self.assertIn('B differs', detail)
+            ok, detail = P.compare(name, *self.put(name, b'a,b\n', b'a,b\n', b'a,b\n'))
+            self.assertTrue(ok, detail)
 
     def test_flip_one_byte_changes_exactly_one_byte_and_a_file_comparison_sees_it(self):
         folders = self.put('area.csv', b'a,b\n1,2\n3,4\n', b'a,b\n1,2\n3,4\n', b'a,b\n1,2\n3,4\n')
@@ -417,13 +506,14 @@ class RunTests(unittest.TestCase):
         self.calls = []
         self.images = []            # the {'geo': ref, 'score': ref} of each container build
         self.pythons = []           # the {'geo': path, 'score': path} of each Windows build
+        self.keys = []              # the $TERRIER_DEMO_KEY each build (Windows or container) was started with
 
     @staticmethod
-    def write_step(out, step, stamp, windows, rows):
+    def write_step(out, step, stamp, rows):
         out.mkdir(parents=True, exist_ok=True)
         if step == 'shown':
             (out / 'area_scores_shown.csv').write_bytes(b'area,score\n1,2\n')
-            (out / 'area_scores_shown.manifest.json').write_bytes((SHOWN_MANIFEST.replace('\n', '\r\n') if windows else SHOWN_MANIFEST).encode())
+            (out / 'area_scores_shown.manifest.json').write_bytes(SHOWN_MANIFEST.encode())
         else:
             make_store(out / S.STEPS[step].store, rows, stamp=stamp)
 
@@ -431,14 +521,16 @@ class RunTests(unittest.TestCase):
         def windows(pythons, repo, district, steps, out):
             self.calls.append(('windows', out.name))
             self.pythons.append(pythons)
+            self.keys.append(os.environ.get('TERRIER_DEMO_KEY'))
             for step in steps:
-                self.write_step(out, step, 'w%d' % len(self.calls), True, ROWS)
+                self.write_step(out, step, 'w%d' % len(self.calls), ROWS)
 
         def container(images, repo, district, steps, out, run_id, names, export_bind=False):
             self.calls.append(('container', out.name, tuple(names), export_bind))
             self.images.append(images)
+            self.keys.append(os.environ.get('TERRIER_DEMO_KEY'))
             for step in steps:
-                self.write_step(out, step, 'c', False, b_rows)
+                self.write_step(out, step, 'c', b_rows)
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
                 mock.patch.object(P, 'windows_fingerprint', lambda pythons, repo, images: {i: {'python': 'win'} for i in images}),
@@ -485,7 +577,7 @@ class RunTests(unittest.TestCase):
             self.assertRegex(text, r'PASS  %s ' % re.escape(name))
             self.assertRegex(text, r'PASS  negative control %s .*detected' % re.escape(name))
         self.assertRegex(text, r'PASS  area_scores_shown\.csv +byte-identical')
-        self.assertRegex(text, r'PASS  area_scores_shown\.manifest\.json +same text; the line endings differ only')
+        self.assertRegex(text, r'PASS  area_scores_shown\.manifest\.json +byte-identical')
         self.assertRegex(text, r'negative control area_scores_shown\.csv +one byte changed at offset \d+: detected')
         self.assertRegex(text, r'negative control scores\.sqlite3 +one row removed from \w+: detected')
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
@@ -498,6 +590,28 @@ class RunTests(unittest.TestCase):
         self.assertRegex(text, r'PASS  area_scores_shown\.csv ')                 # the fake writes the same table in A and B ...
         self.assertRegex(text, r'FAIL  scores\.sqlite3 .*table\(s\): .*roads')     # ... and a different row set in B's store
         self.assertIn('PARITY FAIL', text)
+
+    # One throwaway demo key for A1, A2 and B.
+
+    def test_one_demo_key_serves_every_build_and_is_kept_for_a_later_reuse_run(self):
+        self.main('--steps', 'scores', '--skip-container')                     # the Windows builds first (A1, A2) ...
+        self.assertEqual(len(self.keys), 2)
+        key = self.keys[0]
+        self.assertRegex(key, r'^[0-9a-f]{64}$')
+        self.assertEqual(set(self.keys), {key})
+        self.assertEqual((self.root / 'scratch' / 'demo_key.hex').read_text(encoding='utf-8'), key)
+        self.keys.clear()
+        self.main('--steps', 'scores', '--reuse-windows')                      # ... then the container, in a second invocation
+        self.assertEqual(self.keys, [key])
+        self.keys.clear()
+        self.main('--steps', 'scores', scratch=self.root / 'other')
+        self.assertNotEqual(self.keys[0], key)                                 # a new run, a new key
+
+    def test_a_key_given_in_the_environment_is_used_and_no_key_file_is_made(self):
+        given = 'ab' * 32
+        self.main('--steps', 'scores', environ={'TERRIER_DEMO_KEY': given})
+        self.assertEqual(set(self.keys), {given})
+        self.assertFalse((self.root / 'scratch' / 'demo_key.hex').exists())
 
     # Image and interpreter per step.
 
@@ -922,6 +1036,7 @@ class BuildImageFilesTests(unittest.TestCase):
         self.assertRegex(score, r'(?m)^    <<: \*build\n    image: \$\{TERRIER_SCORE_IMAGE:\?pin the score image by digest')
         self.assertRegex(score, r'(?m)^    volumes: \*build-volumes\n')                       # ... and shared: the score steps mount nothing else
         self.assertNotIn('- type:', score)
+        self.assertEqual(text.count('TERRIER_DEMO_KEY: ${TERRIER_DEMO_KEY:-}'), 1)            # in the shared environment, empty by default
         self.assertEqual(text.count('TERRIER_SCORE_IMAGE:?'), 1)                              # the same :? rule as TERRIER_BUILD_IMAGE
         self.assertEqual(text.count('TERRIER_BUILD_IMAGE:?'), 1)
         self.assertNotIn('cu-geography-v3', score)

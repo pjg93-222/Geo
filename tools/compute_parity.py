@@ -16,8 +16,10 @@
   B       the same steps in the container (compute.compose.yaml), built in the stage volume, exported through a named volume
           and `docker cp` to <scratch>/B (--export-bind: straight into the bind-mounted folder, for native-Linux hosts)
   Compared with co_baseline.store_digest per table (a logical comparison) for each SQLite store and byte for byte for every other
-  file (the shown-areas CSV, --files: the bundle zip, density.json, ...; a .json file by content: Python writes it with CRLF on
-  Windows and LF in the container); --api adds co_baseline's golden endpoint check on A1 and B.
+  file (the shown-areas CSV and manifest, --files: the bundle zip, density.json, ...); --api adds co_baseline's golden endpoint
+  check on A1 and B. A `metadata` table that differs between A1 and A2 is not left out whole: per key (and per field of a JSON value,
+  such as w1.seconds) only what varies is, the rest must match B. One throwaway demo key serves A1, A2 and B (scratch/demo_key.hex,
+  build_step.seed_demo_key), or the demo names, their search index and the stored key would differ in every build.
   Prints PASS or FAIL per artifact and exits 0 only when every line passes. Counts and names only; no row is printed.
   One heavy job at a time: A1, then A2, then B. Never point --scratch at a .local folder.
 """
@@ -58,6 +60,50 @@ def integrity_ok(path):
         return False
 
 
+def key_values(path):
+    """{key: value} of a store's `metadata` table when that is a plain key/value table (columns key, value); None otherwise."""
+    try:
+        with closing(B.open_readonly(path)) as connection:
+            if [row[1] for row in connection.execute('PRAGMA table_info(metadata)')] != ['key', 'value']:
+                return None
+            return dict(connection.execute('SELECT key, value FROM metadata'))
+    except sqlite3.Error:
+        return None
+
+
+def json_object(text):
+    try:
+        found = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return found if isinstance(found, dict) else None
+
+
+def metadata_variance(a1, a2, b):
+    """(left_out, mismatched) for the `metadata` key/value dicts of A1, A2 and B. What differs between the two Windows builds is the
+    run-to-run variance and is left out: a plain value (built_utc), or, for a JSON object, only the fields that differ (w1.seconds,
+    not the verification result beside it). Any other difference between A1 and B is a mismatch."""
+    left_out, mismatched = [], []
+    for key in sorted(set(a1) | set(a2) | set(b)):
+        x, y, z = a1.get(key), a2.get(key), b.get(key)
+        if x == y:
+            if x != z:
+                mismatched.append(key)
+            continue
+        if None in (x, y, z):
+            mismatched.append(key)
+            continue
+        fx, fy, fz = json_object(x), json_object(y), json_object(z)
+        if fx is None or fy is None:
+            left_out.append(key)
+            continue
+        varying = sorted(f for f in set(fx) | set(fy) if fx.get(f) != fy.get(f))
+        left_out += ['%s.%s' % (key, f) for f in varying]
+        if fz is None or {f: v for f, v in fx.items() if f not in varying} != {f: v for f, v in fz.items() if f not in varying}:
+            mismatched.append(key)
+    return left_out, mismatched
+
+
 def compare_store(name, a1, a2, b):
     """(ok, detail) for one SQLite store in folders a1, a2 (Windows) and b (container)."""
     paths = {label: Path(folder) / name for label, folder in (('A1', a1), ('A2', a2), ('B', b))}
@@ -79,15 +125,23 @@ def compare_store(name, a1, a2, b):
     differ = sorted(t for t in names if t not in noise and tables['A1'].get(t) != tables['B'].get(t))
     if differ:
         return False, 'B differs from the Windows build in table(s): ' + ', '.join(differ)
+    left_out = [t for t in noise if t != 'metadata']
+    if 'metadata' in noise:                       # refine the mask: the stamps vary, the facts beside them must match
+        pairs = [key_values(paths[label]) for label in ('A1', 'A2', 'B')]
+        if None in pairs:
+            left_out.append('metadata')
+        else:
+            keys, mismatched = metadata_variance(*pairs)
+            if mismatched:
+                return False, 'B differs from the Windows build in table(s): metadata (key(s) %s)' % ', '.join(mismatched)
+            left_out.append('metadata[%s]' % ', '.join(keys))
     rows = sum(t['rows'] for t in tables['B'].values())
     return True, '%d tables, %s rows; run-to-run variance (left out): %s' % (len(tables['B']), '{:,}'.format(rows),
-                                                                           ', '.join(noise) or 'none')
+                                                                           ', '.join(left_out) or 'none')
 
 
 def compare_file(name, a1, a2, b):
-    """(ok, detail) for a non-SQLite artifact: the bytes must be the same in all three folders. The one exception is a .json file
-    (a manifest the tool writes in text mode: CRLF on Windows, LF in the container) whose bytes differ in line endings and nowhere
-    else; the detail line says so."""
+    """(ok, detail) for a non-SQLite artifact: the bytes must be the same in all three folders."""
     paths = {label: Path(folder) / name for label, folder in (('A1', a1), ('A2', a2), ('B', b))}
     missing = [label for label, path in paths.items() if not path.is_file()]
     if missing:
@@ -96,9 +150,6 @@ def compare_file(name, a1, a2, b):
     if shas['A1'] != shas['A2']:
         return False, 'the two Windows builds differ byte for byte: the reference is not stable'
     if shas['A1'] != shas['B']:
-        windows, box = (paths[label].read_bytes().replace(b'\r\n', b'\n') for label in ('A1', 'B'))
-        if name.endswith('.json') and windows == box:
-            return True, 'same text; the line endings differ only (Windows CRLF, container LF), sha256 %s / %s' % (shas['A1'][:12], shas['B'][:12])
         return False, 'B differs from the Windows build byte for byte'
     return True, 'byte-identical, sha256 %s' % shas['B'][:12]
 
@@ -314,6 +365,13 @@ def main(argv=None):
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     report = {'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources,
               'python': {t: pythons[t] for t in toolchains}, 'results': []}
+
+    if not os.environ.get('TERRIER_DEMO_KEY'):       # one throwaway demo key for A1, A2 and B; kept in the scratch folder for --reuse-windows
+        scratch.mkdir(parents=True, exist_ok=True)
+        key_file = scratch / 'demo_key.hex'
+        if not key_file.exists():
+            key_file.write_text(os.urandom(32).hex(), encoding='utf-8')
+        os.environ['TERRIER_DEMO_KEY'] = key_file.read_text(encoding='utf-8').strip()
 
     for label in ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():

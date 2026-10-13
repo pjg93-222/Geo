@@ -121,8 +121,13 @@ so the harness reports the check's own verdict, not a count).
   `$TERRIER_PY312`; the same one `_build/run_nowithhold.ps1` calls `$PY312`), isolated as the tools' own docstrings say
   (`PYTHONPATH` unset, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`). Compose parses every service, so both image variables are always
   set; a run that needs one toolchain gives the other variable the same image (that service never starts), and the export uses the geo image
-  when the run has one. A `.json` output (the shown manifest) may differ between Windows and the container in line endings only (Python's
-  text mode writes CRLF on Windows); the line says so. Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
+  when the run has one. Three seams make the two sides comparable, none of them changes a value: `shown_areas.py` reads the district's own cache
+  (`D.rowfw_cache`, hostpaths) instead of the Windows path the frozen config names, and writes its manifest with LF (`scores` records that
+  file's sha256 in `metadata.area_table`); `build_step.py` seeds `.demo-key` from `$TERRIER_DEMO_KEY` when the scores step starts (the tool
+  otherwise makes a random key per folder, and the demo names, their FTS index and `metadata.demo_key` then differ in every build, A1 vs A2
+  as much as A vs B); the harness makes one throwaway key per scratch folder (`demo_key.hex`, reused by `--reuse-windows`). A `metadata`
+  table that differs between A1 and A2 is no longer left out whole: per key, and per field of a JSON value (`w1.seconds`), only what
+  varies is; every other key must match B, and the line names what was left out. Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
   to `--out-dir` and `--receipt`, both outside `TERRIER_LOCAL_DIR`, and imports Django settings: set `CU_DATA_DIR` and `CU_SECRET_KEY` to
   scratch values). Live sizes: scores 551 MB, walk 311 MB. Compare the bundle with `--files data/<key>.zip`.
 - `--api` runs `co_baseline.py check --parts api --data-dir <folder>` on A1 and B (a spare server per folder, minutes each). It needs a

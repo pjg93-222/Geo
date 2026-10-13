@@ -63,6 +63,13 @@ def bands_moved(m):
     return {'%s/%s' % k: int(n) for k, n in moved.groupby(['basis', 'level']).area_id.nunique().items()}
 
 
+def local_cache(cfg, d):
+    """The frozen config names its cache by the Windows path it was built at; read the district's own cache instead (tools/districts.py,
+    which tools/hostpaths.py can move: the container mounts it elsewhere). On the laptop that is the same file; its sha256 is unchanged."""
+    cfg['inputs']['cache']['path'] = str(D.rowfw_cache(d))
+    return cfg
+
+
 def build(d, gb):
     b = D.rowfw_build(d)
     spec = importlib.util.spec_from_file_location('p1_nofloor_area_table', b / 'tools' / 'p1_nofloor_area_table.py')
@@ -70,7 +77,7 @@ def build(d, gb):
     sys.path.insert(0, str(b))
     spec.loader.exec_module(NF)
     AR = NF.AR
-    cfg = json.loads((b / 'framework_config.json').read_text(encoding='utf-8'))
+    cfg = local_cache(json.loads((b / 'framework_config.json').read_text(encoding='utf-8')), d)
     gb.stage('running', 'load', 'person scores and geography of %s (counts only)' % d['id'])
     geo, rows, chk = NF.load_inputs(cfg)
     if not (chk['point_stage_scores_equal_row_file_float32'] and chk['lean_band_equal_row_file']
@@ -125,7 +132,7 @@ def main(argv=None):
         facts.update(file=out.name, sha256=sha256_file(out), bytes=out.stat().st_size, rows=len(shown),
                      ruling='Paul 2026-10-08: nothing should ever be withheld (O-9)', use='local only; never exported or hosted')
         manifest = out.with_suffix('.manifest.json')
-        manifest.write_text(json.dumps(facts, indent=1, sort_keys=True), encoding='utf-8')
+        manifest.write_text(json.dumps(facts, indent=1, sort_keys=True), encoding='utf-8', newline='\n')     # LF on Windows too, like the CSV
     except BaseException as error:
         gb.failed('build', 'shown-areas table stopped: %s: %s' % (type(error).__name__, error))
         raise

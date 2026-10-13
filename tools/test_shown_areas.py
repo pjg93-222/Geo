@@ -24,6 +24,17 @@ def table(ids, **override):
     return frame
 
 
+class LocalCacheTests(unittest.TestCase):
+    def test_the_frozen_configs_windows_cache_path_becomes_the_districts_own_and_nothing_else_moves(self):
+        cfg = {'inputs': {'cache': {'path': r'C:\\old\\place\\inputs.parquet', 'sha256': 'abc', 'rows': 3}, 'export': {'path': 'x'}}, 'fields': {}}
+        d = SA.D.get('co-05')
+        found = SA.local_cache(cfg, d)
+        self.assertIs(found, cfg)
+        self.assertEqual(cfg['inputs']['cache'], {'path': str(SA.D.rowfw_cache(d)), 'sha256': 'abc', 'rows': 3})
+        self.assertEqual((cfg['inputs']['export'], cfg['fields']), ({'path': 'x'}, {}))
+        self.assertEqual(SA.D.rowfw_cache(d).name, 'inputs.parquet')
+
+
 class ReproducedTests(unittest.TestCase):
     def test_new_areas_and_re_ranked_standings_pass(self):
         released = table(['B1', 'B2'])
