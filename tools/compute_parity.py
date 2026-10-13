@@ -1,12 +1,16 @@
 """Parity of a containerised store build against the Windows build (COMPUTE.md; design sections 4 and 6).
 
-    <venv python> tools/compute_parity.py --scratch <new folder> [--steps roads] [--district co-05]
+    <venv python> tools/compute_parity.py --scratch <new folder> [--steps roads] [--district co-05] [--inputs-from <finished run's folder>]
                   [--image ghcr.io/pjg93-222/terrier-build@sha256:...] [--score-image ghcr.io/pjg93-222/terrier-build-score@sha256:...]
                   [--api] [--negative-control] [--skip-container] [--export-bind]
 
-  Each step has a toolchain (tools/build_step.py STEPS): roads, street and contacts run in the geo image (terrier-build) and on Windows
-  in the work venv (--python); shown and scores run in the score image (terrier-build-score) and on Windows in the system Python 3.12
-  (--score-python, $TERRIER_PY312), as Terrier's own runner does. Only the images the chosen steps need are resolved.
+  Each step has a toolchain (tools/build_step.py STEPS): roads, street, contacts, walk, ingest, extend, bundle and density run in the geo
+  image (terrier-build) and on Windows in the work venv (--python); shown and scores run in the score image (terrier-build-score) and on
+  Windows in the system Python 3.12 (--score-python, $TERRIER_PY312), as Terrier's own runners do. Only the images the chosen steps need
+  are resolved. A step reads stores that earlier steps leave (walk reads roads, street, contacts and the score store): run those steps
+  in the same run, or judge the later steps from ONE set of inputs with --inputs-from (a finished run's A1: its stores are copied into
+  A1, A2 and, as a tar stream into the stage volume, B; nothing is mounted). That also keeps a store's file hash (the walk store records
+  the sha256 of roads.sqlite3) and a stamp (the bundle records the score store's built_utc) from being compared across two builds.
   An image is, in this order: --image / --score-image, $TERRIER_BUILD_IMAGE / $TERRIER_SCORE_IMAGE (an explicit build no signed release
   names yet: the first parity runs), else the one the laptop's verified current release manifest names (Melange ops/RELEASE.md,
   "Compute jobs follow the manifest"; `current.py image terrier-build` / `terrier-build-score`). None of the three: nothing runs.
@@ -37,7 +41,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
+import zipfile
 from contextlib import closing
 from pathlib import Path
 
@@ -55,6 +61,11 @@ RELEASE_CURRENT = r'C:\Users\pgoff\OneDrive\Desktop\Melange Systems\ops\release_
 COMPOSE_FILE = REPO / 'compute.compose.yaml'
 EXPORT_BIND_FILE = REPO / 'compute.export-bind.compose.yaml'
 STORE_META = ('schema_sha256', 'objects', 'user_version')
+STAGE_VOLUME = 'terrier-compute_stage'       # compute.compose.yaml: project `terrier-compute`, volume `stage`
+KV_TABLES = ('metadata', 'meta')             # the key/value tables of the stores: metadata (street, contacts, scores ...), meta (walk)
+# What a store's key/value table records about the process that wrote it, not about the data: the walk store's qa document keeps the
+# seconds of each phase and the peak working set (a Windows call, so None in the container). Always left out, named in the line.
+MEASURED = {'meta': {'qa': ('timing', 'peak_memory_mb')}}
 
 
 # ---- comparison (pure: two or three folders in, a verdict per artifact out) ------------------------------------------
@@ -67,13 +78,13 @@ def integrity_ok(path):
         return False
 
 
-def key_values(path):
-    """{key: value} of a store's `metadata` table when that is a plain key/value table (columns key, value); None otherwise."""
+def key_values(path, table='metadata'):
+    """{key: value} of a store's key/value table (`table`: columns key, value); None when it is not a plain key/value table."""
     try:
         with closing(B.open_readonly(path)) as connection:
-            if [row[1] for row in connection.execute('PRAGMA table_info(metadata)')] != ['key', 'value']:
+            if [row[1] for row in connection.execute('PRAGMA table_info(%s)' % B.quote(table))] != ['key', 'value']:
                 return None
-            return dict(connection.execute('SELECT key, value FROM metadata'))
+            return dict(connection.execute('SELECT key, value FROM %s' % B.quote(table)))
     except sqlite3.Error:
         return None
 
@@ -86,13 +97,23 @@ def json_object(text):
     return found if isinstance(found, dict) else None
 
 
-def metadata_variance(a1, a2, b):
-    """(left_out, mismatched) for the `metadata` key/value dicts of A1, A2 and B. What differs between the two Windows builds is the
+def metadata_variance(a1, a2, b, measured=None):
+    """(left_out, mismatched) for the key/value dicts of A1, A2 and B. What differs between the two Windows builds is the
     run-to-run variance and is left out: a plain value (built_utc), or, for a JSON object, only the fields that differ (w1.seconds,
-    not the verification result beside it). Any other difference between A1 and B is a mismatch."""
+    not the verification result beside it). `measured` {key: fields}: fields of a JSON value that measure the writing process and are
+    left out whatever A1 and A2 say. Any other difference between A1 and B is a mismatch."""
     left_out, mismatched = [], []
     for key in sorted(set(a1) | set(a2) | set(b)):
         x, y, z = a1.get(key), a2.get(key), b.get(key)
+        fields = (measured or {}).get(key)
+        if fields and None not in (x, y, z):
+            fx, fy, fz = json_object(x), json_object(y), json_object(z)
+            if None not in (fx, fy, fz):
+                varying = sorted({f for f in set(fx) | set(fy) if fx.get(f) != fy.get(f)} | {f for f in fields if f in fx or f in fy or f in fz})
+                left_out += ['%s.%s' % (key, f) for f in varying]
+                if {f: v for f, v in fx.items() if f not in varying} != {f: v for f, v in fz.items() if f not in varying}:
+                    mismatched.append(key)
+                continue
         if x == y:
             if x != z:
                 mismatched.append(key)
@@ -216,16 +237,17 @@ def compare_store(name, a1, a2, b):
     differ = sorted(t for t in names if t not in noise and tables['A1'].get(t) != tables['B'].get(t))
     if differ:
         return False, 'B differs from the Windows build in table(s): ' + ', '.join(differ)
-    left_out = [t for t in noise if t != 'metadata']
-    if 'metadata' in noise:                       # refine the mask: the stamps vary, the facts beside them must match
-        pairs = [key_values(paths[label]) for label in ('A1', 'A2', 'B')]
-        if None in pairs:
-            left_out.append('metadata')
-        else:
-            keys, mismatched = metadata_variance(*pairs)
-            if mismatched:
-                return False, 'B differs from the Windows build in table(s): metadata[%s]' % ', '.join(mismatched)
-            left_out.append('metadata[%s]' % ', '.join(keys))
+    left_out = [t for t in noise if t not in KV_TABLES]
+    for kv in KV_TABLES:
+        if kv in noise:                           # refine the mask: the stamps vary, the facts beside them must match
+            pairs = [key_values(paths[label], kv) for label in ('A1', 'A2', 'B')]
+            if None in pairs:
+                left_out.append(kv)
+            else:
+                keys, mismatched = metadata_variance(*pairs, measured=MEASURED.get(kv))
+                if mismatched:
+                    return False, 'B differs from the Windows build in table(s): %s[%s]' % (kv, ', '.join(mismatched))
+                left_out.append('%s[%s]' % (kv, ', '.join(keys)))
     notes = []
     for table, shadows in fts.items():            # physical index structures: exact when they can be, else by content (fts_parity)
         raw = {label: [tables[label][t] for t in shadows] for label in tables}
@@ -255,8 +277,53 @@ def compare_file(name, a1, a2, b):
     return True, 'byte-identical, sha256 %s' % shas['B'][:12]
 
 
+def compare_zip(name, a1, a2, b):
+    """(ok, detail) for a zip: byte for byte when the two Windows builds agree on the bytes (the bundle: its writer stamps every member
+    the same). When they do not (ingest and extend stamp `created_at` into manifest.json and the members with the time of writing),
+    member by member: the same names, the same bytes, and for a member that differs between A1 and A2 only its JSON fields that
+    differ are left out: every other field must equal B. A member that differs and is not a JSON object makes the reference unstable."""
+    paths = {label: Path(folder) / name for label, folder in (('A1', a1), ('A2', a2), ('B', b))}
+    missing = [label for label, path in paths.items() if not path.is_file()]
+    if missing:
+        return False, 'missing in ' + ', '.join(missing)
+    shas = {label: B.sha256_file(path) for label, path in paths.items()}
+    if shas['A1'] == shas['A2']:
+        if shas['A1'] != shas['B']:
+            return False, 'B differs from the Windows build byte for byte'
+        return True, 'byte-identical, sha256 %s' % shas['B'][:12]
+    try:
+        with zipfile.ZipFile(paths['A1']) as z1, zipfile.ZipFile(paths['A2']) as z2, zipfile.ZipFile(paths['B']) as zb:
+            if sorted(z1.namelist()) != sorted(z2.namelist()):
+                return False, 'the two Windows builds differ in the names of their members: the reference is not stable'
+            if sorted(z1.namelist()) != sorted(zb.namelist()):
+                return False, 'B differs from the Windows build in the names of its members'
+            left_out, mismatched, same = [], [], 0
+            for member in sorted(z1.namelist()):
+                x, y, z = z1.read(member), z2.read(member), zb.read(member)
+                if x == y:
+                    if x == z:
+                        same += 1
+                    else:
+                        mismatched.append(member)
+                    continue
+                fx, fy, fz = json_object(x), json_object(y), json_object(z)
+                if fx is None or fy is None:
+                    return False, 'the two Windows builds differ in %s, which is not a JSON object: the reference is not stable' % member
+                varying = sorted(f for f in set(fx) | set(fy) if fx.get(f) != fy.get(f))
+                left_out.append('%s[%s]' % (member, ', '.join(varying)))
+                if fz is None or {f: v for f, v in fx.items() if f not in varying} != {f: v for f, v in fz.items() if f not in varying}:
+                    mismatched.append(member)
+    except (zipfile.BadZipFile, OSError) as error:
+        return False, 'the two Windows builds differ byte for byte and a zip cannot be read (%s): the reference is not stable' % type(error).__name__
+    if mismatched:
+        return False, 'B differs from the Windows build in member(s): ' + ', '.join(mismatched)
+    return True, '%d members identical, %d with run-to-run variance (left out): %s' % (same, len(left_out), ', '.join(left_out))
+
+
 def compare(name, a1, a2, b):
-    return (compare_store if name.endswith('.sqlite3') else compare_file)(name, a1, a2, b)
+    if name.endswith('.sqlite3'):
+        return compare_store(name, a1, a2, b)
+    return (compare_zip if name.endswith('.zip') else compare_file)(name, a1, a2, b)
 
 
 def baseline_note(name, folder):
@@ -361,12 +428,30 @@ def flip_one_byte(path):
     return at
 
 
+def change_one_member(path):
+    """Negative control for a zip: flip one bit in the middle of its largest member other than manifest.json (whose stamps the
+    comparison may leave out) and write the zip again with the same names, order and stamps. Returns the member."""
+    with zipfile.ZipFile(path) as archive:
+        infos = archive.infolist()
+        data = {info.filename: archive.read(info.filename) for info in infos}
+    member = max((info.filename for info in infos if info.filename != 'manifest.json'), key=lambda n: len(data[n]))
+    blob = bytearray(data[member])
+    blob[len(blob) // 2] ^= 0x01
+    data[member] = bytes(blob)
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for info in infos:
+            fresh = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+            fresh.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(fresh, data[info.filename])
+    return member
+
+
 # ---- the two builds ---------------------------------------------------------------------------------------------------
 
 def windows_env(image, out=None):
     """The environment of a Windows build step. The score steps run in the interpreter's own world, as the documented command line of
     shown_areas.py and build_scores_v3.py has it (`env -u PYTHONPATH PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 <python>`)."""
-    env = {k: v for k, v in os.environ.items() if k not in ('CU_DATA_DIR', 'TERRIER_LOCAL_DIR')}
+    env = {k: v for k, v in os.environ.items() if k not in ('CU_DATA_DIR', 'CU_DISTRICT', 'CU_SECRET_KEY', 'CU_STATE_DIR', 'TERRIER_LOCAL_DIR')}
     if out is not None:
         env['TERRIER_LOCAL_DIR'] = str(out)
     if image == 'score':
@@ -415,10 +500,47 @@ def resolve_images(toolchains, explicit, fail):
     return images, sources
 
 
-def store_names(district, steps, extra=()):
-    """The files a run of `steps` leaves in the data folder, relative to the folder that holds the stores (co-05: the folder itself)."""
+def store_names(district, steps, extra=(), keep=False):
+    """The files a run of `steps` leaves in the data folder, relative to the folder that holds the stores (co-05: the folder itself):
+    each step's store and `also`, plus `extra`, and its `keep` files (receipts: exported, never compared) for `keep`. A name with `*`
+    stands for the files it matches (expand_names); a file two steps name (street, changed by contacts) is listed once."""
     sub = D.data_dir(district, Path('.'))
-    return [(sub / f).as_posix() for f in [f for s in steps for f in (S.STEPS[s].store, *S.STEPS[s].also)] + list(extra)]
+    found = [f for s in steps for f in (S.STEPS[s].store, *S.STEPS[s].also, *(S.STEPS[s].keep if keep else ()))] + list(extra)
+    return list(dict.fromkeys((sub / f).as_posix() for f in found))
+
+
+def expand_names(folder, names):
+    """`names` with each `*` name replaced by the files it matches in `folder`; a name that matches nothing is an error."""
+    found = []
+    for name in names:
+        matches = S.expand(folder, name)
+        if not matches:
+            raise SystemExit('compute_parity: %s matches nothing in %s' % (name, folder))
+        found += matches
+    return list(dict.fromkeys(found))
+
+
+def link_or_copy(source, target):
+    """A hard link to `source` where the file system allows one (one disk copy for A1 and A2), else a copy."""
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copyfile(source, target)
+
+
+def copy_inputs(folder, district, names, source, link=False):
+    """Windows side of --inputs-from: `names` (files or folders of the data folder) copied from the finished run in `source` into `folder`.
+    `link`: hard links instead of copies. Only for steps that never write what they read (walk, ingest, extend, bundle, density open their
+    inputs read-only); contacts changes street.sqlite3 in place, which would change the source too."""
+    origin, data = D.data_dir(district, Path(source)), D.data_dir(district, Path(folder))
+    data.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        if not (origin / name).exists():
+            raise SystemExit('compute_parity: --inputs-from has no %s' % name)
+        if (origin / name).is_dir():
+            shutil.copytree(origin / name, data / name, **({'copy_function': link_or_copy} if link else {}))
+        else:
+            (link_or_copy if link else shutil.copyfile)(origin / name, data / name)
 
 
 def docker_exe():
@@ -465,6 +587,43 @@ def export_via_volume(images, repo, out, run_id, names):
         run('volume', 'rm', volume)
 
 
+def seed_stage(images, repo, out, run_id, district, source, names):
+    """Copy `names` (files or folders of a data folder) from the host folder `source` into this run's folder of the stage volume, for the
+    steps that read stores no step of the run makes. They cross as a tar stream on the stdin of one container (`docker cp` into a volume
+    ran at 1 MB/s on this machine, the stream at 5): nothing is mounted, `source` is only read (it may be a live .local), and the copies
+    are given to the build user (uid 10001) before anything builds."""
+    docker, image = docker_exe(), export_image(images)
+    target = '/stage/' + run_id + ('/' + district['data_dir'] if district['data_dir'] else '')
+    origin = D.data_dir(district, Path(source))
+    for name in names:
+        if not (origin / name).exists():
+            raise SystemExit('compute_parity: the inputs folder has no %s' % name)
+    if subprocess.run([docker, 'volume', 'inspect', STAGE_VOLUME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        compose(images, repo, out, run_id, 'run', '--rm', SERVICES['geo' if 'geo' in images else 'score'], 'fingerprint', capture=True)
+    script = 'mkdir -p %s && tar xf - -C %s && chown -R 10001:10001 /stage/%s' % (target, target, run_id)
+    receiver = subprocess.Popen([docker, 'run', '-i', '--rm', '--pull', 'never', '--network', 'none', '--user', '0', '-v',
+                                 STAGE_VOLUME + ':/stage', '--entrypoint', 'sh', image, '-c', script],
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+    try:
+        with tarfile.open(fileobj=receiver.stdin, mode='w|') as archive:
+            for name in names:
+                archive.add(str(origin / name), arcname=name)
+    finally:
+        receiver.stdin.close()
+        code = receiver.wait()
+    if code:
+        raise subprocess.CalledProcessError(code, 'docker run -i (the stage seeding)')
+
+
+def drop_stage(images, run_id):
+    """Remove this run's folder from the stage volume: the stores in it are voter-derived and the export already holds them. Only
+    the folder of this run id; the volume and any other run stay."""
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', run_id):
+        raise ValueError('not a run id: %r' % run_id)
+    subprocess.run([docker_exe(), 'run', '--rm', '--pull', 'never', '--network', 'none', '--user', '0', '-v', STAGE_VOLUME + ':/stage',
+                    '--entrypoint', 'sh', export_image(images), '-c', 'rm -rf /stage/' + run_id], check=True, stdout=subprocess.DEVNULL)
+
+
 def container_build(images, repo, district, steps, out, run_id, names, export_bind=False):
     """Each step in the service of its toolchain (SERVICES), all into the same stage volume, then the export."""
     for step in steps:
@@ -497,6 +656,12 @@ def main(argv=None):
     parser.add_argument('--district', default=D.DEFAULT, choices=list(D.DISTRICTS))
     parser.add_argument('--steps', default='roads', help='comma list of %s, in build order (default roads, the smoke)' % ', '.join(S.STEPS))
     parser.add_argument('--files', default='', help='comma list of other files to compare byte for byte (relative to the data folder)')
+    parser.add_argument('--link-inputs', action='store_true',
+                        help='with --inputs-from: hard-link the inputs into A1 and A2 instead of copying them (disk space); refused for a step that '
+                             'writes a store it reads (contacts)')
+    parser.add_argument('--inputs-from', type=Path, default=None,
+                        help='a finished run\'s folder (for example an earlier A1): the stores the chosen steps read and none of them makes are '
+                             'copied from it into A1, A2 and the stage of B, so the steps are judged from one set of inputs')
     parser.add_argument('--python', default=os.environ.get('CU_PYTHON') or str(H.WORK_PY),
                         help='the Windows interpreter of the geo steps (roads, street, contacts)')
     parser.add_argument('--score-python', default=str(H.PY312),
@@ -538,6 +703,14 @@ def main(argv=None):
         # a judgement of finished builds needs no image: only the ones that are given are recorded
         images, sources = resolve_images([t for t in toolchains if explicit[t] or not args.reuse_container], explicit, parser.error)
     d = D.get(args.district)
+    needed = S.inputs_needed(steps, d)
+    if needed and not args.inputs_from:
+        parser.error('%s read %s, which no step of this run makes: run the steps that make it too, or pass --inputs-from <a finished '
+                     'run\'s folder>' % (', '.join(s for s in steps if S.step_needs(S.STEPS[s], d)), ', '.join(needed)))
+    if args.inputs_from and not needed:
+        parser.error('--inputs-from: these steps read nothing that they do not make themselves')
+    if args.link_inputs and (not args.inputs_from or 'contacts' in steps):
+        parser.error('--link-inputs needs --inputs-from and a run without contacts (which changes street.sqlite3 in place)')
     names = store_names(d, steps, [f for f in args.files.split(',') if f])
     folders = {label: scratch / label for label in ('A1', 'A2', 'B')}
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -551,13 +724,26 @@ def main(argv=None):
             key_file.write_text(os.urandom(32).hex(), encoding='utf-8')
         os.environ['TERRIER_DEMO_KEY'] = key_file.read_text(encoding='utf-8').strip()
 
+    if any(S.STEPS[s].walk_salt for s in steps) and not os.environ.get('TERRIER_WALK_SALT'):      # likewise one throwaway walk salt
+        scratch.mkdir(parents=True, exist_ok=True)
+        salt_file = scratch / 'walk_salt.hex'
+        if not salt_file.exists():
+            salt_file.write_text(os.urandom(32).hex(), encoding='utf-8')
+        os.environ['TERRIER_WALK_SALT'] = salt_file.read_text(encoding='utf-8').strip()
+    report['inputs_from'] = str(args.inputs_from) if args.inputs_from else None
+    report['inputs'] = needed
+
     for label in ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():
             print('%s: reusing %s' % (label, folders[label]), flush=True)
             continue
         print('%s: Windows build of %s' % (label, ', '.join(steps)), flush=True)
         folders[label].mkdir(parents=True, exist_ok=True)
+        if needed:
+            print('%s: inputs %s %s from %s' % (label, ', '.join(needed), 'hard-linked' if args.link_inputs else 'copied', args.inputs_from), flush=True)
+            copy_inputs(folders[label], d, needed, args.inputs_from, link=args.link_inputs)
         windows_build(pythons, args.repo, d['id'], steps, folders[label])
+    names = expand_names(folders['A1'], names)                       # a `*` name (a bundle's file name is its snapshot key) as A1 made it
     report['fingerprint_windows'] = windows_fingerprint(pythons, args.repo, toolchains)
     if args.reuse_container:
         print('B: reusing %s' % folders['B'], flush=True)
@@ -566,6 +752,9 @@ def main(argv=None):
     elif build_container:
         print('B: container build of %s (stage volume %s)' % (', '.join(steps), run_id), flush=True)
         folders['B'].mkdir(parents=True, exist_ok=True)
+        if needed:
+            print('B: inputs %s copied from %s into the stage' % (', '.join(needed), args.inputs_from), flush=True)
+            seed_stage(images, args.repo, folders['B'], run_id, d, args.inputs_from, needed)
         container_build(images, args.repo, d['id'], steps, folders['B'], run_id, names, export_bind=args.export_bind)
         report['fingerprint_container'] = container_fingerprint(images, args.repo, folders['B'], run_id)
 
@@ -573,14 +762,14 @@ def main(argv=None):
         print('%-5s %-34s %s' % ('PASS' if ok else 'FAIL', name, detail), flush=True)
         report['results'].append({'artifact': name, 'ok': ok, 'detail': detail})
 
-    before = {}                              # artifact -> the tables that already differ (what a negative control must not rely on)
+    before, passed = {}, {}                  # artifact -> the tables that already differ (what a negative control must not rely on); -> did it pass
     for name in names:
         if args.skip_container:
             ok, detail = compare(name, folders['A1'], folders['A2'], folders['A2'])
             detail = '(Windows only) ' + detail
         else:
             ok, detail = compare(name, folders['A1'], folders['A2'], folders['B'])
-        before[name] = differing_tables(detail)
+        before[name], passed[name] = differing_tables(detail), ok
         verdict(name, ok, detail)
         note = baseline_note(name, folders['A1']) if name.endswith('.sqlite3') and d['id'] == D.DEFAULT else None
         if note:
@@ -608,6 +797,11 @@ def main(argv=None):
                     found = not fts_parity({'A1': folders['A1'] / name, 'B': target}, index, fts[index])[0]
                     verdict('negative control ' + name + ' (indexed name)', found, 'one %s.%s indexed value changed, index kept in line: %s' % (
                         text, column, 'detected' if found else 'NOT detected'))
+            elif not passed[name]:                   # a file that already differs would make any control look caught
+                print('      negative control %s: not run, the comparison itself already fails' % name, flush=True)
+            elif name.endswith('.zip'):
+                what, ok = 'one bit of %s changed' % change_one_member(target), compare_zip(name, folders['A1'], folders['A2'], control)[0]
+                verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
             else:
                 what, ok = 'one byte changed at offset %d' % flip_one_byte(target), compare_file(name, folders['A1'], folders['A2'], control)[0]
                 verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))

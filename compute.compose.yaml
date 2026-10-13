@@ -38,6 +38,7 @@ x-build: &build
     TERRIER_GEOGRAPHY_DIR: /geography
     TERRIER_SIBLING_DIR: /sibling
     TERRIER_DEMO_KEY: ${TERRIER_DEMO_KEY:-}     # a parity run's throwaway demo key (tools/build_step.py seed_demo_key); empty = the tool makes its own
+    TERRIER_WALK_SALT: ${TERRIER_WALK_SALT:-}   # the walk step's salt (tools/build_step.py seed_walk_salt): a parity run's throwaway one, a build's own
     HOME: /glassbox-home        # tools/glassbox.py writes ~/.claude/glassbox/events: mounted below, so the dashboard still sees the run
 
 services:

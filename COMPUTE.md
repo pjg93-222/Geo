@@ -15,26 +15,30 @@ rebuild: **all six artifacts PASS, every negative control is detected** (section
 `tools/compute_build.py` builds in the containers by default and `TERRIER_COMPUTE=windows` is the one fallback (section 8); no production build
 has been run through it yet. The export goes through a named volume by default (section 5); `--export-bind` opts out.
 
+**Status (2026-10-13, later):** `walk`, `ingest`, `extend` and `density` of CO-05 pass parity from one set of inputs and are in `tools/build_step.py`, `tools/compute_build.py` and the runners; `bundle` is wired and does
+not pass: the container's `geometry.json` differs from the Windows build in the start vertex of two polygons, and D-177 keeps the bundle zip byte-identical, so it is held (section 10). `import_summary` and the steps that start servers stay on the host.
+`--inputs` (build) and `--inputs-from` (parity) supply the stores a run of some steps reads; the untracked runners call the build and fall back to Windows with `TERRIER_COMPUTE=windows`. Only CO-05 was run.
+
 ## 1. What is where
 
 | File | Job |
 |---|---|
 | `tools/hostpaths.py` | every machine path a build tool used to hard-code, as an environment variable (section 2). Defaults are today's Windows paths, so the laptop builds as before |
-| `tools/build_step.py` | `run <step> --district d` / `export <out> <files>` / `fingerprint`. The container entrypoint, and also what the Windows side runs, so both sides take the same code path |
+| `tools/build_step.py` | `run <step> --district d` / `export <out> <files>` (a name with `*` is every file it matches) / `fingerprint`. The container entrypoint, and also what the Windows side runs, so both sides take the same code path. `STEPS` holds the ten steps of the chain (section 10) |
 | `Dockerfile.build` | the toolchain, no code and no data: target `geo` (CPython 3.12.14, = `work\.venv`; `python:3.12.14-slim-trixie`) and target `score` (CPython 3.12.10, = system Python; still `python:3.12.10-slim-bookworm`, because the registry has no 3.12.10 trixie image); both apply Debian's security updates at build, hashed locks `requirements.build.lock` / `requirements.score.lock` |
 | `compute.compose.yaml` | services `terrier-build` (geo image) and `terrier-score` (score image, `TERRIER_SCORE_IMAGE`; the same mounts, shared through one YAML anchor): network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume; and `terrier-export` (copies stores from the `stage` volume into a second named volume, `terrier-export-<run id>`, with an integrity check; the harness `docker cp`s them to the scratch folder and removes it) |
 | `compute.export-bind.compose.yaml` | opt-out override (`--export-bind`): `terrier-export` writes `/out` into the bind-mounted scratch folder instead of the volume. Native-Linux hosts only |
-| `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact. Each step has a toolchain: roads, street, contacts run in the geo image and, on Windows, the work venv (`--python`); shown, scores in the score image and, on Windows, the system Python 3.12 (`--score-python`, `$TERRIER_PY312`). An image is `--image` / `--score-image`, else `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest (section 3, step 4) |
-| `tools/compute_build.py` | the production build (section 8, D-188): roads, street, contacts, shown, scores of one district into a new folder, in the containers by default, on Windows when `TERRIER_COMPUTE=windows`. Images from `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest |
+| `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact. Each step has a toolchain: roads, street, contacts, walk, ingest, extend, bundle, density run in the geo image and, on Windows, the work venv (`--python`); shown, scores in the score image and, on Windows, the system Python 3.12 (`--score-python`, `$TERRIER_PY312`). An image is `--image` / `--score-image`, else `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest (section 3, step 4). `--inputs-from <a finished run's folder>` judges steps that read earlier stores from one set of inputs (section 10) |
+| `tools/compute_build.py` | the production build (section 8, D-188): the steps of one district into a new folder, in the containers by default, on Windows when `TERRIER_COMPUTE=windows`; `--inputs <data folder>` supplies the stores a run of some steps reads (section 10). Images from `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest |
 | `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release. Job `draft-release` folds both digests into the release's `digests.json`, which the platform's `ops/release.py` reads, so the signed manifest carries them |
 | `.github/workflows/release.yml` job `scan` + `tools/image_gate.py` | trivy on `terrier-web`, `terrier-build` and `terrier-build-score` by digest, the platform's image policy (D-181, D-182: fixable HIGH/CRITICAL vulnerabilities, misconfigurations, secrets and pip/npm licences that are forbidden, restricted or unknown block; unfixed vulnerabilities and OS-package licences are reported). The draft release waits for it. Tests: `tools/test_image_gate.py` |
 | `tools/test_compute.py` | the tests (also in the release workflow's test job) |
 
-Steps wired in `tools/build_step.py`, in the order of the build chain, each one row of `STEPS` (on Windows the untracked `_build/run_remaining.ps1`
-runs roads, street and contacts as R2-R4 and `_build/run_nowithhold.ps1` runs shown and scores; no runner drives the whole chain, section 8): `roads`, `street`, `contacts` (toolchain `geo`), `shown` (`tools/shown_areas.py --district d`; writes `area_scores_shown.csv`
+Steps wired in `tools/build_step.py`, in the order of the build chain, each one row of `STEPS`: `roads`, `street`, `contacts` (toolchain `geo`), `shown` (`tools/shown_areas.py --district d`; writes `area_scores_shown.csv`
 and its `.manifest.json`) and `scores` (`tools/build_scores_v3.py --district d --receipt <data dir>/scores_receipt.json`; writes
-`scores.sqlite3`; the receipt would otherwise go into the repo's `_build`, which is read-only in a container) (toolchain `score`).
-`shown` and `scores` read the earlier stores (street, contacts, the shown table) from the same folder, so run them after those.
+`scores.sqlite3`; the receipt would otherwise go into the repo's `_build`, which is read-only in a container) (toolchain `score`), then `walk`, `ingest`, `extend`, `bundle` and `density` (toolchain `geo`; section 10).
+`shown` and `scores` read the earlier stores (street, contacts, the shown table) from the same folder, so run them after those. The untracked runners (`_build/run_remaining.ps1`, `run_fast.ps1`, `run_nowithhold.ps1`) call
+`tools/compute_build.py` for these steps since 2026-10-13, except the bundle, and run the old Windows lines when `TERRIER_COMPUTE=windows` (section 10).
 
 ## 2. Path seams (`tools/hostpaths.py`)
 
@@ -148,9 +152,8 @@ so the harness reports the check's own verdict, not a count).
   otherwise makes a random key per folder, and the demo names, their FTS index and `metadata.demo_key` then differ in every build, A1 vs A2
   as much as A vs B); the harness makes one throwaway key per scratch folder (`demo_key.hex`, reused by `--reuse-windows`). A `metadata`
   table that differs between A1 and A2 is no longer left out whole: per key, and per field of a JSON value (`w1.seconds`), only what
-  varies is; every other key must match B, and the line names what was left out. Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
-  to `--out-dir` and `--receipt`, both outside `TERRIER_LOCAL_DIR`, and imports Django settings: set `CU_DATA_DIR` and `CU_SECRET_KEY` to
-  scratch values). Live sizes: scores 551 MB, walk 311 MB. Compare the bundle with `--files data/<key>.zip`.
+  varies is; every other key must match B, and the line names what was left out. `walk`, `ingest`, `extend`, `bundle` and `density` are wired as well (section 10: the bundle's `--out-dir` and `--receipt` go into the stage, its Django validator gets a scratch `CU_DATA_DIR` and a throwaway
+  `CU_SECRET_KEY`, the walk store's `.walk-salt` comes from `$TERRIER_WALK_SALT`). Live sizes: scores 551 MB, walk 311 MB.
 - `--api` runs `co_baseline.py check --parts api --data-dir <folder>` on A1 and B (a spare server per folder, minutes each). It needs a
   complete data folder (snapshots, accounts), so it only makes sense after the full set exists in every folder.
 - Salts and keys (`.street-salt`, `.walk-salt`, `.demo-key`, `.secret`) are copied, never regenerated: for CO the street salt is the
@@ -173,7 +176,8 @@ so the harness reports the check's own verdict, not a count).
 - FTS5 shadow tables: settled by the D-177 rule of 2026-10-13, section 9. A contentless FTS5 table (`contacts.sqlite3`'s `search`) cannot be rebuilt, so its shadow
   tables must still be exactly equal; they were in the finished run.
 - Run under Docker so far: both images built locally from e60d68e and `roads`, `street`, `contacts`, `shown`, `scores` of CO-05 (parity
-  above). Not yet run: `walk`, `density`, the bundle and `--api`. The CI job itself has run
+  above), then `walk`, `ingest`, `extend`, `bundle` and `density` of CO-05 (section 10; the bundle fails). Not yet run: `--api`, and any step for OR-05 or CT-01 (their row framework and street salt
+  would be taken from `.local` by `--inputs`, which only CO-05 has been used with). The CI job itself has run
   (v2026.10.12.8) but its images were not pulled; compare their digests with a local build only after the registry login that is Paul's.
 - `tools/luna_district` (OR/CT phase 3, T6) still calls `ctypes.windll` without a POSIX branch (`common.available_ram_gb`,
   `peak_working_set_gb`); the seams are in, the container does not run it. `build_walk.py` and `build_scores_v3.py` already degrade.
@@ -191,7 +195,7 @@ so the harness reports the check's own verdict, not a count).
 D-188: switch when the parity run is green, keep a one-flag Windows fallback. The full CO-05 chain is green under the FTS5 rule of D-177 (section 9),
 so `tools/compute_build.py` is the build of the five stores of a district, and it runs in the containers unless told otherwise.
 
-**What it is.** One command builds `roads`, `street`, `contacts`, `shown` and `scores` of a district, in that order, into a NEW folder (`--out`; never a
+**What it is.** One command builds the steps of a district (default: all of section 10 but the held bundle; the first five are `roads`, `street`, `contacts`, `shown` and `scores`), in that order, into a NEW folder (`--out`; never a
 `.local` folder, and it must be empty). In the container mode each step runs in the compose service of its toolchain (`terrier-build`, the geo image:
 roads, street, contacts; `terrier-score`, the score image: shown, scores), all in one stage volume, and the stores leave the volume through the named export
 volume and `docker cp` (section 5), the harness's own `container_build`. The files are the same six that the parity run compares: `roads.sqlite3`,
@@ -237,10 +241,9 @@ The stage volume keeps the run's stores (voter-derived) until `docker compose -f
 Run the chain from `roads`: a later step reads the stores of the earlier ones from the same stage volume, so `--steps shown,scores` alone finds no `street.sqlite3`
 in a container (it is not seeded from `.local`, which is never mounted). A one-step Windows build is still `build_step.py run <step>` with `TERRIER_LOCAL_DIR` set.
 
-**What was not changed.** The `_build\*.ps1` runners are in the ignored `_build\` folder (`.gitignore`: `_build/`): none is tracked in git, and none drives roads to scores
-(`run_remaining.ps1` and `run_fast.ps1` run roads, street, contacts and walk as R2-R5; `run_nowithhold.ps1` runs shown, scores, ingest, extend, bundle, import and density).
-They were not edited and still run today's Windows path, so a run of one of them is a Windows build whatever `TERRIER_COMPUTE` says. `tools/compute_build.py` is the tracked
-production entry. Walk, density and the bundle are not containerised yet (section 7).
+**The runners** are in the ignored `_build\` folder (`.gitignore`: `_build/`): none is tracked in git. Since 2026-10-13 `run_remaining.ps1`, `run_fast.ps1` and `run_nowithhold.ps1` call `tools/compute_build.py` for the
+steps of section 10 (not the bundle) and run their old Windows lines unchanged when `TERRIER_COMPUTE=windows`; the copies from before the change are `run_remaining.ps1.bak-20261013`, `run_fast.ps1.bak-20261013` and
+`run_nowithhold.ps1.bak-20261013` beside them. A run of one of them without the variable is a container build.
 
 ## 9. The FTS5 rule and the full-chain verdict (D-177, 2026-10-13)
 
@@ -278,3 +281,69 @@ has a contentless FTS5 table, `search`; its shadow tables are exactly equal in A
 detected: row removed and one value changed by its smallest step in roads, street, contacts and scores (a REAL cell by one ULP in street and scores), one bit flipped in the shown
 table and its manifest, and one changed indexed name in scores. `street.sqlite3` and `scores.sqlite3` do not equal the recorded `co_baseline` fixture (inputs or tools moved since
 2026-10-09; non-gating, as before); the A1/A2/B comparison stands. Left out as run-to-run variance, named: `street.metadata[created_at_utc]`, `scores.metadata[built_utc, w1.seconds]`.
+
+## 10. Walk, ingest, extend, bundle, density, and the runners (D-188, 2026-10-13)
+
+The five steps of section 9 were joined by five more: `walk` (`tools/build_walk.py`), `ingest` (`tools/ingest.py`), `extend` (`tools/extend_geography.py`), `bundle` (`tools/build_bundle_v4.py`) and `density`
+(`tools/build_density.py`). They run in the geo image and, on Windows, in the work venv (`$PY`), the interpreter the runners give them.
+
+**Which steps run in a container.** Runner lines are those of the `.bak-20261013` copies of the runners, which are the files before this change.
+
+| Step | Runner line | Writes | Reads | Class |
+|---|---|---|---|---|
+| roads, street, contacts | `run_remaining.ps1` 160-162, `run_fast.ps1` 207-209 (R2-R4) | `roads.sqlite3`, `street.sqlite3`, `contacts.sqlite3` (contacts also adds an index to street) in `.local\<district>` | geography, source CSV, street salt | (a), section 9 |
+| walk | `run_remaining.ps1` 163, `run_fast.ps1` 210 (R5); `tools/build_walk.py` 717, 741, 802 | `walk.sqlite3`; makes `.walk-salt` if there is none | roads, street, contacts (and the score store for co-05), CSV, `.walk-salt` | (a) |
+| shown, scores | `run_nowithhold.ps1` 181-182, 209-214 | `area_scores_shown.csv`, `scores.sqlite3` (co-05: `scores.unmask.sqlite3`, a side file) | row framework, street, contacts | (a), section 9 |
+| ingest | `run_nowithhold.ps1` 183, 215; `tools/ingest.py` | the v2 folder and its zip; used to write `ingest_receipt.json` into the (read-only) geography folder | CSV, geography | (a), after a `--receipt` seam |
+| extend | `run_nowithhold.ps1` 183, 216; `tools/extend_geography.py` | the v3 folder and its zip | CSV, the v2 folder, geography, `hierarchy\*.zip` | (a): it downloads only a `hierarchy` zip that is missing (co-05; `tools/prepare_geography.py` 20-22 returns at once for a file that exists) |
+| bundle | `run_nowithhold.ps1` 185, 217-224; `tools/build_bundle_v4.py` 597-610, 673 | `data\<key>.zip` and `.sha256` in the checkout's `data\` (inert until imported), and a receipt | the v3 zip, the shown table, the score store, the row framework, blocks; validates with Django settings and touches no database | (a) by what it does, and **held**: the container build is not byte-identical (below) |
+| density | `run_nowithhold.ps1` 187, 232-236; `tools/build_density.py` 80, 104-106 | `density.json` (co-05: `density.unmask.json`) | `blocks.zip`, the score store | (a) |
+| import | `run_nowithhold.ps1` 186, 226-231, 239-244; `server/research/management/commands/import_summary.py`, `server/research/bundles.py` 225-254 | the snapshot folder and the district's `accounts.sqlite3` rows, in the server's data dir | the bundle zip | (b): stays on the host |
+| prepare_geography (R1) | `run_remaining.ps1` 159, `run_fast.ps1` 206; `tools/prepare_geography.py` 20-31 | Census downloads | the network | (c): stays on the host |
+| R6, R7, pincheck, smoke, gate, capture-pre, stage, stage-import, Luna phase 3 | | start servers on spare ports, run the golden endpoint gate, write the server's data | | (b)/(c)/not containerised: unchanged |
+
+**The parity run** (CO-05, 2026-10-13; images the local builds of e60d68e of section 8; scratch `terrier_parity3\full`; HEAD of this change). The five steps were judged from one set of inputs (below), A1 and A2 on Windows with the work venv,
+B in the geo container with the volume export. Verdicts (`compare_store`/`compare_zip`/`compare_file`; no FTS5 table is among these artifacts, so the FTS5 rule of section 9 did not come into play):
+
+| Artifact | Verdict |
+|---|---|
+| `walk.sqlite3` | PASS: 12 tables, 1,051,323 rows equal in A1, A2 and B; left out as run-to-run variance, named: `meta[built_utc, qa.peak_memory_mb, qa.timing]` |
+| `ingest/<key>.zip` | PASS: 4 of its 5 members byte-identical, `manifest.json` equal except `created_at` (A1 and A2 differ in it too) |
+| `ingest/ingest_receipt.json` | PASS: byte-identical once the receipt is written with LF on Windows too (it was CRLF there: every value was equal, 35 of 35) |
+| `extend/<key>.zip` | PASS: same as ingest |
+| `density.json` | PASS: byte-identical, sha256 `20147ce2...` |
+| `bundle-out/<key>.zip` and its `.sha256` | **FAIL**: B differs from A1 byte for byte; A1 and A2 are byte-identical |
+
+Negative controls (one per step, on a copy of B): a row removed and a REAL cell moved one ULP in the walk store; one bit flipped in the largest member of the ingest and extend zips; one byte in `density.json` and the receipt: all detected. The bundle's control was not
+run once its comparison failed (it would look caught anyway).
+
+**Why the bundle is held.** In the container's bundle only `geometry.json` differs, and in two features of it: one of the 179 tracts and one of the 326 precincts, polygons that `dissolve` (`unary_union`) makes from their blocks. Both are the same polygon
+(`equals` is true, the normalised coordinates are equal, the symmetric difference has area 0); the ring starts at another vertex, so 67 and 126 coordinates sit at another position in the list and `geometry.json` is 3 bytes longer. `rows.json`,
+`adjacency.json`, `area_indices.json`, `manifest.json`, `streets.geojson` and `district.geojson` are byte-identical. GEOS is 3.13.1 on both sides; the likeliest cause is the order a Windows and a Linux build of GEOS take inside the cascaded union (not
+verified). D-177 keeps the bundle zip byte-identical, and a float tolerance would not cover a different start vertex, so this is a FAIL and Paul's to rule on (accept geometric equality for the bundle, or have `build_bundle_v4.py` write a
+canonical ring start, which changes the Windows bytes too). Until then `tools/compute_build.py` leaves `bundle` out of its default chain and refuses it in a container (`Step.held`); `TERRIER_COMPUTE=windows` builds it, and the runners keep running it on Windows.
+
+**How a step that reads earlier stores gets them.** A container sees no `.local` (section 6). A run of some steps reads what the steps before them left; `tools/build_step.py` names that per step (`needs`: `walk` needs roads, street,
+contacts and, for co-05, the score store; `extend` needs the `ingest` folder; `bundle` needs the shown table, the score store and the `extend` folder; for another district also its street salt and its `rowfw` folder). The steps of
+one run find them in the stage. For the rest, `tools/compute_build.py --inputs <data folder>` copies exactly the names the chosen steps need and no step of the run makes: they cross as a tar stream on the stdin of one container
+(`tools/compute_parity.py seed_stage`; `docker cp` into a volume ran at 1 MB/s here, the stream at 5), the folder is only read, and the copies are given to the build user. The Windows fallback copies the same names into `--out`.
+`compute_parity.py --inputs-from <a finished run's folder>` does it for A1, A2 and B, so the later steps are judged from one set of inputs (here the stores of the full-chain run of section 9); `--link-inputs` hard-links them into A1 and A2 (disk) and is
+refused for `contacts`, which changes street.sqlite3 in place. Judging from one set of inputs also keeps two file-level facts out of the comparison: the walk store records the sha256 of `roads.sqlite3` (a SQLite file differs between the Windows and the
+container library) and the bundle records the score store's `built_utc`. `--drop-stage` removes the run's folder from the stage volume once its files are in `--out` (the runners use it; the stores in the stage are voter-derived).
+
+**The salt.** `walk` keys every voter with `.walk-salt`: `compute_build.py` takes `$TERRIER_WALK_SALT` (64 hex digits) or else the district's own `.walk-salt` (in `--inputs`, else its data folder) and stops without one (a new salt would re-key every
+voter); it reaches the container as an environment variable (`compute.compose.yaml`), as the demo key does. A parity run makes one throwaway salt per scratch folder (`walk_salt.hex`).
+
+**What the comparison does for these artifacts** (`tools/compute_parity.py`): the walk store is compared like the other stores, except that its `meta` table is a key/value table with the same field-level mask as `metadata`, and the
+`timing` and `peak_memory_mb` fields of its `qa` document (seconds per phase; a Windows-only call) are always left out and named in the line. A zip whose two Windows builds agree byte for byte (the bundle) must be byte-identical
+in B; a zip they stamp differently (ingest and extend write `created_at` and the time of writing) is compared member by member, the differing JSON fields of a member left out and named, every other byte and field equal. `density.json`, the receipt of ingest
+and the `.sha256` of the bundle are compared byte for byte (no line-ending allowance: `ingest.py` now writes its receipt with LF, as `shown_areas.py` does its manifest).
+
+**The runners** (untracked; the copies from before are `run_remaining.ps1.bak-20261013`, `run_fast.ps1.bak-20261013`, `run_nowithhold.ps1.bak-20261013`). `run_remaining.ps1` and `run_fast.ps1` run roads, street, contacts and walk (R2-R5) through
+`tools\compute_build.py --district d --steps <step> --inputs .local --out _build\compute-out\<id>-<utc> --drop-stage`; `run_nowithhold.ps1` does the same for shown, scores, ingest, extend and density, and leaves bundle, import, pincheck, smoke and
+the Colorado gate as they were. A build writes a new folder and the runner installs its files where the Windows step left them: a file it replaces is moved aside as `<name>.replaced-<utc>`, never deleted (an `ingest` or `extend` folder of an earlier
+run is moved aside whole); the Colorado side files stay side files (`scores.unmask.sqlite3`, `density.unmask.json`, hard-linked into a small inputs folder for the density step). `TERRIER_COMPUTE=windows` runs the old Windows lines, unchanged
+(the dry-run plan of each runner is identical to the original's); anything but `container` or `windows` stops. A runner started by `launch_run_*.ps1` has none of a shell's variables, so `TERRIER_COMPUTE` is read from the process, then
+the user's, then the machine's environment (`setx TERRIER_COMPUTE windows` is the fallback for a detached run). Images: the environment, else the two local builds of section 8. Do not mix the two modes within one district's ingest, extend, bundle
+chain: the container's `ingest` and `extend` leave their folders in `.local\[<district>\]ingest` and `extend`, the Windows ones in `_build\nowithhold`. Only CO-05 has been through the parity run: the OR-05 and CT-01 paths (their street salt, their
+`rowfw` folder, their own stores taken from `.local\<district>`) use the same code but have not been run, and no production build has been run through the changed runners; a sandbox test with stubs for the build and a fake tree ran the container path of every step these runners changed, the Windows path of `run_fast.ps1`, and compared the dry-run plans of all three in Windows mode with the originals' (identical).

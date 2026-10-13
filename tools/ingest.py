@@ -96,7 +96,8 @@ def settle(rows, total):
 def feature(geoid,geom):
     return {'id':geoid,'geometry':mapping(geom),'bbox':list(geom.bounds)}
 
-def ingest(csv_path, geo, output, encoding='cp1252', d=None):
+def ingest(csv_path, geo, output, encoding='cp1252', d=None, receipt_path=None):
+    """`receipt_path`: where the local diagnostics go (default geo/ingest_receipt.json; the build container mounts geo read-only)."""
     d=d or D.current()
     output.mkdir(parents=True,exist_ok=True)
     source_hash=hashlib.file_digest(csv_path.open('rb'),'sha256').hexdigest()
@@ -150,11 +151,11 @@ def ingest(csv_path, geo, output, encoding='cp1252', d=None):
     files={'manifest.json':manifest,'rows.json':all_rows,'geometry.json':geometry,'streets.geojson':json.loads((geo/'streets.geojson').read_text()),'district.geojson':json.loads((geo/'district.geojson').read_text())}
     for name,data in files.items():(output/name).write_text(json.dumps(data,separators=(',',':'),allow_nan=False),encoding='utf-8')
     # Local receipt contains only diagnostics, never identifiers or individual coordinates.
-    (geo/'ingest_receipt.json').write_text(json.dumps({'source_sha256':source_hash,'input':receipt,'bases':local_receipt},indent=2))
+    (Path(receipt_path) if receipt_path else geo/'ingest_receipt.json').write_text(json.dumps({'source_sha256':source_hash,'input':receipt,'bases':local_receipt},indent=2),newline='\n')   # LF on Windows too: the container writes LF
     archive=output.parent/(key+'.zip')
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
         for name in files:z.write(output/name,name)
     print(json.dumps({'snapshot':key,'rows':len(all_rows),'summaries':summaries,'bundle_bytes':archive.stat().st_size,'bundle':str(archive)}),flush=True)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--csv',required=True);p.add_argument('--geography',required=True);p.add_argument('--output',required=True);p.add_argument('--encoding',default='cp1252');a=p.parse_args();ingest(Path(a.csv),Path(a.geography),Path(a.output),a.encoding)
+    p=argparse.ArgumentParser();p.add_argument('--csv',required=True);p.add_argument('--geography',required=True);p.add_argument('--output',required=True);p.add_argument('--encoding',default='cp1252');p.add_argument('--receipt',default=None);a=p.parse_args();ingest(Path(a.csv),Path(a.geography),Path(a.output),a.encoding,receipt_path=a.receipt)

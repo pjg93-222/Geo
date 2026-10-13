@@ -14,6 +14,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -209,9 +210,10 @@ class BuildStepTests(unittest.TestCase):
     # The five steps, in the order Terrier's Windows runner (_build/run_nowithhold.ps1) runs them, each with its toolchain.
 
     def test_the_steps_are_the_windows_runners_in_its_order_with_their_toolchains(self):
-        self.assertEqual(list(S.STEPS), ['roads', 'street', 'contacts', 'shown', 'scores'])
+        self.assertEqual(list(S.STEPS), ['roads', 'street', 'contacts', 'shown', 'scores', 'walk', 'ingest', 'extend', 'bundle', 'density'])
         self.assertEqual({name: spec.image for name, spec in S.STEPS.items()},
-                         {'roads': 'geo', 'street': 'geo', 'contacts': 'geo', 'shown': 'score', 'scores': 'score'})
+                         {'roads': 'geo', 'street': 'geo', 'contacts': 'geo', 'shown': 'score', 'scores': 'score', 'walk': 'geo',
+                          'ingest': 'geo', 'extend': 'geo', 'bundle': 'geo', 'density': 'geo'})
         self.assertEqual((S.STEPS['shown'].script, S.STEPS['shown'].store), ('tools/shown_areas.py', 'area_scores_shown.csv'))
         self.assertEqual((S.STEPS['scores'].script, S.STEPS['scores'].store), ('tools/build_scores_v3.py', 'scores.sqlite3'))
         for spec in S.STEPS.values():
@@ -324,8 +326,34 @@ def make_store(path, rows, stamp='t0', extra_column=False, fts=None):
                     connection.commit()
 
 
+def make_walk_store(path, people, built='t0', qa=None):
+    """A tiny store shaped like walk.sqlite3: a `meta` key/value table (built_utc and the qa document, which carries timings) and a
+    WITHOUT ROWID person table."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executescript('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);'
+                                 'CREATE TABLE person (person_id TEXT PRIMARY KEY, age INTEGER) WITHOUT ROWID;'
+                                 'CREATE TABLE stop (id INTEGER PRIMARY KEY, lon REAL);')
+        connection.executemany('INSERT INTO person VALUES (?, ?)', [('p%d' % i, 20 + i) for i in range(people)])
+        connection.executemany('INSERT INTO stop VALUES (?, ?)', [(i, 0.5 + i) for i in range(1, people + 1)])
+        connection.executemany('INSERT INTO meta VALUES (?, ?)', [('schema', 'walk-v1'), ('built_utc', built), ('n_people', str(people)),
+                                                                   ('qa', json.dumps(qa if qa is not None else {'rows': people}, sort_keys=True))])
+
+
+def make_zip(path, members, stamp=(2026, 10, 1, 0, 0, 0)):
+    """A zip of `members` {name: bytes, or any JSON value}, every member stamped with `stamp` (a zip is as stable as its stamps)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            info = zipfile.ZipInfo(name, date_time=stamp)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, payload if isinstance(payload, bytes) else json.dumps(payload, sort_keys=True).encode('utf-8'))
+
+
 ROWS = [(1, 'Main St'), (2, 'Oak Ave'), (3, '')]
-EXPLICIT = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64        # what a caller names with --image or $TERRIER_BUILD_IMAGE
+EXPLICIT ='ghcr.io/x/terrier-build@sha256:' + 'a' * 64        # what a caller names with --image or $TERRIER_BUILD_IMAGE
 MANIFEST = 'ghcr.io/pjg93-222/terrier-build@sha256:' + 'b' * 64    # what the verified release manifest would name
 SCORE_EXPLICIT = 'ghcr.io/x/terrier-build-score@sha256:' + 'c' * 64        # --score-image or $TERRIER_SCORE_IMAGE
 SCORE_MANIFEST = 'ghcr.io/pjg93-222/terrier-build-score@sha256:' + 'd' * 64
@@ -773,6 +801,9 @@ class RunTests(unittest.TestCase):
         self.images = []            # the {'geo': ref, 'score': ref} of each container build
         self.pythons = []           # the {'geo': path, 'score': path} of each Windows build
         self.keys = []              # the $TERRIER_DEMO_KEY each build (Windows or container) was started with
+        self.seeded = []            # (names, source) of each stage seeding
+        self.salts = []             # the $TERRIER_WALK_SALT each build was started with
+        self.after_container = None  # a function of B's folder, called once the fake container build has written it
 
     @staticmethod
     def write_step(out, step, stamp, rows, fts=None):
@@ -780,6 +811,20 @@ class RunTests(unittest.TestCase):
         if step == 'shown':
             (out / 'area_scores_shown.csv').write_bytes(b'area,score\n1,2\n')
             (out / 'area_scores_shown.manifest.json').write_bytes(SHOWN_MANIFEST.encode())
+        elif step == 'walk':      # the walk store: a meta table that carries the stamps, and the peak memory only Windows can measure
+            make_walk_store(out / 'walk.sqlite3', 5, built=stamp, qa={'rows': 5, 'timing': {'total': stamp},
+                                                                       'peak_memory_mb': None if stamp == 'c' else 1234})
+        elif step == 'ingest':    # ingest and extend stamp created_at in manifest.json: the zips differ between the two Windows builds
+            make_zip(out / 'ingest' / 'k1.zip', {'manifest.json': {'created_at': stamp, 'snapshot': 'k1'}, 'rows.json': [1, 2]})
+            (out / 'ingest' / 'ingest_receipt.json').write_bytes(b'{"rows": 2}')
+        elif step == 'extend':
+            make_zip(out / 'extend' / 'k2.zip', {'manifest.json': {'created_at': stamp, 'snapshot': 'k2'}, 'rows.json': [1, 2, 3]})
+        elif step == 'bundle':    # the bundle's writer stamps every member alike: the same bytes every time
+            make_zip(out / 'bundle-out' / 'k3.zip', {'manifest.json': {'snapshot': 'k3'}, 'rows.json': [1, 2, 3], 'geometry.json': {'a': [1] * 40}})
+            (out / 'bundle-out' / 'k3.zip.sha256').write_bytes(b'abc *k3.zip\n')
+            (out / 'bundle_receipt.json').write_bytes(('{"seconds": "%s"}' % stamp).encode())
+        elif step == 'density':
+            (out / 'density.json').write_bytes(b'{"levels": {"block": [1, 2]}}')
         else:
             make_store(out / S.STEPS[step].store, rows, stamp=stamp, fts=fts if step == 'scores' else None)
 
@@ -788,6 +833,7 @@ class RunTests(unittest.TestCase):
             self.calls.append(('windows', out.name))
             self.pythons.append(pythons)
             self.keys.append(os.environ.get('TERRIER_DEMO_KEY'))
+            self.salts.append(os.environ.get('TERRIER_WALK_SALT'))
             for step in steps:
                 self.write_step(out, step, 'w%d' % len(self.calls), ROWS, fts='rebuilt')
 
@@ -795,16 +841,27 @@ class RunTests(unittest.TestCase):
             self.calls.append(('container', out.name, tuple(names), export_bind))
             self.images.append(images)
             self.keys.append(os.environ.get('TERRIER_DEMO_KEY'))
+            self.salts.append(os.environ.get('TERRIER_WALK_SALT'))
             for step in steps:
                 self.write_step(out, step, 'c', b_rows, fts='rows')       # the scores store's FTS5 index is laid out differently in B
+            if self.after_container:
+                self.after_container(out)
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
                 mock.patch.object(P, 'windows_fingerprint', lambda pythons, repo, images: {i: {'python': 'win'} for i in images}),
-                mock.patch.object(P, 'container_fingerprint', lambda images, repo, out, run_id: {i: {'python': 'box'} for i in images})]
+                mock.patch.object(P, 'container_fingerprint', lambda images, repo, out, run_id: {i: {'python': 'box'} for i in images}),
+                mock.patch.object(P, 'seed_stage', lambda images, repo, out, run_id, district, source, names: self.seeded.append((tuple(names), str(source))))]
 
     def main(self, *args, b_rows=ROWS, scratch=None, image=EXPLICIT, score_image=SCORE_EXPLICIT, environ=None):
         """`image`, `score_image`: the --image / --score-image flags (None: no flag). `environ`: the process environment's
         TERRIER_BUILD_IMAGE / TERRIER_SCORE_IMAGE (both unset by default)."""
+        steps = args[args.index('--steps') + 1].split(',') if '--steps' in args else ['roads']
+        needed = S.inputs_needed(steps, S.D.get('co-05'))
+        if needed and '--inputs-from' not in args:               # steps that read stores no step of the run makes: a folder that holds them
+            (self.root / 'inputs').mkdir(exist_ok=True)
+            for name in needed:
+                (self.root / 'inputs' / name).write_bytes(b'x')
+            args = (*args, '--inputs-from', str(self.root / 'inputs'))
         argv = ['--scratch', str(scratch or self.root / 'scratch'), *(['--image', image] if image else []),
                 *(['--score-image', score_image] if score_image else []), *args]
         out = io.StringIO()
@@ -876,6 +933,73 @@ class RunTests(unittest.TestCase):
         self.assertRegex(text, r'PASS  area_scores_shown\.csv ')                 # the fake writes the same table in A and B ...
         self.assertRegex(text, r'FAIL  scores\.sqlite3 .*table\(s\): .*roads')     # ... and a different row set in B's store
         self.assertIn('PARITY FAIL', text)
+
+    def test_the_later_steps_are_judged_from_one_set_of_inputs_copied_into_a1_a2_and_the_stage(self):
+        code, text = self.main('--steps', 'walk,ingest,extend,bundle,density', '--negative-control')
+        self.assertEqual(code, 0, text)
+        needed = ['roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'scores.sqlite3', 'area_scores_shown.csv']
+        self.assertEqual(self.seeded, [(tuple(needed), str(self.root / 'inputs'))])                    # B's stage ...
+        for label in ('A1', 'A2'):                                                                     # ... and both Windows folders
+            for name in needed:
+                self.assertTrue((self.root / 'scratch' / label / name).is_file(), (label, name))
+        # a `*` name is what A1 made; the receipt (bundle_receipt.json) is exported by compute_build but never compared
+        self.assertEqual(self.calls[2][2], ('walk.sqlite3', 'ingest/k1.zip', 'ingest/ingest_receipt.json', 'extend/k2.zip',
+                                            'bundle-out/k3.zip', 'bundle-out/k3.zip.sha256', 'density.json'))
+        self.assertNotIn('bundle_receipt.json', text)
+        # the walk store: its stamps and its timings vary, the peak memory only Windows measures is always left out, the facts must match
+        self.assertRegex(text, r'PASS  walk\.sqlite3 .*variance \(left out\): meta\[built_utc, qa\.peak_memory_mb, qa\.timing\]')
+        self.assertRegex(text, r'PASS  ingest/k1\.zip +1 members identical, 1 with run-to-run variance \(left out\): manifest\.json\[created_at\]')
+        self.assertRegex(text, r'PASS  extend/k2\.zip +1 members identical, 1 with run-to-run variance')
+        self.assertRegex(text, r'PASS  bundle-out/k3\.zip +byte-identical')
+        self.assertRegex(text, r'PASS  density\.json +byte-identical')
+        for name in ('ingest/k1.zip', 'extend/k2.zip', 'bundle-out/k3.zip'):
+            self.assertRegex(text, r'PASS  negative control %s +one bit of (rows|geometry)\.json changed: detected' % re.escape(name))
+        self.assertRegex(text, r'PASS  negative control walk\.sqlite3 +one row removed from \w+: detected')
+        self.assertRegex(text, r'PASS  negative control walk\.sqlite3 \(value\) +one \w+\.\w+ value changed \(.+\): detected')
+        self.assertRegex(text, r'negative control density\.json +one byte changed at offset \d+: detected')
+        self.assertIn('PARITY PASS', text)
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual((report['inputs'], report['inputs_from']), (needed, str(self.root / 'inputs')))
+        self.assertTrue(re.fullmatch(r'[0-9a-f]{64}', (self.root / 'scratch' / 'walk_salt.hex').read_text(encoding='utf-8')))
+
+    def test_a_file_that_already_differs_in_b_gets_no_negative_control_because_it_would_look_caught_anyway(self):
+        self.after_container = lambda out: (out / 'density.json').write_bytes(b'{"levels": {"block": [1, 3]}}')
+        code, text = self.main('--steps', 'ingest,density', '--negative-control')
+        self.assertEqual(code, 1, text)
+        self.assertRegex(text, r'FAIL  density\.json +B differs from the Windows build byte for byte')
+        self.assertIn('negative control density.json: not run, the comparison itself already fails', text)
+        self.assertNotRegex(text, r'PASS  negative control density\.json')
+        self.assertRegex(text, r'PASS  negative control ingest/k1\.zip +one bit of rows\.json changed: detected')      # the others still get theirs
+
+    def test_one_walk_salt_serves_a1_a2_and_b_like_the_demo_key(self):
+        self.main('--steps', 'walk', '--skip-container')
+        salt = (self.root / 'scratch' / 'walk_salt.hex').read_text(encoding='utf-8')
+        self.assertRegex(salt, r'^[0-9a-f]{64}$')
+        self.assertEqual(self.salts, [salt, salt])
+        self.main('--steps', 'walk', '--reuse-windows')
+        self.assertEqual(self.salts[2:], [salt])                                  # kept in the scratch folder for a later invocation
+        self.salts.clear()
+        self.main('--steps', 'roads', scratch=self.root / 'other')
+        self.assertEqual(self.salts, [None, None, None])
+        self.assertFalse((self.root / 'other' / 'walk_salt.hex').exists())      # only a run with a step that has a salt makes one
+
+    def test_link_inputs_is_refused_where_a_step_writes_what_it_reads_and_without_inputs(self):
+        (self.root / 'inputs').mkdir()
+        for argv in (['--steps', 'contacts', '--inputs-from', str(self.root / 'inputs'), '--link-inputs'],     # contacts changes street.sqlite3 in place
+                     ['--steps', 'roads', '--link-inputs']):                                                      # nothing to link
+            with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(io.StringIO()) as err:
+                P.main(['--scratch', str(self.root / 'scratch'), '--image', EXPLICIT, *argv])
+            self.assertEqual(stop.exception.code, 2)
+            self.assertIn('--link-inputs', err.getvalue())
+        self.assertEqual(self.calls, [])
+
+    def test_steps_that_read_stores_no_step_of_the_run_makes_need_a_folder_to_take_them_from(self):
+        for argv, message in ((['--steps', 'walk'], '--inputs-from'), (['--steps', 'roads', '--inputs-from', '.'], 'read nothing')):
+            with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(io.StringIO()) as err:
+                P.main(['--scratch', str(self.root / 'scratch'), '--image', EXPLICIT, *argv])
+            self.assertEqual(stop.exception.code, 2)
+            self.assertIn(message, err.getvalue())
+        self.assertEqual(self.calls, [])
 
     # One throwaway demo key for A1, A2 and B.
 
@@ -1264,6 +1388,14 @@ class BuildImageFilesTests(unittest.TestCase):
             self.assertIn(needed, text)
         self.assertIn('TERRIER_COMPUTE', read('tools/compute_build.py'))
 
+    def test_the_runbook_documents_the_later_steps_their_inputs_the_held_bundle_and_the_runners(self):
+        text = read('COMPUTE.md')
+        for needed in ('## 10.', '--inputs-from', '--link-inputs', '--drop-stage', 'TERRIER_WALK_SALT', '.walk-salt', 'Step.held', 'D-177', 'import_summary',
+                       '.bak-20261013', 'run_remaining.ps1', 'run_fast.ps1', 'run_nowithhold.ps1', '(b)', '(c)', 'meta[built_utc, qa.peak_memory_mb, qa.timing]'):
+            self.assertIn(needed, text)
+        for step in S.STEPS:
+            self.assertIn('`%s`' % step, text)
+
     def test_the_geo_lock_is_the_laptop_set_and_every_entry_is_hashed(self):
         lock = read('requirements.build.lock')
         self.assertEqual(pins(lock), pins(read('requirements.lock.txt')))
@@ -1330,6 +1462,7 @@ class BuildImageFilesTests(unittest.TestCase):
         self.assertRegex(score, r'(?m)^    volumes: \*build-volumes\n')                       # ... and shared: the score steps mount nothing else
         self.assertNotIn('- type:', score)
         self.assertEqual(text.count('TERRIER_DEMO_KEY: ${TERRIER_DEMO_KEY:-}'), 1)            # in the shared environment, empty by default
+        self.assertEqual(text.count('TERRIER_WALK_SALT: ${TERRIER_WALK_SALT:-}'), 1)          # likewise the walk salt
         self.assertEqual(text.count('TERRIER_SCORE_IMAGE:?'), 1)                              # the same :? rule as TERRIER_BUILD_IMAGE
         self.assertEqual(text.count('TERRIER_BUILD_IMAGE:?'), 1)
         self.assertNotIn('cu-geography-v3', score)
@@ -1387,31 +1520,36 @@ class ComputeBuildTests(unittest.TestCase):
     """tools/compute_build.py: the store build runs in the containers unless TERRIER_COMPUTE=windows. Both builds are replaced by fakes
     that write the stores, so nothing starts: no Docker, no Windows tool."""
 
-    CHAIN = ['roads', 'street', 'contacts', 'shown', 'scores']
+    CHAIN = ['roads', 'street', 'contacts', 'shown', 'scores', 'walk', 'ingest', 'extend', 'density']          # bundle is held
     KEY = '0123456789abcdef' * 4
+    SALT = 'fedcba9876543210' * 4
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.calls, self.manifest = [], []
+        self.calls, self.manifest, self.seeded, self.salts, self.dropped = [], [], [], [], []
 
     @staticmethod
     def write(steps, folder):
         for step in steps:
-            for name in (S.STEPS[step].store, *S.STEPS[step].also):
-                (folder / name).write_bytes(b'x')
+            for name in (S.STEPS[step].store, *S.STEPS[step].also, *S.STEPS[step].keep):
+                path = folder / name.replace('*', 'x')              # a `*` name stands for one file here
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'x')
 
     def run_main(self, *args, environ=None, key_file=None, out='out', write=True):
         """-> (exit code, stdout). The environment holds both image variables and only what `environ` adds. `key_file`: the folder that
         stands for the district's data folder (where its .demo-key would be)."""
         def container(images, repo, district, steps, folder, run_id, names, export_bind=False):
             self.calls.append(('container', images, district, list(steps), run_id, tuple(names), export_bind, os.environ.get('TERRIER_DEMO_KEY')))
+            self.salts.append(os.environ.get('TERRIER_WALK_SALT'))
             if write:
                 self.write(steps, folder)
 
         def windows(pythons, repo, district, steps, folder):
             self.calls.append(('windows', pythons, district, list(steps), os.environ.get('TERRIER_DEMO_KEY')))
+            self.salts.append(os.environ.get('TERRIER_WALK_SALT'))
             if write:
                 self.write(steps, folder)
 
@@ -1419,12 +1557,15 @@ class ComputeBuildTests(unittest.TestCase):
             self.manifest.append(name)
             return 'ghcr.io/pjg93-222/%s@sha256:%s' % (name, 'e' * 64)
 
-        env = {'TERRIER_BUILD_IMAGE': EXPLICIT, 'TERRIER_SCORE_IMAGE': SCORE_EXPLICIT, **(environ or {})}
+        env = {'TERRIER_BUILD_IMAGE': EXPLICIT, 'TERRIER_SCORE_IMAGE': SCORE_EXPLICIT, 'TERRIER_WALK_SALT': self.SALT, **(environ or {})}
         text = io.StringIO()
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, env, clear=True))
             for target, fake in (('container_build', container), ('windows_build', windows), ('manifest_image', asked),
-                                 ('container_fingerprint', lambda *a: {'where': 'box'}), ('windows_fingerprint', lambda *a: {'where': 'win'})):
+                                 ('container_fingerprint', lambda *a: {'where': 'box'}), ('windows_fingerprint', lambda *a: {'where': 'win'}),
+                                 ('seed_stage', lambda *a: self.seeded.append(('stage', a[5], tuple(a[6])))),
+                                 ('copy_inputs', lambda *a: self.seeded.append(('copy', a[3], tuple(a[2])))),
+                                 ('drop_stage', lambda *a: self.dropped.append(a[1]))):
                 stack.enter_context(mock.patch.object(P, target, fake))
             if key_file is not None:
                 real = CB.D.data_dir
@@ -1439,13 +1580,16 @@ class ComputeBuildTests(unittest.TestCase):
         (mode, images, district, steps, run_id, names, bind, key), = self.calls
         self.assertEqual((mode, images, district, steps, bind), ('container', {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}, 'co-05', self.CHAIN, False))
         self.assertEqual(names, ('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'area_scores_shown.csv',
-                                 'area_scores_shown.manifest.json', 'scores.sqlite3'))
+                                 'area_scores_shown.manifest.json', 'scores.sqlite3', 'walk.sqlite3', 'ingest/*.zip',
+                                 'ingest/ingest_receipt.json', 'ingest/v2/*', 'extend/*.zip', 'density.json'))
         self.assertRegex(run_id, r'^P-\d{8}T\d{6}Z$')
-        self.assertIn('BUILD OK (container): 6 file(s)', text)
+        self.assertIn('BUILD OK (container): 12 file(s)', text)
         receipt = json.loads((self.root / 'out' / 'compute_build_receipt.json').read_text(encoding='utf-8'))
         self.assertEqual((receipt['mode'], receipt['image_sources'], receipt['fingerprint']),
                          ('container', {'geo': 'explicit', 'score': 'explicit'}, {'where': 'box'}))
         self.assertNotIn(self.KEY, json.dumps(receipt) + text)                  # the key goes to the build, never into a log or receipt
+        self.assertNotIn(self.SALT, json.dumps(receipt) + text)                 # nor the walk salt
+        self.assertIn('ingest/x.zip', receipt['files'])                          # the receipt names the files the `*` names stood for
 
     def test_terrier_compute_windows_is_the_one_switch_back_and_asks_for_no_image(self):
         for number, value in enumerate(('windows', ' Windows '), 1):
@@ -1471,7 +1615,7 @@ class ComputeBuildTests(unittest.TestCase):
     def test_the_images_are_the_variables_then_the_verified_manifest_and_only_what_the_steps_need(self):
         self.assertEqual(self.run_main('--steps', 'roads', environ={'TERRIER_SCORE_IMAGE': ''}, out='geo')[0], 0)
         self.assertEqual((self.calls[-1][1], self.manifest), ({'geo': EXPLICIT}, []))
-        self.assertEqual(self.run_main('--steps', 'shown,scores', environ={'TERRIER_SCORE_IMAGE': '', 'TERRIER_DEMO_KEY': self.KEY}, out='score')[0], 0)
+        self.assertEqual(self.run_main('--steps', 'shown', environ={'TERRIER_SCORE_IMAGE': ''}, out='score')[0], 0)
         self.assertEqual((self.calls[-1][1], self.manifest),
                          ({'score': 'ghcr.io/pjg93-222/terrier-build-score@sha256:' + 'e' * 64}, ['terrier-build-score']))
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:        # a tag is never an image
@@ -1484,7 +1628,8 @@ class ComputeBuildTests(unittest.TestCase):
         plan = json.loads(text)
         self.assertEqual((plan['mode'], plan['steps'], plan['images']), ('container', self.CHAIN, {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}))
         self.assertEqual(plan['where'], {'roads': 'terrier-build', 'street': 'terrier-build', 'contacts': 'terrier-build',
-                                         'shown': 'terrier-score', 'scores': 'terrier-score'})
+                                         'shown': 'terrier-score', 'scores': 'terrier-score', 'walk': 'terrier-build',
+                                         'ingest': 'terrier-build', 'extend': 'terrier-build', 'density': 'terrier-build'})
         self.assertFalse((self.root / 'out').exists())
         plan = json.loads(self.run_main('--plan', environ={'TERRIER_COMPUTE': 'windows'})[1])
         self.assertEqual((plan['mode'], plan['images'], plan['where']['shown']), ('windows', {}, str(CB.H.PY312)))
@@ -1521,6 +1666,450 @@ class ComputeBuildTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse((self.root / 'out' / 'compute_build_receipt.json').exists())
         self.assertNotIn('BUILD OK', text)
+
+    # steps that read the stores of earlier steps: --inputs
+
+    NEEDED_BY_WALK = ('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'scores.sqlite3')
+
+    def district_folder(self, salt=True):
+        folder = self.root / 'district'
+        folder.mkdir(exist_ok=True)
+        for name in self.NEEDED_BY_WALK:
+            (folder / name).write_bytes(b'x')
+        if salt:
+            (folder / '.walk-salt').write_text(self.SALT, encoding='ascii')
+        return folder
+
+    def test_steps_that_read_earlier_stores_take_them_from_inputs_in_the_stage_or_the_out_folder_and_the_salt_comes_from_there(self):
+        folder = self.district_folder()
+        code, text = self.run_main('--steps', 'walk', '--inputs', str(folder), environ={'TERRIER_WALK_SALT': ''}, key_file=folder)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.seeded, [('stage', folder, self.NEEDED_BY_WALK)])
+        self.assertEqual((self.calls[-1][3], self.salts[-1]), (['walk'], self.SALT))
+        self.assertNotIn(self.SALT, text)
+        receipt = json.loads((self.root / 'out' / 'compute_build_receipt.json').read_text(encoding='utf-8'))
+        self.assertEqual(receipt['inputs'], {'from': str(folder), 'names': list(self.NEEDED_BY_WALK)})
+        self.assertIn('walk.sqlite3', receipt['files'])
+        self.seeded.clear()
+        code, text = self.run_main('--steps', 'walk', '--inputs', str(folder), environ={'TERRIER_COMPUTE': 'windows'}, key_file=folder, out='win')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.seeded, [('copy', folder, self.NEEDED_BY_WALK)])                  # the Windows fallback starts from the same inputs
+        self.assertEqual(json.loads(self.run_main('--steps', 'walk', '--inputs', str(folder), '--plan', out='planned')[1])['inputs'], list(self.NEEDED_BY_WALK))
+
+    def test_a_held_step_is_left_out_of_the_default_chain_and_refused_in_a_container_but_builds_on_windows(self):
+        self.assertEqual([name for name, spec in S.STEPS.items() if spec.held], ['bundle'])
+        self.assertIn('D-177', S.STEPS['bundle'].held)
+        folder = self.root / 'district'
+        (folder / 'extend').mkdir(parents=True)
+        for name in ('area_scores_shown.csv', 'scores.sqlite3', 'extend/k.zip'):
+            (folder / name).write_bytes(b'x')
+        plan = json.loads(self.run_main('--plan', key_file=self.root / 'x', environ={'TERRIER_DEMO_KEY': self.KEY})[1])
+        self.assertNotIn('bundle', plan['steps'])
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
+            self.run_main('--steps', 'bundle', '--inputs', str(folder))
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('held', err.getvalue())
+        self.assertEqual(self.calls, [])
+        code, text = self.run_main('--steps', 'bundle', '--inputs', str(folder), environ={'TERRIER_COMPUTE': 'windows'}, out='win')
+        self.assertEqual((code, self.calls[-1][0], self.calls[-1][3]), (0, 'windows', ['bundle']))          # the Windows build is the accepted one
+
+    def test_drop_stage_removes_the_folder_of_the_run_from_the_stage_volume_after_a_container_build_only(self):
+        self.assertEqual(self.run_main(environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x')[0], 0)
+        self.assertEqual(self.dropped, [])                                                    # off unless asked for: the stage keeps the run
+        self.assertEqual(self.run_main('--drop-stage', environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='dropped')[0], 0)
+        self.assertEqual(len(self.dropped), 1)
+        self.assertRegex(self.dropped[0], r'^P-\d{8}T\d{6}Z$')
+        self.assertEqual(self.dropped[0], self.calls[-1][4])                                   # the run id the build used
+        code, text = self.run_main('--drop-stage', environ={'TERRIER_COMPUTE': 'windows', 'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='win')
+        self.assertEqual((code, len(self.dropped)), (0, 1))                                    # a Windows build has no stage
+        code, text = self.run_main('--drop-stage', environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='failed', write=False)
+        self.assertEqual((code, len(self.dropped)), (1, 1))                                    # a build that failed keeps its stage to look at
+
+    def test_a_given_salt_wins_and_a_run_with_no_salt_stops_before_anything_is_seeded(self):
+        folder = self.district_folder(salt=False)
+        with self.assertRaises(SystemExit) as stop:
+            self.run_main('--steps', 'walk', '--inputs', str(folder), environ={'TERRIER_WALK_SALT': ''}, key_file=folder)
+        self.assertIn('walk needs the district', str(stop.exception))
+        self.assertEqual((self.calls, self.seeded), ([], []))
+        self.assertEqual(self.run_main('--steps', 'walk', '--inputs', str(folder), environ={'TERRIER_WALK_SALT': 'ab' * 32}, key_file=folder)[0], 0)
+        self.assertEqual(self.salts[-1], 'ab' * 32)
+        self.assertEqual(self.run_main('--steps', 'roads', environ={'TERRIER_WALK_SALT': ''}, key_file=self.root / 'none', out='geo')[0], 0)
+        self.assertFalse(self.salts[-1])                                                         # no walk step: no salt needed, none set
+
+    def test_steps_that_read_stores_no_step_of_the_run_makes_stop_without_inputs_or_with_inputs_that_lack_them(self):
+        folder = self.district_folder()
+        (folder / 'street.sqlite3').unlink()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            for argv, message in ((['--steps', 'walk'], '--inputs'), (['--steps', 'walk', '--inputs', str(folder)], 'has no street.sqlite3'),
+                                  (['--steps', 'extend', '--inputs', str(folder)], 'has no ingest')):
+                with self.assertRaises(SystemExit) as stop:
+                    self.run_main(*argv, environ={'TERRIER_WALK_SALT': self.SALT})
+                self.assertEqual(stop.exception.code, 2, argv)
+                self.assertIn(message, err.getvalue())
+        self.assertEqual((self.calls, self.seeded), ([], []))
+
+
+# ---- the steps after the first five: walk, ingest, extend, bundle, density -------------------------------------------------
+
+class NewStepTests(unittest.TestCase):
+    """tools/build_step.py for the steps added to the chain: their command lines are the runners' (_build/run_remaining.ps1 R5 and
+    _build/run_nowithhold.ps1), the files they leave are named, and what a run of some steps must be given is known."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.data = self.root / 'out'
+        self.co = S.D.get('co-05')
+
+    def run_recorded(self, step, environ=None, prepare=()):
+        """S.run(step) with the tool replaced by a recorder that writes the step's files; (exit code, command, the env the tool got or None)."""
+        shutil.rmtree(self.data, ignore_errors=True)
+        for name, text in prepare:
+            (self.data / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.data / name).write_text(text, encoding='utf-8')
+        seen = []
+
+        def fake_call(command, **kwargs):
+            seen.append((command, kwargs.get('env')))
+            for name in (S.STEPS[step].store, *S.STEPS[step].also):
+                (self.data / name.replace('*', 'x')).parent.mkdir(parents=True, exist_ok=True)
+                (self.data / name.replace('*', 'x')).write_text('x', encoding='utf-8')
+            return 0
+
+        with mock.patch.dict(os.environ, {'TERRIER_LOCAL_DIR': str(self.data), **(environ or {})}), \
+                mock.patch.object(S.D, 'data_dir', return_value=self.data), mock.patch.object(S.subprocess, 'call', fake_call), \
+                mock.patch.object(S, 'GlassBox'), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = S.run(step, 'co-05')
+        return code, seen[0][0], seen[0][1]
+
+    def test_the_new_steps_run_the_runners_scripts_in_the_geo_toolchain(self):
+        for step, script, store in (('walk', 'tools/build_walk.py', 'walk.sqlite3'), ('ingest', 'tools/ingest.py', 'ingest/*.zip'),
+                                    ('extend', 'tools/extend_geography.py', 'extend/*.zip'), ('bundle', 'tools/build_bundle_v4.py', 'bundle-out/*.zip'),
+                                    ('density', 'tools/build_density.py', 'density.json')):
+            self.assertEqual((S.STEPS[step].script, S.STEPS[step].store, S.STEPS[step].image), (script, store, 'geo'), step)
+            self.assertTrue((REPO / script).is_file(), script)
+        self.assertEqual(S.STEPS['bundle'].also, ('bundle-out/*.zip.sha256',))
+        self.assertEqual(S.STEPS['bundle'].keep, ('bundle_receipt.json',))                  # the receipt leaves with the zip, but is never compared
+        self.assertEqual(S.STEPS['ingest'].keep, ('ingest/v2/*',))                          # the folder extend reads leaves with the zip it was made into
+        self.assertEqual(S.STEPS['contacts'].also, ('street.sqlite3',))                      # build_contacts adds an index to the street store
+        self.assertEqual([name for name, spec in S.STEPS.items() if spec.walk_salt], ['walk'])
+
+    def test_walk_and_density_run_their_tools_plain_and_walk_seeds_its_salt_only_when_given(self):
+        salt = 'ab' * 32
+        code, command, env = self.run_recorded('walk', environ={'TERRIER_WALK_SALT': salt})
+        self.assertEqual((code, command, env), (0, [sys.executable, str(REPO / 'tools' / 'build_walk.py'), '--district', 'co-05'], None))
+        self.assertEqual((self.data / '.walk-salt').read_bytes(), salt.encode('ascii'))
+        self.assertFalse((self.root / 'out' / '.demo-key').exists())
+        self.run_recorded('walk')
+        self.assertFalse((self.data / '.walk-salt').exists())                              # no variable: the tool makes its own
+        code, command, env = self.run_recorded('density')
+        self.assertEqual(command, [sys.executable, str(REPO / 'tools' / 'build_density.py'), '--district', 'co-05'])
+
+    def test_seed_walk_salt_writes_the_text_once_and_never_replaces_a_salt(self):
+        S.seed_walk_salt(self.root, 'AB' * 32)
+        self.assertEqual((self.root / '.walk-salt').read_bytes(), b'AB' * 32)
+        S.seed_walk_salt(self.root, 'cd' * 32)
+        self.assertEqual((self.root / '.walk-salt').read_bytes(), b'AB' * 32)
+        for bad in ('ab' * 31, 'ab' * 33, '', 'zz' * 32):
+            with self.assertRaises(SystemExit):
+                S.seed_walk_salt(self.root / 'elsewhere', bad)
+        self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_ingest_extend_and_bundle_get_the_runners_arguments_and_the_environment_their_tools_read(self):
+        csv, geography = self.co['source_csv'], self.co['geography']
+        code, command, env = self.run_recorded('ingest')
+        self.assertEqual(command, [sys.executable, str(REPO / 'tools' / 'ingest.py'), '--csv', str(csv), '--geography', str(geography),
+                                   '--output', '%s/ingest/v2' % self.data, '--receipt', '%s/ingest/ingest_receipt.json' % self.data])
+        self.assertEqual(env['CU_DISTRICT'], 'co-05')
+        code, command, env = self.run_recorded('extend')
+        self.assertEqual(command[2:], ['--csv', str(csv), '--base', '%s/ingest/v2' % self.data, '--geography', str(geography),
+                                       '--output', '%s/extend/v3' % self.data])
+        self.assertEqual((env['CU_DISTRICT'], env['PYTHONPATH']), ('co-05', str(REPO)))      # extend_geography.py imports `tools` from the repo
+        code, command, env = self.run_recorded('bundle', prepare=[('extend/co-cd005-0123456789ab.zip', 'zip')])
+        self.assertEqual(command[2:], ['--base', str(self.data / 'extend' / 'co-cd005-0123456789ab.zip'), '--out-dir', '%s/bundle-out' % self.data,
+                                       '--receipt', '%s/bundle_receipt.json' % self.data])
+        # the app's validator imports Django settings: a scratch data folder and a throwaway key, never a real .local or .secret
+        self.assertEqual((env['CU_DISTRICT'], env['CU_DATA_DIR'], env['CU_SECRET_KEY']),
+                         ('co-05', '%s/.cu-validate' % self.data, 'terrier-build-validate-only'))
+        with self.assertRaises(SystemExit) as stop:
+            self.run_recorded('bundle')                                                    # no extend output to build on
+        self.assertIn('extend', str(stop.exception))
+        with self.assertRaises(SystemExit) as stop:
+            self.run_recorded('bundle', prepare=[('extend/a.zip', 'z'), ('extend/b.zip', 'z')])      # two zips: which is the base?
+        self.assertIn('expected one', str(stop.exception))
+
+    def test_a_name_with_a_star_stands_for_its_files_and_a_store_must_match_exactly_one(self):
+        for name in ('a/1.zip', 'a/2.zip', 'a/1.zip.sha256', 'b.txt'):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_text('x', encoding='utf-8')
+        self.assertEqual(S.expand(self.root, 'a/*.zip'), ['a/1.zip', 'a/2.zip'])
+        self.assertEqual((S.expand(self.root, 'b.txt'), S.expand(self.root, 'c/*.zip')), (['b.txt'], []))
+        self.assertTrue(S.written(self.root, 'a/*.zip'))
+        self.assertFalse(S.written(self.root, 'a/*.zip', exactly_one=True))                 # two bundles: which one is the store?
+        self.assertTrue(S.written(self.root, 'a/*.zip.sha256', exactly_one=True))
+        self.assertFalse(S.written(self.root, 'c/*.zip'))
+        (self.root / 'a' / '2.zip').write_text('', encoding='utf-8')
+        self.assertFalse(S.written(self.root, 'a/*.zip'))                                  # an empty file is not a store
+
+    def test_a_star_store_that_matches_two_files_is_not_completion(self):
+        def fake_call(command, **kwargs):
+            for name in ('ingest/k1.zip', 'ingest/k2.zip', 'ingest/ingest_receipt.json'):
+                (self.data / name).parent.mkdir(parents=True, exist_ok=True)
+                (self.data / name).write_text('x', encoding='utf-8')
+            return 0
+
+        with mock.patch.dict(os.environ, {'TERRIER_LOCAL_DIR': str(self.data)}), mock.patch.object(S.D, 'data_dir', return_value=self.data), \
+                mock.patch.object(S.subprocess, 'call', fake_call), mock.patch.object(S, 'GlassBox'), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(S.run('ingest', 'co-05'), 1)
+
+    def test_export_copies_every_file_a_star_name_matches_and_nothing_outside_the_stage(self):
+        stage, out = self.root / 'stage', self.root / 'exported'
+        for name in ('ingest/k1.zip', 'ingest/k1.json', 'density.json'):
+            (stage / name).parent.mkdir(parents=True, exist_ok=True)
+            (stage / name).write_text('x', encoding='utf-8')
+        with mock.patch.dict(os.environ, {'TERRIER_LOCAL_DIR': str(stage)}), contextlib.redirect_stdout(io.StringIO()):
+            S.export(out, ['ingest/*.zip', 'density.json'])
+            self.assertEqual(sorted(json.loads((out / 'export_receipt.json').read_text(encoding='utf-8'))), ['density.json', 'ingest/k1.zip'])
+            with self.assertRaises(SystemExit) as stop:
+                S.export(out, ['bundle-out/*.zip'])                                       # a pattern that matches nothing is a missing file
+            self.assertIn('nothing', str(stop.exception))
+            for bad in ('../x/*.zip', '..'):
+                with self.assertRaises(SystemExit):
+                    S.export(out, [bad])
+
+    def test_what_a_run_must_be_given_is_what_its_steps_read_and_none_of_them_makes(self):
+        orr = S.D.get('or-05')
+        self.assertEqual(S.step_needs(S.STEPS['walk'], self.co), ['roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'scores.sqlite3'])
+        self.assertEqual(S.step_needs(S.STEPS['walk'], orr), ['roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3'])    # people come from the CSV
+        self.assertEqual((S.step_needs(S.STEPS['street'], self.co), S.step_needs(S.STEPS['street'], orr)), ([], ['.street-salt']))
+        self.assertEqual((S.step_needs(S.STEPS['shown'], self.co), S.step_needs(S.STEPS['shown'], orr)), ([], ['rowfw']))
+        self.assertEqual(S.inputs_needed(list(S.STEPS), self.co), [])                         # the whole chain needs nothing from outside
+        self.assertEqual(S.inputs_needed(['roads', 'street', 'contacts', 'shown', 'scores'], self.co), [])
+        self.assertEqual(S.inputs_needed(['contacts'], self.co), ['street.sqlite3'])
+        self.assertEqual(S.inputs_needed(['walk', 'density'], self.co), ['roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'scores.sqlite3'])
+        self.assertEqual(S.inputs_needed(['bundle'], self.co), ['area_scores_shown.csv', 'scores.sqlite3', 'extend'])
+        self.assertEqual(S.inputs_needed(['ingest', 'extend', 'bundle'], self.co), ['area_scores_shown.csv', 'scores.sqlite3'])
+        self.assertEqual(S.inputs_needed(['street', 'contacts'], orr), ['.street-salt'])
+        self.assertEqual(S.inputs_needed(['shown', 'scores'], orr), ['rowfw', 'street.sqlite3', 'contacts.sqlite3'])
+
+
+class ZipAndWalkCompareTests(unittest.TestCase):
+    """compute_parity: a zip (byte for byte, else member by member with the variance left out), the walk store's `meta` table, the names
+    a run lists, and the way inputs reach A1, A2 and the stage."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def zips(self, a1, a2, b, name='x.zip', stamps=((2026, 10, 1, 0, 0, 0), (2026, 10, 2, 0, 0, 0), (2026, 10, 3, 0, 0, 0))):
+        for label, members, stamp in zip(('A1', 'A2', 'B'), (a1, a2, b), stamps):
+            make_zip(self.root / label / name, members, stamp=stamp)
+        return [self.root / label for label in ('A1', 'A2', 'B')]
+
+    def test_zips_that_agree_byte_for_byte_pass_and_a_difference_in_b_fails(self):
+        same = {'manifest.json': {'snapshot': 's'}, 'rows.json': [1, 2]}
+        folders = self.zips(same, same, same, stamps=((2026, 10, 1, 0, 0, 0),) * 3)
+        ok, detail = P.compare('x.zip', *folders)
+        self.assertTrue(ok, detail)
+        self.assertIn('byte-identical', detail)
+        make_zip(folders[2] / 'x.zip', {**same, 'rows.json': [1, 3]})
+        ok, detail = P.compare('x.zip', *folders)
+        self.assertFalse(ok)
+        self.assertIn('byte for byte', detail)
+
+    def test_zips_stamped_by_their_writer_pass_when_only_the_stamped_fields_differ(self):
+        rows = {'rows.json': [1, 2], 'geometry.json': {'a': [1] * 30}}
+        folders = self.zips({**rows, 'manifest.json': {'created_at': 't1', 'snapshot': 's'}},
+                            {**rows, 'manifest.json': {'created_at': 't2', 'snapshot': 's'}},
+                            {**rows, 'manifest.json': {'created_at': 't3', 'snapshot': 's'}})
+        ok, detail = P.compare('x.zip', *folders)
+        self.assertTrue(ok, detail)
+        self.assertEqual(detail, '2 members identical, 1 with run-to-run variance (left out): manifest.json[created_at]')
+        # a fact of the manifest that differs in B, a member that differs in B, and a member B lacks all fail
+        make_zip(folders[2] / 'x.zip', {**rows, 'manifest.json': {'created_at': 't3', 'snapshot': 'other'}}, stamp=(2026, 10, 3, 0, 0, 0))
+        self.assertEqual(P.compare('x.zip', *folders), (False, 'B differs from the Windows build in member(s): manifest.json'))
+        make_zip(folders[2] / 'x.zip', {**rows, 'rows.json': [1, 9], 'manifest.json': {'created_at': 't3', 'snapshot': 's'}}, stamp=(2026, 10, 3, 0, 0, 0))
+        self.assertEqual(P.compare('x.zip', *folders), (False, 'B differs from the Windows build in member(s): rows.json'))
+        make_zip(folders[2] / 'x.zip', {'rows.json': [1, 2], 'manifest.json': {'created_at': 't3', 'snapshot': 's'}}, stamp=(2026, 10, 3, 0, 0, 0))
+        self.assertIn('names of its members', P.compare('x.zip', *folders)[1])
+
+    def test_a_member_that_differs_between_the_windows_builds_and_is_not_a_json_object_makes_the_reference_unstable(self):
+        folders = self.zips({'rows.json': [1, 2]}, {'rows.json': [1, 3]}, {'rows.json': [1, 2]})
+        ok, detail = P.compare('x.zip', *folders)
+        self.assertFalse(ok)
+        self.assertIn('reference is not stable', detail)
+        self.assertIn('rows.json', detail)
+
+    def test_change_one_member_flips_one_bit_of_the_largest_member_but_never_the_manifest_and_the_comparison_sees_it(self):
+        members = {'manifest.json': {'created_at': 't', 'snapshot': 's'}, 'rows.json': [1, 2], 'geometry.json': {'a': [1] * 200}}
+        folders = self.zips(members, members, members)
+        control = self.root / 'NC'
+        control.mkdir()
+        shutil.copyfile(folders[2] / 'x.zip', control / 'x.zip')
+        before = zipfile.ZipFile(control / 'x.zip')
+        original = {name: before.read(name) for name in before.namelist()}
+        before.close()
+        member = P.change_one_member(control / 'x.zip')
+        self.assertEqual(member, 'geometry.json')
+        with zipfile.ZipFile(control / 'x.zip') as after:
+            self.assertEqual(after.namelist(), list(original))
+            changed = [name for name in original if after.read(name) != original[name]]
+            self.assertEqual(changed, ['geometry.json'])
+            self.assertEqual(sum(bin(a ^ b).count('1') for a, b in zip(after.read('geometry.json'), original['geometry.json'])), 1)
+        ok, detail = P.compare_zip('x.zip', folders[0], folders[1], control)
+        self.assertFalse(ok)
+        self.assertIn('geometry.json', detail)
+
+    # the walk store: meta carries built_utc and the qa document with its timings and the Windows-only peak memory
+
+    def walk_folders(self, b_people=5, b_qa=None):
+        qa = lambda stamp, peak: {'rows': 5, 'timing': {'total': stamp}, 'peak_memory_mb': peak}      # noqa: E731
+        for label in ('A1', 'A2', 'B'):
+            (self.root / label / 'walk.sqlite3').unlink(missing_ok=True)
+        make_walk_store(self.root / 'A1' / 'walk.sqlite3', 5, built='t1', qa=qa('s1', 1234))
+        make_walk_store(self.root / 'A2' / 'walk.sqlite3', 5, built='t2', qa=qa('s2', 1234))          # the same peak twice by chance
+        make_walk_store(self.root / 'B' / 'walk.sqlite3', b_people, built='t3', qa=b_qa if b_qa is not None else qa('s3', None))
+        return [self.root / label for label in ('A1', 'A2', 'B')]
+
+    def test_the_walk_meta_table_leaves_out_stamps_timings_and_the_peak_memory_and_nothing_beside_them(self):
+        ok, detail = P.compare('walk.sqlite3', *self.walk_folders())
+        self.assertTrue(ok, detail)
+        self.assertIn('variance (left out): meta[built_utc, qa.peak_memory_mb, qa.timing]', detail)
+        ok, detail = P.compare('walk.sqlite3', *self.walk_folders(b_people=6))              # a fact beside the stamps differs in B
+        self.assertFalse(ok)
+        self.assertIn('table(s): ', detail)
+        self.assertEqual(P.differing_tables(detail), ['person', 'stop'])
+        ok, detail = P.compare('walk.sqlite3', *self.walk_folders(b_qa={'rows': 4, 'timing': {'total': 's3'}, 'peak_memory_mb': None}))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+
+    def test_the_negative_controls_of_the_walk_store_skip_its_stamp_table_and_are_caught(self):
+        folders = self.walk_folders()
+        target = self.root / 'NC' / 'walk.sqlite3'
+        target.parent.mkdir()
+        shutil.copyfile(folders[2] / 'walk.sqlite3', target)
+        skip = P.noise_tables('walk.sqlite3', folders[0], folders[1])
+        self.assertEqual(skip, {'meta'})
+        table = P.remove_one_row(target, skip)
+        self.assertEqual(table, 'stop')                                                    # person is WITHOUT ROWID
+        ok, detail = P.compare_store('walk.sqlite3', folders[0], folders[1], target.parent)
+        self.assertTrue(P.control_detected(ok, detail, table))
+
+    # names, inputs
+
+    def test_store_names_lists_each_file_once_and_keep_adds_the_receipts(self):
+        co, orr = S.D.get('co-05'), S.D.get('or-05')
+        self.assertEqual(P.store_names(co, ['street', 'contacts']), ['street.sqlite3', 'contacts.sqlite3'])      # contacts changes street: one name
+        self.assertEqual(P.store_names(co, ['bundle']), ['bundle-out/*.zip', 'bundle-out/*.zip.sha256'])
+        self.assertEqual(P.store_names(co, ['bundle'], keep=True), ['bundle-out/*.zip', 'bundle-out/*.zip.sha256', 'bundle_receipt.json'])
+        self.assertEqual(P.store_names(orr, ['walk'], extra=['x.csv']), ['or-05/walk.sqlite3', 'or-05/x.csv'])
+
+    def test_expand_names_takes_a_star_name_from_the_folder_and_a_name_that_matches_nothing_is_an_error(self):
+        make_zip(self.root / 'ingest' / 'k1.zip', {'a': 1})
+        (self.root / 'density.json').write_text('{}', encoding='utf-8')
+        self.assertEqual(P.expand_names(self.root, ['ingest/*.zip', 'density.json', 'ingest/*.zip']), ['ingest/k1.zip', 'density.json'])
+        with self.assertRaises(SystemExit):
+            P.expand_names(self.root, ['bundle-out/*.zip'])
+
+    def test_copy_inputs_copies_files_and_folders_of_the_data_folder_and_stops_on_a_missing_one(self):
+        source, target = self.root / 'source', self.root / 'target'
+        (source / 'extend').mkdir(parents=True)
+        (source / 'extend' / 'k.zip').write_bytes(b'zip')
+        (source / 'scores.sqlite3').write_bytes(b'store')
+        P.copy_inputs(target, S.D.get('co-05'), ['scores.sqlite3', 'extend'], source)
+        self.assertEqual(((target / 'scores.sqlite3').read_bytes(), (target / 'extend' / 'k.zip').read_bytes()), (b'store', b'zip'))
+        with self.assertRaises(SystemExit):
+            P.copy_inputs(target, S.D.get('co-05'), ['street.sqlite3'], source)
+        (source / 'or-05').mkdir()
+        (source / 'or-05' / 'roads.sqlite3').write_bytes(b'r')
+        P.copy_inputs(self.root / 'target2', S.D.get('or-05'), ['roads.sqlite3'], source)          # another district: its folder below the run's
+        self.assertEqual((self.root / 'target2' / 'or-05' / 'roads.sqlite3').read_bytes(), b'r')
+
+    def test_link_inputs_hard_links_files_where_the_disk_allows_it_and_copies_otherwise(self):
+        source = self.root / 'source'
+        source.mkdir()
+        (source / 'scores.sqlite3').write_bytes(b'store')
+        P.copy_inputs(self.root / 'a', S.D.get('co-05'), ['scores.sqlite3'], source, link=True)
+        self.assertEqual(((self.root / 'a' / 'scores.sqlite3').read_bytes(), (source / 'scores.sqlite3').stat().st_nlink), (b'store', 2))
+        with mock.patch.object(P.os, 'link', side_effect=OSError('another volume')):
+            P.copy_inputs(self.root / 'b', S.D.get('co-05'), ['scores.sqlite3'], source, link=True)
+        self.assertEqual(((self.root / 'b' / 'scores.sqlite3').read_bytes(), (self.root / 'b' / 'scores.sqlite3').stat().st_nlink), (b'store', 1))
+        P.copy_inputs(self.root / 'c', S.D.get('co-05'), ['scores.sqlite3'], source)
+        self.assertEqual((self.root / 'c' / 'scores.sqlite3').stat().st_nlink, 1)             # without `link`, always a copy
+
+    def test_seed_stage_streams_the_inputs_as_a_tar_into_one_container_and_hands_them_to_the_build_user(self):
+        source = self.root / 'source'
+        (source / 'extend').mkdir(parents=True)
+        (source / 'extend' / 'k.zip').write_bytes(b'zip')
+        (source / 'scores.sqlite3').write_bytes(b'store' * 100)
+        sent, launched, runs = io.BytesIO(), [], []
+
+        class Receiver:
+            def __init__(self, argv, **kwargs):
+                launched.append(argv)
+                self.stdin = type('Pipe', (), {'write': sent.write, 'flush': lambda s: None, 'close': lambda s: None, 'closed': False})()
+
+            def wait(self):
+                return 0
+
+        def fake_run(argv, **kwargs):
+            runs.append(argv)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with mock.patch.object(P.subprocess, 'Popen', Receiver), mock.patch.object(P.subprocess, 'run', fake_run), \
+                mock.patch.object(P, 'docker_exe', lambda: 'docker'):
+            P.seed_stage({'geo': EXPLICIT}, REPO, self.root / 'out', 'B-1', S.D.get('co-05'), source, ['scores.sqlite3', 'extend'])
+            P.seed_stage({'geo': EXPLICIT}, REPO, self.root / 'out', 'B-1', S.D.get('or-05'), source / 'or-05', [])
+        (argv, _other) = launched
+        self.assertEqual(argv[:2], ['docker', 'run'])
+        self.assertIn('-i', argv)
+        self.assertEqual(argv[argv.index('--network') + 1], 'none')
+        self.assertEqual(argv[argv.index('--user') + 1], '0')
+        self.assertIn(P.STAGE_VOLUME + ':/stage', argv)
+        self.assertEqual(argv[argv.index('--entrypoint') + 1:argv.index('--entrypoint') + 3], ['sh', EXPLICIT])
+        self.assertEqual(argv[-1], 'mkdir -p /stage/B-1 && tar xf - -C /stage/B-1 && chown -R 10001:10001 /stage/B-1')
+        self.assertIn('/stage/B-1/or-05 && tar xf - -C /stage/B-1/or-05', _other[-1])        # another district: its folder below the run's
+        with tarfile.open(fileobj=io.BytesIO(sent.getvalue())) as tar:
+            self.assertEqual(sorted(m.name for m in tar.getmembers() if m.isfile())[:2], ['extend/k.zip', 'scores.sqlite3'])
+        self.assertEqual([r[1] for r in runs], ['volume', 'volume'])                         # the volume is looked for, found (returncode 0)
+        with self.assertRaises(SystemExit):
+            P.seed_stage({'geo': EXPLICIT}, REPO, self.root / 'out', 'B-1', S.D.get('co-05'), source, ['street.sqlite3'])
+
+    def test_drop_stage_runs_one_rm_on_the_folder_of_the_run_in_the_stage_volume_and_nothing_else(self):
+        runs = []
+        with mock.patch.object(P.subprocess, 'run', lambda argv, **kw: runs.append(argv) or subprocess.CompletedProcess(argv, 0)), \
+                mock.patch.object(P, 'docker_exe', lambda: 'docker'):
+            P.drop_stage({'geo': EXPLICIT}, 'P-20261013T120000Z')
+            for bad in ('', 'P-1; rm -rf /', '../x', 'a b', '-rf'):
+                with self.assertRaises(ValueError):
+                    P.drop_stage({'geo': EXPLICIT}, bad)
+        (argv,) = runs
+        self.assertEqual(argv[:2], ['docker', 'run'])
+        self.assertEqual(argv[argv.index('--network') + 1], 'none')
+        self.assertIn(P.STAGE_VOLUME + ':/stage', argv)
+        self.assertEqual(argv[-2:], ['-c', 'rm -rf /stage/P-20261013T120000Z'])
+
+    def test_seed_stage_creates_the_stage_volume_through_compose_when_there_is_none(self):
+        source = self.root / 'source'
+        source.mkdir()
+        (source / 'scores.sqlite3').write_bytes(b'store')
+        composed = []
+
+        class Receiver:
+            def __init__(self, argv, **kwargs):
+                self.stdin = io.BytesIO()
+                self.stdin.close = lambda: None
+
+            def wait(self):
+                return 0
+
+        with mock.patch.object(P.subprocess, 'Popen', Receiver), mock.patch.object(P, 'docker_exe', lambda: 'docker'), \
+                mock.patch.object(P.subprocess, 'run', lambda argv, **kw: subprocess.CompletedProcess(argv, 1)), \
+                mock.patch.object(P, 'compose', lambda *a, **k: composed.append(a[4:])):
+            P.seed_stage({'score': SCORE_EXPLICIT}, REPO, self.root / 'out', 'B-1', S.D.get('co-05'), source, ['scores.sqlite3'])
+        self.assertEqual(composed, [('run', '--rm', 'terrier-score', 'fingerprint')])        # compose makes it, so it carries compose's labels
 
 
 if __name__ == '__main__':
