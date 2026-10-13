@@ -20,6 +20,9 @@
   check on A1 and B. A `metadata` table that differs between A1 and A2 is not left out whole: per key (and per field of a JSON value,
   such as w1.seconds) only what varies is, the rest must match B. One throwaway demo key serves A1, A2 and B (scratch/demo_key.hex,
   build_step.seed_demo_key), or the demo names, their search index and the stored key would differ in every build.
+  The shadow tables of an FTS5 table (demo_search_data, _idx, _docsize, _config, _content) are the physical layout of its index, which
+  the SQLite library decides (D-177, ruling of 2026-10-13): when they are not exactly equal they must be equal after FTS5 'rebuild' by
+  one library on scratch copies, and 400 MATCH queries must return the same rowids on the stores as built (fts_parity).
   Prints PASS or FAIL per artifact and exits 0 only when every line passes. Counts and names only; no row is printed.
   One heavy job at a time: A1, then A2, then B. Never point --scratch at a .local folder.
 """
@@ -28,11 +31,13 @@ import datetime
 import json
 import math
 import os
+import random
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from contextlib import closing
 from pathlib import Path
 
@@ -106,6 +111,83 @@ def metadata_variance(a1, a2, b):
     return left_out, mismatched
 
 
+FTS_SHADOWS = ('_data', '_idx', '_docsize', '_config', '_content')       # the shadow tables of an FTS5 table
+MATCH_QUERIES = 400
+
+
+def fts5_tables(path):
+    """{FTS5 table: [its shadow tables]} of a store, read from its schema."""
+    with closing(B.open_readonly(path)) as connection:
+        master = connection.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'").fetchall()
+    names = {name for name, _sql in master}
+    return {name: [name + s for s in FTS_SHADOWS if name + s in names]
+            for name, sql in master if re.search(r'\bUSING\s+fts5\b', sql or '', re.IGNORECASE)}
+
+
+def rebuilt_shadows(label, path, fts, shadows, work):
+    """Digests of `shadows` in a scratch copy of the store (in `work`) after FTS5 'rebuild' by this process's SQLite library."""
+    copy = Path(work) / (label + '.sqlite3')
+    shutil.copyfile(path, copy)
+    with closing(sqlite3.connect(copy)) as connection, connection:
+        connection.execute("INSERT INTO %s(%s) VALUES('rebuild')" % (B.quote(fts), B.quote(fts)))
+    with closing(B.open_readonly(copy)) as connection:
+        return {t: B.table_digest(connection, t) for t in shadows}
+
+
+def query_words(path, fts, count=MATCH_QUERIES):
+    """The words the MATCH queries ask for: tokens of one store's indexed text, sorted, shuffled with a fixed seed, `count` of them."""
+    words = set()
+    with closing(B.open_readonly(path)) as connection:
+        for row in connection.execute('SELECT * FROM %s' % B.quote(fts)):
+            words.update(w for w in re.findall(r'\w+', ' '.join(str(v) for v in row if v is not None).lower()) if len(w) > 2)
+    words = sorted(words)
+    random.Random(7).shuffle(words)
+    return words[:count]
+
+
+def match_answers(path, fts, words):
+    """(rows, sha256 of the rowids) of `fts MATCH "<word>"` for each word, on the store as it is (not rebuilt)."""
+    with closing(B.open_readonly(path)) as connection:
+        found = [connection.execute('SELECT rowid FROM %s WHERE %s MATCH ? ORDER BY rowid' % (B.quote(fts), B.quote(fts)),
+                                    ('"%s"' % w,)).fetchall() for w in words]
+    return [(len(rows), B.sha256_text(repr(rows))) for rows in found]
+
+
+def fts_parity(paths, fts, shadows):
+    """(ok, detail) for the FTS5 table `fts` in the stores `paths` {label: path}, 'A1' among them: (i) its shadow tables are equal after
+    FTS5 'rebuild' by one library on scratch copies, and (ii) MATCH_QUERIES MATCH queries return the same rowids on the stores as built."""
+    with tempfile.TemporaryDirectory(prefix='fts5-rebuild-', ignore_cleanup_errors=True) as work:
+        rebuilt = {label: rebuilt_shadows(label, path, fts, shadows, work) for label, path in paths.items()}
+    words = query_words(paths['A1'], fts)
+    answers = {label: match_answers(path, fts, words) for label, path in paths.items()}
+    differ = sorted(t for t in shadows if any(rebuilt[label][t] != rebuilt['A1'][t] for label in paths))
+    same = sum(all(answers[label][i] == answers['A1'][i] for label in paths) for i in range(len(words)))
+    if not differ and same == len(words):
+        return True, 'FTS5 %s: shadow tables equal after rebuild (SQLite %s), %d of %d MATCH queries identical' % (
+            fts, sqlite3.sqlite_version, same, len(words))
+    return False, 'FTS5 %s is not equivalent: (i) rebuilt shadow tables %s, (ii) %d of %d MATCH queries identical, in table(s): %s' % (
+        fts, 'differ' if differ else 'equal', same, len(words), ', '.join(differ or shadows))
+
+
+def change_one_indexed_name(path):
+    """Negative control for FTS5: add a word to one indexed value (the last row of the first FTS5 table) and bring the index in line with
+    it, so the stored text and the index, as built and as rebuilt, differ from the Windows build. Returns (FTS5 table, table holding the
+    text, column)."""
+    fts = next(iter(fts5_tables(path)), None)
+    if fts is None:
+        raise ValueError('no FTS5 table in %s' % path)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        sql = connection.execute('SELECT sql FROM sqlite_master WHERE name = ?', (fts,)).fetchone()[0]
+        column = connection.execute('PRAGMA table_info(%s)' % B.quote(fts)).fetchone()[1]
+        external = re.search(r'content\s*=\s*[\'"]?(\w+)', sql, re.IGNORECASE)
+        text = external.group(1) if external else fts
+        connection.execute("UPDATE %s SET %s = coalesce(%s, '') || ' zzqx' WHERE rowid = (SELECT max(rowid) FROM %s)" % (
+            B.quote(text), B.quote(column), B.quote(column), B.quote(text)))
+        if external:
+            connection.execute("INSERT INTO %s(%s) VALUES('rebuild')" % (B.quote(fts), B.quote(fts)))
+    return fts, text, column
+
+
 def compare_store(name, a1, a2, b):
     """(ok, detail) for one SQLite store in folders a1, a2 (Windows) and b (container)."""
     paths = {label: Path(folder) / name for label, folder in (('A1', a1), ('A2', a2), ('B', b))}
@@ -122,7 +204,8 @@ def compare_store(name, a1, a2, b):
         if digests['A1'][key] != digests['B'][key]:
             return False, 'B differs from the Windows build in %s' % key
     tables = {label: digest['tables'] for label, digest in digests.items()}
-    names = set(tables['A1']) | set(tables['A2']) | set(tables['B'])
+    fts = fts5_tables(paths['B'])                 # the schema is the same in all three (schema_sha256 above)
+    names = (set(tables['A1']) | set(tables['A2']) | set(tables['B'])) - {t for shadows in fts.values() for t in shadows}
     noise = sorted(t for t in names if tables['A1'].get(t) != tables['A2'].get(t))
     differ = sorted(t for t in names if t not in noise and tables['A1'].get(t) != tables['B'].get(t))
     if differ:
@@ -137,9 +220,19 @@ def compare_store(name, a1, a2, b):
             if mismatched:
                 return False, 'B differs from the Windows build in table(s): metadata[%s]' % ', '.join(mismatched)
             left_out.append('metadata[%s]' % ', '.join(keys))
+    notes = []
+    for table, shadows in fts.items():            # physical index structures: exact when they can be, else by content (fts_parity)
+        raw = {label: [tables[label][t] for t in shadows] for label in tables}
+        if raw['A1'] == raw['B']:
+            notes.append('FTS5 %s: shadow tables exactly equal' % table)
+            continue
+        ok, detail = fts_parity({label: paths[label] for label in ('A1', 'B') + (('A2',) if raw['A2'] != raw['A1'] else ())}, table, shadows)
+        if not ok:
+            return False, 'B differs from the Windows build: ' + detail
+        notes.append(detail)
     rows = sum(t['rows'] for t in tables['B'].values())
-    return True, '%d tables, %s rows; run-to-run variance (left out): %s' % (len(tables['B']), '{:,}'.format(rows),
-                                                                           ', '.join(left_out) or 'none')
+    return True, '; '.join(['%d tables, %s rows; run-to-run variance (left out): %s' % (len(tables['B']), '{:,}'.format(rows),
+                                                                                       ', '.join(left_out) or 'none')] + notes)
 
 
 def compare_file(name, a1, a2, b):
@@ -391,6 +484,9 @@ def main(argv=None):
     parser.add_argument('--negative-control', action='store_true', help='also prove the comparison fails when one row is removed')
     parser.add_argument('--skip-container', action='store_true', help='Windows only: learn the run-to-run variance (A1 vs A2)')
     parser.add_argument('--reuse-windows', action='store_true', help='keep an existing <scratch>/A1 and A2 instead of building them again')
+    parser.add_argument('--reuse-container', action='store_true',
+                        help='with --reuse-windows: keep an existing <scratch>/B too and only judge the three again (a changed comparison rule); '
+                             'images, if given, are only recorded and used for the fingerprint')
     parser.add_argument('--export-bind', action='store_true',
                         help='export straight into the bind-mounted scratch folder instead of a named volume + docker cp: only for a '
                              'native-Linux host (on Docker Desktop, SQLite integrity_check over the Windows file share takes tens of '
@@ -405,12 +501,17 @@ def main(argv=None):
         parser.error('--scratch must not be inside a .local folder')
     if scratch.exists() and any(scratch.iterdir()) and not args.reuse_windows:
         parser.error('--scratch %s is not empty; a parity run starts from a new folder' % scratch)
+    if args.reuse_container and (not args.reuse_windows or args.skip_container or not (scratch / 'B').is_dir()):
+        parser.error('--reuse-container needs --reuse-windows, an existing <scratch>/B, and no --skip-container')
+    build_container = not args.skip_container and not args.reuse_container
     toolchains = [t for t in IMAGE_NAMES if any(S.STEPS[s].image == t for s in steps)]          # geo first
     pythons = {'geo': args.python, 'score': args.score_python}
     images, sources = {}, {}
     if not args.skip_container:
         explicit = {'geo': args.image, 'score': args.score_image}
         for toolchain in toolchains:
+            if args.reuse_container and not explicit[toolchain]:
+                continue                                       # a judgement of finished builds needs no image
             images[toolchain], sources[toolchain] = ((explicit[toolchain], 'explicit') if explicit[toolchain]
                                                      else (manifest_image(IMAGE_NAMES[toolchain]), 'manifest'))
         for toolchain, image in images.items():
@@ -442,7 +543,11 @@ def main(argv=None):
         folders[label].mkdir(parents=True, exist_ok=True)
         windows_build(pythons, args.repo, d['id'], steps, folders[label])
     report['fingerprint_windows'] = windows_fingerprint(pythons, args.repo, toolchains)
-    if not args.skip_container:
+    if args.reuse_container:
+        print('B: reusing %s' % folders['B'], flush=True)
+        if len(images) == len(toolchains):
+            report['fingerprint_container'] = container_fingerprint(images, args.repo, folders['B'], run_id)
+    elif build_container:
         print('B: container build of %s (stage volume %s)' % (', '.join(steps), run_id), flush=True)
         folders['B'].mkdir(parents=True, exist_ok=True)
         container_build(images, args.repo, d['id'], steps, folders['B'], run_id, names, export_bind=args.export_bind)
@@ -480,6 +585,13 @@ def main(argv=None):
                 found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control), table, before[name])
                 verdict('negative control ' + name + ' (value)', found, 'one %s.%s value changed (%s): %s' % (
                     table, column, step, 'detected' if found else 'NOT detected'))
+                fts = fts5_tables(folders['B'] / name)
+                if fts:                                     # the FTS5 comparison itself must catch a changed indexed name
+                    shutil.copyfile(folders['B'] / name, target)
+                    index, text, column = change_one_indexed_name(target)
+                    found = not fts_parity({'A1': folders['A1'] / name, 'B': target}, index, fts[index])[0]
+                    verdict('negative control ' + name + ' (indexed name)', found, 'one %s.%s indexed value changed, index kept in line: %s' % (
+                        text, column, 'detected' if found else 'NOT detected'))
             else:
                 what, ok = 'one byte changed at offset %d' % flip_one_byte(target), compare_file(name, folders['A1'], folders['A2'], control)[0]
                 verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))

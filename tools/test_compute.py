@@ -297,8 +297,10 @@ class BuildStepTests(unittest.TestCase):
 
 # ---- the parity harness ------------------------------------------------------------------------------------------------------
 
-def make_store(path, rows, stamp='t0', extra_column=False):
-    """A tiny store shaped like roads.sqlite3: an ordinary table, an R-tree, and a metadata table that carries a stamp."""
+def make_store(path, rows, stamp='t0', extra_column=False, fts=None):
+    """A tiny store shaped like roads.sqlite3: an ordinary table, an R-tree, and a metadata table that carries a stamp. `fts` adds what
+    scores.sqlite3 has: demo_name and demo_search (FTS5, external content) over `rows`; 'rebuilt' lays the index out in one segment,
+    'rows' builds it one row at a time (the same index logically, another physical layout)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as connection, connection:
@@ -309,6 +311,16 @@ def make_store(path, rows, stamp='t0', extra_column=False):
             connection.execute('INSERT INTO roads (id, name) VALUES (?, ?)', (number, name))
             connection.execute('INSERT INTO extents VALUES (?, 0, 1, 0, 1)', (number,))
         connection.execute("INSERT INTO metadata VALUES ('built_utc', ?)", (stamp,))
+        if fts:
+            connection.executescript('CREATE TABLE demo_name (pos INTEGER PRIMARY KEY, name TEXT);'
+                                     "CREATE VIRTUAL TABLE demo_search USING fts5(name, content='demo_name', content_rowid='pos');")
+            connection.executemany('INSERT INTO demo_name VALUES (?, ?)', rows)
+            if fts == 'rebuilt':
+                connection.execute("INSERT INTO demo_search(demo_search) VALUES('rebuild')")
+            else:
+                for number, name in rows:
+                    connection.execute('INSERT INTO demo_search(rowid, name) VALUES (?, ?)', (number, name))
+                    connection.commit()
 
 
 ROWS = [(1, 'Main St'), (2, 'Oak Ave'), (3, '')]
@@ -572,6 +584,141 @@ class CompareTests(unittest.TestCase):
         self.assertFalse(P.compare_store('roads.sqlite3', folders[0], folders[1], control)[0])
 
 
+class FtsParityTests(unittest.TestCase):
+    """D-177, ruling of 2026-10-13: the shadow tables of an FTS5 table are physical index structures. Equal by content (rebuilt by one
+    library, and the same MATCH answers), not by layout; every other table, and a table that only looks like a shadow, stays exact."""
+
+    NAMES = list(enumerate(['Ann Lee', 'Bob Stone and Sons', 'Cy Not Near', 'Dee Oak', 'Eve Stone', 'Fay Lee Oak', 'Gus Moore',
+                            'Hal Moore Jr', 'Ida Lee', ''], 1))
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def stores(self, a1='rebuilt', a2='rebuilt', b='rebuilt', names=NAMES, b_names=None, name='scores.sqlite3'):
+        for label, layout, rows in (('A1', a1, names), ('A2', a2, names), ('B', b, b_names or names)):
+            shutil.rmtree(self.root / label, ignore_errors=True)
+            make_store(self.root / label / name, rows, fts=layout)
+        return [self.root / label for label in ('A1', 'A2', 'B')]
+
+    @staticmethod
+    def raw(folder, tables=('demo_search_data', 'demo_search_idx')):
+        digests = P.B.store_digest(folder / 'scores.sqlite3')['tables']
+        return [digests[t] for t in tables]
+
+    def test_fts5_tables_are_found_by_their_schema_with_their_shadow_tables_only(self):
+        folders = self.stores()
+        self.assertEqual(P.fts5_tables(folders[0] / 'scores.sqlite3'), {
+            'demo_search': ['demo_search_data', 'demo_search_idx', 'demo_search_docsize', 'demo_search_config']})        # external content: no _content
+        own = self.root / 'own.sqlite3'
+        with closing(sqlite3.connect(own)) as connection, connection:
+            connection.executescript('CREATE VIRTUAL TABLE find USING fts5(name); CREATE TABLE find_data_extra (x); CREATE TABLE plain_data (x);'
+                                     'CREATE VIRTUAL TABLE box USING rtree(id, a, b, c, d);')
+        self.assertEqual(P.fts5_tables(own), {'find': ['find_data', 'find_idx', 'find_docsize', 'find_config', 'find_content']})
+
+    def test_shadow_tables_that_differ_only_in_layout_pass_and_the_line_says_how(self):
+        folders = self.stores(b='rows')
+        self.assertNotEqual(self.raw(folders[0]), self.raw(folders[2]))              # the premise: physically different
+        self.assertEqual(self.raw(folders[0]), self.raw(folders[1]))
+        ok, detail = P.compare('scores.sqlite3', *folders)
+        self.assertTrue(ok, detail)
+        self.assertIn('FTS5 demo_search: shadow tables equal after rebuild (SQLite %s), 16 of 16 MATCH queries identical' % sqlite3.sqlite_version,
+                      detail)                                                         # the 16 words of more than two letters
+        self.assertIn('variance (left out): none', detail)
+
+    def test_exactly_equal_shadow_tables_pass_without_a_rebuild(self):
+        with mock.patch.object(P, 'fts_parity', side_effect=AssertionError('no rebuild needed')):
+            ok, detail = P.compare('scores.sqlite3', *self.stores())
+        self.assertTrue(ok, detail)
+        self.assertIn('FTS5 demo_search: shadow tables exactly equal', detail)
+
+    def test_a_second_windows_build_with_another_layout_is_rebuilt_too(self):
+        folders = self.stores(a2='rows', b='rows')                       # A2 and B agree with each other, not with A1: all three are rebuilt
+        seen = []
+        real = P.rebuilt_shadows
+        with mock.patch.object(P, 'rebuilt_shadows', lambda label, *args: seen.append(label) or real(label, *args)):
+            ok, detail = P.compare('scores.sqlite3', *folders)
+        self.assertTrue(ok, detail)
+        self.assertEqual(seen, ['A1', 'B', 'A2'])
+        seen.clear()
+        with mock.patch.object(P, 'rebuilt_shadows', lambda label, *args: seen.append(label) or real(label, *args)):
+            self.assertTrue(P.compare('scores.sqlite3', *self.stores(b='rows'))[0])
+        self.assertEqual(seen, ['A1', 'B'])                              # A2 equals A1 exactly: nothing more to learn from it
+
+    def test_a_stale_index_fails_through_the_match_queries_although_its_rebuilt_form_is_equal(self):
+        folders = self.stores(b='rebuilt')
+        with closing(sqlite3.connect(folders[2] / 'scores.sqlite3')) as connection, connection:        # the text of row 3 is unchanged ...
+            connection.execute("INSERT INTO demo_search(demo_search, rowid, name) VALUES('delete', 3, 'Cy Not Near')")
+            connection.execute("INSERT INTO demo_search(rowid, name) VALUES (3, 'Wholly Different')")       # ... the index says otherwise
+        ok, detail = P.compare('scores.sqlite3', *folders)
+        self.assertFalse(ok)
+        self.assertIn('(i) rebuilt shadow tables equal', detail)                       # a rebuild repairs it ...
+        self.assertRegex(detail, r'\(ii\) \d+ of 16 MATCH queries identical')                # ... the queries on the store as built do not
+        self.assertNotRegex(detail, r'\(ii\) 16 of 16')
+        self.assertIn('table(s): demo_search_data, demo_search_idx, demo_search_docsize, demo_search_config', detail)
+
+    def test_negative_control_one_changed_indexed_name_fails_the_fts_comparison_itself(self):
+        folders = self.stores(b='rows')
+        control = self.root / 'NC' / 'scores.sqlite3'
+        control.parent.mkdir()
+        shutil.copyfile(folders[2] / 'scores.sqlite3', control)
+        before = P.B.store_digest(control)['tables']
+        self.assertEqual(P.change_one_indexed_name(control), ('demo_search', 'demo_name', 'name'))
+        after = P.B.store_digest(control)['tables']
+        self.assertEqual([t for t in before if before[t] != after[t] and not t.startswith('demo_search')], ['demo_name'])      # one text changed
+        with closing(sqlite3.connect(control)) as connection:
+            connection.execute("INSERT INTO demo_search(demo_search, rank) VALUES('integrity-check', 1)")       # the index is in line with it
+            self.assertEqual(connection.execute("SELECT count(*) FROM demo_search WHERE demo_search MATCH 'zzqx'").fetchone(), (1,))
+        ok, detail = P.fts_parity({'A1': folders[0] / 'scores.sqlite3', 'B': control}, 'demo_search', P.fts5_tables(control)['demo_search'])
+        self.assertFalse(ok)
+        self.assertIn('(i) rebuilt shadow tables differ', detail)
+        self.assertIn('table(s): demo_search_data', detail)
+        self.assertTrue(P.control_detected(*P.compare_store('scores.sqlite3', *folders[:2], control.parent), 'demo_name'))          # and the whole store fails too
+        # the same without a rebuild to blame: a table that holds its own text
+        own = [self.root / ('own%d.sqlite3' % i) for i in (1, 2)]
+        for path in own:
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.executescript('CREATE VIRTUAL TABLE demo_search USING fts5(name);')
+                connection.executemany('INSERT INTO demo_search(rowid, name) VALUES (?, ?)', self.NAMES)
+        self.assertEqual(P.change_one_indexed_name(own[1]), ('demo_search', 'demo_search', 'name'))
+        ok, detail = P.fts_parity({'A1': own[0], 'B': own[1]}, 'demo_search', P.fts5_tables(own[0])['demo_search'])
+        self.assertFalse(ok)
+        self.assertIn('demo_search_content', detail)
+        make_store(self.root / 'plain.sqlite3', ROWS)
+        with self.assertRaises(ValueError):
+            P.change_one_indexed_name(self.root / 'plain.sqlite3')
+
+    def test_a_table_that_only_looks_like_a_shadow_is_still_compared_exactly(self):
+        folders = self.stores()
+        for label, value in (('A1', 1), ('A2', 1), ('B', 2)):
+            with closing(sqlite3.connect(self.root / label / 'scores.sqlite3')) as connection, connection:
+                connection.executescript('CREATE TABLE thing_data (x INTEGER); INSERT INTO thing_data VALUES (%d);' % value)
+        ok, detail = P.compare('scores.sqlite3', *folders)
+        self.assertFalse(ok)
+        self.assertIn('table(s): thing_data', detail)
+
+    def test_every_other_table_stays_exact_beside_an_index_that_differs_in_layout(self):
+        ok, detail = P.compare('scores.sqlite3', *self.stores(b='rows', b_names=self.NAMES[:-1] + [(10, 'Ida Lee')]))
+        self.assertFalse(ok)                                             # demo_name differs in B: failed before any rebuild
+        self.assertIn('table(s): demo_name', detail)
+        self.assertNotIn('FTS5', detail)
+
+    def test_the_query_words_are_the_same_every_time_bounded_and_safe_for_fts5_operators(self):
+        path = self.stores()[0] / 'scores.sqlite3'
+        words = P.query_words(path, 'demo_search')
+        self.assertEqual(words, P.query_words(path, 'demo_search'))
+        self.assertEqual(sorted(words), sorted({'ann', 'lee', 'bob', 'stone', 'and', 'sons', 'not', 'near', 'dee', 'oak', 'eve', 'fay', 'gus',
+                                                 'moore', 'hal', 'ida'}))
+        self.assertNotEqual(words, sorted(words))                        # shuffled, with a fixed seed
+        answers = P.match_answers(path, 'demo_search', words)            # 'and', 'not', 'near' are quoted: words, not operators
+        self.assertEqual(len(answers), len(words))
+        self.assertEqual(answers[words.index('oak')][0], 2)
+        many = [(i, 'w%04d x' % i) for i in range(1, 601)]
+        make_store(self.root / 'many.sqlite3', many, fts='rebuilt')
+        self.assertEqual(len(P.query_words(self.root / 'many.sqlite3', 'demo_search')), P.MATCH_QUERIES)
+
+
 class RunTests(unittest.TestCase):
     """main() with the two builds replaced by functions that write tiny stores (and, for `shown`, a tiny table and manifest)."""
 
@@ -585,13 +732,13 @@ class RunTests(unittest.TestCase):
         self.keys = []              # the $TERRIER_DEMO_KEY each build (Windows or container) was started with
 
     @staticmethod
-    def write_step(out, step, stamp, rows):
+    def write_step(out, step, stamp, rows, fts=None):
         out.mkdir(parents=True, exist_ok=True)
         if step == 'shown':
             (out / 'area_scores_shown.csv').write_bytes(b'area,score\n1,2\n')
             (out / 'area_scores_shown.manifest.json').write_bytes(SHOWN_MANIFEST.encode())
         else:
-            make_store(out / S.STEPS[step].store, rows, stamp=stamp)
+            make_store(out / S.STEPS[step].store, rows, stamp=stamp, fts=fts if step == 'scores' else None)
 
     def fakes(self, b_rows=ROWS):
         def windows(pythons, repo, district, steps, out):
@@ -599,14 +746,14 @@ class RunTests(unittest.TestCase):
             self.pythons.append(pythons)
             self.keys.append(os.environ.get('TERRIER_DEMO_KEY'))
             for step in steps:
-                self.write_step(out, step, 'w%d' % len(self.calls), ROWS)
+                self.write_step(out, step, 'w%d' % len(self.calls), ROWS, fts='rebuilt')
 
         def container(images, repo, district, steps, out, run_id, names, export_bind=False):
             self.calls.append(('container', out.name, tuple(names), export_bind))
             self.images.append(images)
             self.keys.append(os.environ.get('TERRIER_DEMO_KEY'))
             for step in steps:
-                self.write_step(out, step, 'c', b_rows)
+                self.write_step(out, step, 'c', b_rows, fts='rows')       # the scores store's FTS5 index is laid out differently in B
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
                 mock.patch.object(P, 'windows_fingerprint', lambda pythons, repo, images: {i: {'python': 'win'} for i in images}),
@@ -657,9 +804,28 @@ class RunTests(unittest.TestCase):
         self.assertRegex(text, r'negative control area_scores_shown\.csv +one byte changed at offset \d+: detected')
         self.assertRegex(text, r'negative control scores\.sqlite3 +one row removed from \w+: detected')
         self.assertRegex(text, r'PASS  negative control scores\.sqlite3 \(value\) +one \w+\.\w+ value changed \(.+\): detected')
+        self.assertRegex(text, r'PASS  scores\.sqlite3 .*FTS5 demo_search: shadow tables equal after rebuild')           # B lays the index out differently
+        self.assertRegex(text, r'PASS  negative control scores\.sqlite3 \(indexed name\) +one demo_name\.name indexed value changed, index kept in line: detected')
+        self.assertNotRegex(text, r'negative control (roads|street|contacts)\.sqlite3 \(indexed name\)')               # only a store with an FTS5 table
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
         self.assertEqual(sorted(report['fingerprint_container']), ['geo', 'score'])
         self.assertEqual(sorted(report['fingerprint_windows']), ['geo', 'score'])
+
+    def test_reuse_container_judges_the_finished_builds_again_without_building_anything(self):
+        self.main('--steps', 'scores')
+        self.calls.clear()
+        code, text = self.main('--steps', 'scores', '--reuse-windows', '--reuse-container', '--negative-control',
+                               image=None, score_image=SCORE_EXPLICIT)
+        self.assertEqual((code, self.calls), (0, []), text)                       # no Windows build, no container build, no manifest asked for
+        self.assertIn('B: reusing', text)
+        self.assertRegex(text, r'PASS  negative control scores\.sqlite3 \(indexed name\)')
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['images'], {'score': SCORE_EXPLICIT})
+        self.assertEqual(report['fingerprint_container'], {'score': {'python': 'box'}})      # an image that is given is asked for its versions
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):       # B must be there, and A1 and A2 too
+            self.main('--steps', 'scores', '--reuse-container', scratch=self.root / 'scratch')
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.main('--steps', 'scores', '--reuse-windows', '--reuse-container', scratch=self.root / 'none')
 
     def test_a_container_table_or_store_that_differs_fails_the_chain(self):
         code, text = self.main('--steps', 'shown,scores', b_rows=ROWS[:2])
