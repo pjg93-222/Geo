@@ -25,6 +25,7 @@ import geopandas as gpd
 from shapely.geometry import LineString
 
 from tools import build_step as S
+from tools import compute_build as CB
 from tools import compute_parity as P
 
 REPO = Path(__file__).resolve().parents[1]
@@ -689,6 +690,48 @@ class FtsParityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             P.change_one_indexed_name(self.root / 'plain.sqlite3')
 
+    def add_contentless(self, folders, layouts):
+        """A contentless FTS5 table (content='', as contacts.sqlite3 has) beside demo_search: one batch then 'optimize', or one row at a time."""
+        for folder, layout in zip(folders, layouts):
+            with closing(sqlite3.connect(folder / 'scores.sqlite3')) as connection:
+                connection.execute("CREATE VIRTUAL TABLE search USING fts5(name, content='')")
+                if layout == 'batch':
+                    connection.executemany('INSERT INTO search(rowid, name) VALUES (?, ?)', self.NAMES)
+                    connection.execute("INSERT INTO search(search) VALUES('optimize')")
+                else:
+                    for row in self.NAMES:
+                        connection.execute('INSERT INTO search(rowid, name) VALUES (?, ?)', row)
+                        connection.commit()
+                connection.commit()
+
+    def test_a_contentless_fts5_table_cannot_be_rebuilt_so_it_is_exact_or_it_fails(self):
+        folders = self.stores()
+        self.add_contentless(folders, ['batch'] * 3)
+        path = folders[2] / 'scores.sqlite3'
+        self.assertEqual(sorted(P.fts5_tables(path)), ['demo_search', 'search'])
+        self.assertEqual(sorted(P.fts5_tables(path, rebuildable=True)), ['demo_search'])
+        ok, detail = P.compare('scores.sqlite3', *folders)
+        self.assertTrue(ok, detail)
+        self.assertIn('FTS5 search: shadow tables exactly equal', detail)
+        folders = self.stores()
+        self.add_contentless(folders, ['batch', 'batch', 'rows'])
+        self.assertNotEqual(self.raw(folders[0], ('search_data', 'search_idx')), self.raw(folders[2], ('search_data', 'search_idx')))
+        ok, detail = P.compare('scores.sqlite3', *folders)
+        self.assertFalse(ok)
+        self.assertIn('FTS5 search is contentless', detail)
+        self.assertIn('table(s): search_data, search_idx, search_docsize, search_config', detail)
+        self.assertNotIn('after rebuild', detail)                           # nothing was rebuilt, and nothing was guessed
+
+    def test_the_negative_control_takes_the_table_that_has_content_and_needs_one(self):
+        folders = self.stores()
+        self.add_contentless(folders, ['batch'] * 3)
+        self.assertEqual(P.change_one_indexed_name(folders[2] / 'scores.sqlite3')[0], 'demo_search')
+        only = self.root / 'only.sqlite3'
+        with closing(sqlite3.connect(only)) as connection, connection:
+            connection.execute("CREATE VIRTUAL TABLE search USING fts5(name, content='')")
+        with self.assertRaises(ValueError):
+            P.change_one_indexed_name(only)
+
     def test_a_table_that_only_looks_like_a_shadow_is_still_compared_exactly(self):
         folders = self.stores()
         for label, value in (('A1', 1), ('A2', 1), ('B', 2)):
@@ -1331,6 +1374,146 @@ class BuildImageFilesTests(unittest.TestCase):
             self.assertRegex(ref, r'^ghcr\.io/pjg93-222/%s@sha256:[0-9a-f]{64}$' % re.escape(name))
         for other in ({'tag': 'v2026.10.12.8'}, {'commit': 'd' * 40}):                      # two builds of different tags or commits
             self.assertNotEqual(run(check, web, {**build, **other}, flags=['-e']).returncode, 0, other)
+
+
+class ComputeBuildTests(unittest.TestCase):
+    """tools/compute_build.py: the store build runs in the containers unless TERRIER_COMPUTE=windows. Both builds are replaced by fakes
+    that write the stores, so nothing starts: no Docker, no Windows tool."""
+
+    CHAIN = ['roads', 'street', 'contacts', 'shown', 'scores']
+    KEY = '0123456789abcdef' * 4
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.calls, self.manifest = [], []
+
+    @staticmethod
+    def write(steps, folder):
+        for step in steps:
+            for name in (S.STEPS[step].store, *S.STEPS[step].also):
+                (folder / name).write_bytes(b'x')
+
+    def run_main(self, *args, environ=None, key_file=None, out='out', write=True):
+        """-> (exit code, stdout). The environment holds both image variables and only what `environ` adds. `key_file`: the folder that
+        stands for the district's data folder (where its .demo-key would be)."""
+        def container(images, repo, district, steps, folder, run_id, names, export_bind=False):
+            self.calls.append(('container', images, district, list(steps), run_id, tuple(names), export_bind, os.environ.get('TERRIER_DEMO_KEY')))
+            if write:
+                self.write(steps, folder)
+
+        def windows(pythons, repo, district, steps, folder):
+            self.calls.append(('windows', pythons, district, list(steps), os.environ.get('TERRIER_DEMO_KEY')))
+            if write:
+                self.write(steps, folder)
+
+        def asked(name):
+            self.manifest.append(name)
+            return 'ghcr.io/pjg93-222/%s@sha256:%s' % (name, 'e' * 64)
+
+        env = {'TERRIER_BUILD_IMAGE': EXPLICIT, 'TERRIER_SCORE_IMAGE': SCORE_EXPLICIT, **(environ or {})}
+        text = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, env, clear=True))
+            for target, fake in (('container_build', container), ('windows_build', windows), ('manifest_image', asked),
+                                 ('container_fingerprint', lambda *a: {'where': 'box'}), ('windows_fingerprint', lambda *a: {'where': 'win'})):
+                stack.enter_context(mock.patch.object(P, target, fake))
+            if key_file is not None:
+                real = CB.D.data_dir
+                stack.enter_context(mock.patch.object(CB.D, 'data_dir', lambda d, local=None: key_file if local is None else real(d, local)))
+            stack.enter_context(contextlib.redirect_stdout(text))
+            code = CB.main(['--out', str(self.root / out), *args])
+        return code, text.getvalue()
+
+    def test_the_default_is_the_containers_each_step_in_its_toolchain_and_the_volume_export(self):
+        code, text = self.run_main(key_file=self.root / 'no-key-here', environ={'TERRIER_DEMO_KEY': self.KEY})
+        self.assertEqual(code, 0, text)
+        (mode, images, district, steps, run_id, names, bind, key), = self.calls
+        self.assertEqual((mode, images, district, steps, bind), ('container', {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}, 'co-05', self.CHAIN, False))
+        self.assertEqual(names, ('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'area_scores_shown.csv',
+                                 'area_scores_shown.manifest.json', 'scores.sqlite3'))
+        self.assertRegex(run_id, r'^P-\d{8}T\d{6}Z$')
+        self.assertIn('BUILD OK (container): 6 file(s)', text)
+        receipt = json.loads((self.root / 'out' / 'compute_build_receipt.json').read_text(encoding='utf-8'))
+        self.assertEqual((receipt['mode'], receipt['image_sources'], receipt['fingerprint']),
+                         ('container', {'geo': 'explicit', 'score': 'explicit'}, {'where': 'box'}))
+        self.assertNotIn(self.KEY, json.dumps(receipt) + text)                  # the key goes to the build, never into a log or receipt
+
+    def test_terrier_compute_windows_is_the_one_switch_back_and_asks_for_no_image(self):
+        for number, value in enumerate(('windows', ' Windows '), 1):
+            self.calls.clear()
+            code, text = self.run_main(environ={'TERRIER_COMPUTE': value, 'TERRIER_DEMO_KEY': self.KEY}, out='win%d' % number,
+                                       key_file=self.root / 'x')
+            self.assertEqual(code, 0, text)
+            (mode, pythons, district, steps, key), = self.calls
+            self.assertEqual((mode, district, steps), ('windows', 'co-05', self.CHAIN))
+            self.assertEqual(pythons, {'geo': os.environ.get('CU_PYTHON') or str(CB.H.WORK_PY), 'score': str(CB.H.PY312)})
+            self.assertIn('BUILD OK (windows)', text)
+        self.assertEqual(self.manifest, [])
+        receipt = json.loads((self.root / 'win1' / 'compute_build_receipt.json').read_text(encoding='utf-8'))
+        self.assertEqual((receipt['mode'], receipt['images'], receipt['fingerprint']), ('windows', {}, {'where': 'win'}))
+
+    def test_any_other_value_of_the_switch_stops_before_anything_runs(self):
+        for value in ('docker', 'linux', 'true'):
+            with self.assertRaises(SystemExit) as stop:
+                self.run_main(environ={'TERRIER_COMPUTE': value})
+            self.assertIn('TERRIER_COMPUTE', str(stop.exception))
+        self.assertEqual((self.calls, CB.compute_mode({}), CB.compute_mode({'TERRIER_COMPUTE': ''})), ([], 'container', 'container'))
+
+    def test_the_images_are_the_variables_then_the_verified_manifest_and_only_what_the_steps_need(self):
+        self.assertEqual(self.run_main('--steps', 'roads', environ={'TERRIER_SCORE_IMAGE': ''}, out='geo')[0], 0)
+        self.assertEqual((self.calls[-1][1], self.manifest), ({'geo': EXPLICIT}, []))
+        self.assertEqual(self.run_main('--steps', 'shown,scores', environ={'TERRIER_SCORE_IMAGE': '', 'TERRIER_DEMO_KEY': self.KEY}, out='score')[0], 0)
+        self.assertEqual((self.calls[-1][1], self.manifest),
+                         ({'score': 'ghcr.io/pjg93-222/terrier-build-score@sha256:' + 'e' * 64}, ['terrier-build-score']))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:        # a tag is never an image
+            self.run_main('--steps', 'roads', environ={'TERRIER_BUILD_IMAGE': 'ghcr.io/x/terrier-build:v1'}, out='tag')
+        self.assertEqual(stop.exception.code, 2)
+
+    def test_plan_prints_what_would_run_and_starts_nothing(self):
+        code, text = self.run_main('--plan', environ={'TERRIER_DEMO_KEY': ''}, key_file=self.root / 'no-key-here')
+        self.assertEqual((code, self.calls), (0, []))                      # not even the demo key is needed to look
+        plan = json.loads(text)
+        self.assertEqual((plan['mode'], plan['steps'], plan['images']), ('container', self.CHAIN, {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}))
+        self.assertEqual(plan['where'], {'roads': 'terrier-build', 'street': 'terrier-build', 'contacts': 'terrier-build',
+                                         'shown': 'terrier-score', 'scores': 'terrier-score'})
+        self.assertFalse((self.root / 'out').exists())
+        plan = json.loads(self.run_main('--plan', environ={'TERRIER_COMPUTE': 'windows'})[1])
+        self.assertEqual((plan['mode'], plan['images'], plan['where']['shown']), ('windows', {}, str(CB.H.PY312)))
+
+    def test_scores_keeps_the_districts_demo_key_and_stops_without_one(self):
+        with self.assertRaises(SystemExit) as stop:
+            self.run_main(environ={'TERRIER_DEMO_KEY': ''}, key_file=self.root / 'no-key-here')
+        self.assertIn('demo key', str(stop.exception))
+        self.assertEqual(self.calls, [])
+        kept = self.root / 'district'
+        kept.mkdir()
+        (kept / '.demo-key').write_bytes(bytes.fromhex(self.KEY))
+        self.assertEqual(self.run_main(environ={'TERRIER_DEMO_KEY': ''}, key_file=kept, out='kept')[0], 0)
+        self.assertEqual(self.calls[-1][-1], self.KEY)                          # the build starts from the key that is there
+        self.assertEqual(self.run_main(environ={'TERRIER_DEMO_KEY': 'ab' * 32}, key_file=kept, out='given')[0], 0)
+        self.assertEqual(self.calls[-1][-1], 'ab' * 32)                         # a key that is given wins
+        self.assertEqual(self.run_main('--steps', 'roads,street,contacts', environ={'TERRIER_DEMO_KEY': ''}, key_file=self.root / 'none',
+                                       out='geo')[0], 0)
+        self.assertFalse(self.calls[-1][-1])                                    # no scores step: no key needed, none set
+
+    def test_refusals_a_local_folder_a_folder_with_files_and_an_unknown_step(self):
+        (self.root / 'full').mkdir()
+        (self.root / 'full' / 'file').write_text('x')
+        env = {'TERRIER_BUILD_IMAGE': EXPLICIT, 'TERRIER_SCORE_IMAGE': SCORE_EXPLICIT}
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in (['--out', str(self.root / '.local' / 'x')], ['--out', str(self.root / 'full')],
+                         ['--out', str(self.root / 'new'), '--steps', 'nope'], ['--out', str(self.root / 'new'), '--steps', '']):
+                with mock.patch.dict(os.environ, env), self.assertRaises(SystemExit) as stop:
+                    CB.main(argv)
+                self.assertEqual(stop.exception.code, 2, argv)
+
+    def test_a_build_that_exits_cleanly_without_its_files_is_a_failure_with_no_receipt(self):
+        code, text = self.run_main(environ={'TERRIER_DEMO_KEY': self.KEY}, write=False)
+        self.assertEqual(code, 1)
+        self.assertFalse((self.root / 'out' / 'compute_build_receipt.json').exists())
+        self.assertNotIn('BUILD OK', text)
 
 
 if __name__ == '__main__':

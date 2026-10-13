@@ -39,8 +39,9 @@ class Step(NamedTuple):
     demo_key: bool = False      # makes a random .demo-key in the data directory when there is none (see seed_demo_key)
 
 
-# The tools' plain `--district` command lines, in the order Terrier's Windows runner (_build/run_nowithhold.ps1) runs them: roads,
-# street and contacts (work venv), then shown and scores (system Python 3.12: pandas and pyarrow, which the work venv has not).
+# The tools' plain `--district` command lines, in the order of the build chain: roads, street and contacts (work venv; the untracked
+# _build/run_remaining.ps1 runs them as R2-R4), then shown and scores (system Python 3.12: pandas and pyarrow, which the work venv has
+# not; _build/run_nowithhold.ps1 runs those two). tools/compute_build.py runs the whole chain, in the containers unless TERRIER_COMPUTE=windows.
 STEPS = {
     'roads': Step('tools/build_road_context.py', 'roads.sqlite3'),
     'street': Step('tools/build_street.py', 'street.sqlite3', salt=True),

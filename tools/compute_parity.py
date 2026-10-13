@@ -115,13 +115,15 @@ FTS_SHADOWS = ('_data', '_idx', '_docsize', '_config', '_content')       # the s
 MATCH_QUERIES = 400
 
 
-def fts5_tables(path):
-    """{FTS5 table: [its shadow tables]} of a store, read from its schema."""
+def fts5_tables(path, rebuildable=False):
+    """{FTS5 table: [its shadow tables]} of a store, read from its schema. `rebuildable` leaves out the contentless ones (content=''):
+    they keep no text to rebuild the index from, so only an exact comparison of their shadow tables is possible."""
     with closing(B.open_readonly(path)) as connection:
         master = connection.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'").fetchall()
     names = {name for name, _sql in master}
-    return {name: [name + s for s in FTS_SHADOWS if name + s in names]
-            for name, sql in master if re.search(r'\bUSING\s+fts5\b', sql or '', re.IGNORECASE)}
+    return {name: [name + s for s in FTS_SHADOWS if name + s in names] for name, sql in master
+            if re.search(r'\bUSING\s+fts5\b', sql or '', re.IGNORECASE)
+            and not (rebuildable and re.search(r'''\bcontent\s*=\s*(''|"")''', sql, re.IGNORECASE))}
 
 
 def rebuilt_shadows(label, path, fts, shadows, work):
@@ -155,7 +157,11 @@ def match_answers(path, fts, words):
 
 def fts_parity(paths, fts, shadows):
     """(ok, detail) for the FTS5 table `fts` in the stores `paths` {label: path}, 'A1' among them: (i) its shadow tables are equal after
-    FTS5 'rebuild' by one library on scratch copies, and (ii) MATCH_QUERIES MATCH queries return the same rowids on the stores as built."""
+    FTS5 'rebuild' by one library on scratch copies, and (ii) MATCH_QUERIES MATCH queries return the same rowids on the stores as built.
+    A contentless table cannot be rebuilt, so it is not comparable this way and fails (its shadow tables are exactly equal, or they are not)."""
+    if fts not in fts5_tables(paths['A1'], rebuildable=True):
+        return False, ('FTS5 %s is contentless: it cannot be rebuilt, so its shadow tables must be exactly equal and they are not, '
+                       'in table(s): %s' % (fts, ', '.join(shadows)))
     with tempfile.TemporaryDirectory(prefix='fts5-rebuild-', ignore_cleanup_errors=True) as work:
         rebuilt = {label: rebuilt_shadows(label, path, fts, shadows, work) for label, path in paths.items()}
     words = query_words(paths['A1'], fts)
@@ -173,9 +179,9 @@ def change_one_indexed_name(path):
     """Negative control for FTS5: add a word to one indexed value (the last row of the first FTS5 table) and bring the index in line with
     it, so the stored text and the index, as built and as rebuilt, differ from the Windows build. Returns (FTS5 table, table holding the
     text, column)."""
-    fts = next(iter(fts5_tables(path)), None)
+    fts = next(iter(fts5_tables(path, rebuildable=True)), None)
     if fts is None:
-        raise ValueError('no FTS5 table in %s' % path)
+        raise ValueError('no FTS5 table with content in %s' % path)
     with closing(sqlite3.connect(path)) as connection, connection:
         sql = connection.execute('SELECT sql FROM sqlite_master WHERE name = ?', (fts,)).fetchone()[0]
         column = connection.execute('PRAGMA table_info(%s)' % B.quote(fts)).fetchone()[1]
@@ -395,6 +401,26 @@ def manifest_image(name):
     return image
 
 
+def resolve_images(toolchains, explicit, fail):
+    """({toolchain: image}, {toolchain: 'explicit' | 'manifest'}) for `toolchains`: the digest in `explicit` ({toolchain: ref or None}) when
+    there is one, else the verified release manifest's. `fail(message)` stops on an image that is not pinned by digest."""
+    images, sources = {}, {}
+    for toolchain in toolchains:
+        images[toolchain], sources[toolchain] = ((explicit[toolchain], 'explicit') if explicit[toolchain]
+                                                 else (manifest_image(IMAGE_NAMES[toolchain]), 'manifest'))
+        if '@sha256:' not in images[toolchain]:
+            fail('the %s image (%s) must be pinned by digest: ghcr.io/pjg93-222/%s@sha256:...' % (
+                toolchain, '--image or $TERRIER_BUILD_IMAGE' if toolchain == 'geo' else '--score-image or $TERRIER_SCORE_IMAGE',
+                IMAGE_NAMES[toolchain]))
+    return images, sources
+
+
+def store_names(district, steps, extra=()):
+    """The files a run of `steps` leaves in the data folder, relative to the folder that holds the stores (co-05: the folder itself)."""
+    sub = D.data_dir(district, Path('.'))
+    return [(sub / f).as_posix() for f in [f for s in steps for f in (S.STEPS[s].store, *S.STEPS[s].also)] + list(extra)]
+
+
 def docker_exe():
     docker = shutil.which('docker')
     if not docker:
@@ -509,20 +535,10 @@ def main(argv=None):
     images, sources = {}, {}
     if not args.skip_container:
         explicit = {'geo': args.image, 'score': args.score_image}
-        for toolchain in toolchains:
-            if args.reuse_container and not explicit[toolchain]:
-                continue                                       # a judgement of finished builds needs no image
-            images[toolchain], sources[toolchain] = ((explicit[toolchain], 'explicit') if explicit[toolchain]
-                                                     else (manifest_image(IMAGE_NAMES[toolchain]), 'manifest'))
-        for toolchain, image in images.items():
-            if '@sha256:' not in image:
-                parser.error('the %s image (%s) must be pinned by digest: ghcr.io/pjg93-222/%s@sha256:...' % (
-                    toolchain, '--image or $TERRIER_BUILD_IMAGE' if toolchain == 'geo' else '--score-image or $TERRIER_SCORE_IMAGE',
-                    IMAGE_NAMES[toolchain]))
+        # a judgement of finished builds needs no image: only the ones that are given are recorded
+        images, sources = resolve_images([t for t in toolchains if explicit[t] or not args.reuse_container], explicit, parser.error)
     d = D.get(args.district)
-    sub = D.data_dir(d, Path('.'))                      # co-05: the folder itself; another district: its folder below it
-    names = [(sub / f).as_posix() for s in steps for f in (S.STEPS[s].store, *S.STEPS[s].also)]
-    names += [(sub / f).as_posix() for f in args.files.split(',') if f]
+    names = store_names(d, steps, [f for f in args.files.split(',') if f])
     folders = {label: scratch / label for label in ('A1', 'A2', 'B')}
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     report = {'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources,
@@ -585,8 +601,8 @@ def main(argv=None):
                 found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control), table, before[name])
                 verdict('negative control ' + name + ' (value)', found, 'one %s.%s value changed (%s): %s' % (
                     table, column, step, 'detected' if found else 'NOT detected'))
-                fts = fts5_tables(folders['B'] / name)
-                if fts:                                     # the FTS5 comparison itself must catch a changed indexed name
+                fts = fts5_tables(folders['B'] / name, rebuildable=True)
+                if fts:                                  # the FTS5 comparison itself must catch a changed indexed name
                     shutil.copyfile(folders['B'] / name, target)
                     index, text, column = change_one_indexed_name(target)
                     found = not fts_parity({'A1': folders['A1'] / name, 'B': target}, index, fts[index])[0]
