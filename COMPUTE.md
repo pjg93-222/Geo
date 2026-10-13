@@ -3,10 +3,14 @@
 D-173 / D-177: Terrier's store builds run in a container and are proven content-identical to the Windows build before they
 replace it. Design: `COMPUTE_CONTAINERS_DESIGN.md` (sections 1.1, 2.1, 4, 6). This file is the runbook. HOSTED.md is the serve side.
 
-**Status (2026-10-12, evening):** Docker Desktop 4.95.0 (WSL2 backend, engine 29.8.2) is installed. `roads`, `street` and `contacts` (CO-05)
-have run in the container and passed parity against the Windows build, on a LOCAL build of both images from e60d68e: the CI images of
-release v2026.10.12.8 are private in GHCR and an anonymous pull is refused (`unauthorized`), so their digests are not yet compared
-with the local ones. The export goes through a named volume by default (section 5); `--export-bind` opts out. Section 5 lists what the other steps need.
+**Status (2026-10-13):** Docker Desktop 4.95.0 (WSL2 backend, engine 29.8.2) is installed. The full CO-05 chain `roads,street,contacts,shown,scores`
+has run twice on Windows (A1, A2) and once in the containers (B), on LOCAL builds of both images from e60d68e (`terrier-build@sha256:62d17090...`,
+`terrier-build-score@sha256:9f0c4fe5...`): the CI images of release v2026.10.12.8 are private in GHCR and an anonymous pull is refused
+(`unauthorized`), so their digests are not yet compared with the local ones. `roads`, `street`, `contacts`, `shown` (CSV and manifest, byte for
+byte, sha256 `a0e96d47...` = the live table) PASS. `scores` is exact in every table (person, evidence, household, street_household, demo_name,
+metadata apart from `built_utc` and `w1.seconds`, ... : no float differs, 0 ULP) except the two FTS5 shadow tables `demo_search_data` and
+`demo_search_idx`, which hold the physical layout of the demo-name search index and differ because the SQLite libraries differ (section 7); a
+ruling on that rule is open. The export goes through a named volume by default (section 5); `--export-bind` opts out.
 
 ## 1. What is where
 
@@ -124,6 +128,10 @@ so the harness reports the check's own verdict, not a count).
   seconds on a volume. `--export-bind` (adds `compute.export-bind.compose.yaml`) restores the bind export; use it only where the folder is
   on a native file system (a Linux host). Measured 2026-10-12 (machine loaded by other jobs): street + contacts, A1 ~11 min,
   A2 ~9 min, B build ~21 min, export 31 s, comparison with both negative controls ~17 min (street alone: 6 min to digest three copies).
+  Measured 2026-10-13 for the full chain (Glass Box `build step finished`, seconds; A1 / A2 / B): roads 10 / 9 / 11, street 223 / 328 / 708,
+  contacts 96 / 138 / 1250 (B ran while other jobs loaded the machine), shown 31 / 22 / 28, scores 261 / 128 / 170. A1 + A2 took 39 min with
+  the comparison of the two; B 36 min to the export. The comparison of B (integrity check and digest of three copies per store) took about
+  90 min on a loaded machine: scores alone one hour.
 - `shown` and `scores` are wired (`--steps roads,street,contacts,shown,scores`). Windows A runs use the system Python 3.12 (`--score-python`,
   `$TERRIER_PY312`; the same one `_build/run_nowithhold.ps1` calls `$PY312`), isolated as the tools' own docstrings say
   (`PYTHONPATH` unset, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`). Compose parses every service, so both image variables are always
@@ -156,14 +164,21 @@ so the harness reports the check's own verdict, not a count).
 
 ## 7. Known gaps
 
-- Run under Docker so far: the `geo` image built locally from e60d68e and `roads`, `street`, `contacts` of CO-05 (parity PASS). Not
-  yet run: the `score` image on a real step, `walk`, `shown`, `scores`, `density`, the bundle and `--api`. The CI job itself has run
+- FTS5 shadow tables: `scores.sqlite3` has `demo_search` (FTS5, external content `demo_name`). Its shadow tables `demo_search_data` and
+  `demo_search_idx` are the physical segment layout of the index: the `score` image's Debian SQLite 3.40.1 lays them out differently from the
+  Windows SQLite 3.49.1 for the same names, so a strict table comparison fails on exactly those two tables. Evidence that the logical index is
+  the same (2026-10-13): `demo_name`, `demo_search` (the virtual table's own rows) and `demo_search_docsize` are equal; 400 of 400 FTS5 `MATCH`
+  queries return the same row sets on A1 and B; after `INSERT INTO demo_search(demo_search) VALUES('rebuild')` run by one library on copies of both,
+  the shadow tables are equal (and A1's original already equals the rebuilt form). The harness still reports the FAIL: treating FTS5 shadow
+  tables as physical (compared by the rebuild-canonical form) is a change of the D-177 standard and is not made here.
+- Run under Docker so far: both images built locally from e60d68e and `roads`, `street`, `contacts`, `shown`, `scores` of CO-05 (parity
+  above). Not yet run: `walk`, `density`, the bundle and `--api`. The CI job itself has run
   (v2026.10.12.8) but its images were not pulled; compare their digests with a local build only after the registry login that is Paul's.
 - `tools/luna_district` (OR/CT phase 3, T6) still calls `ctypes.windll` without a POSIX branch (`common.available_ram_gb`,
   `peak_working_set_gb`); the seams are in, the container does not run it. `build_walk.py` and `build_scores_v3.py` already degrade.
 - The images' Debian SQLite (the `geo` image is Debian 13, the `score` image Debian 12 with 3.40.1) differs from the host's (3.53.1 in
-  `work\.venv`, 3.49.1 system): store bytes can never be identical, which is why the gate is logical. A table-level variance mask is coarse: a stamp inside a table that also holds real
-  values (for example `scores.metadata`) hides the whole table; refine with a column mask once a Windows A1/A2 pair shows what varies.
+  `work\.venv`, 3.49.1 system): store bytes can never be identical, which is why the gate is logical. Any other table that differs between A1 and A2 is still left out whole (the A1/A2 pair of the full chain showed
+  only `street.metadata[created_at_utc]` and `scores.metadata[built_utc, w1.seconds]`, which the key-level mask now names).
 - The score image's package set is the design's list (numpy, pandas, pyarrow, scipy, joblib); if `shown_areas` or the rowfw children
   import anything else, add it to `requirements.score.in` and regenerate the lock.
 - `current.py` (the manifest reader) is Melange's `ops/release_lib/current.py`. Until a signed release names `terrier-build` (the Geo workflow
