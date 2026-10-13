@@ -1,7 +1,10 @@
 # Terrier compute runs on the laptop: build a district's stores in the terrier-build container (Docker Desktop, WSL2 backend).
 # Inputs are mounted READ-ONLY, each as narrowly as it can be; a build writes only to the `stage` volume (ext4 inside the Docker
 # VM, so SQLite is never written over the Windows file share); the stores leave the volume through `terrier-export`, which copies
-# them to a scratch folder with an integrity check. The live Terrier .local is never mounted. No network. See COMPUTE.md.
+# them, with an integrity check, into a second named volume (`export_out`, also ext4: the check never crosses the file share either).
+# tools/compute_parity.py makes that volume, `docker cp`s the files to the scratch folder and removes it. The live Terrier .local is
+# never mounted. No network. See COMPUTE.md. Native-Linux hosts can export straight into a bind-mounted folder instead:
+# `compute_parity.py --export-bind` adds compute.export-bind.compose.yaml, which swaps the /out mount for a bind of $HOST_OUT.
 #
 #   tools/compute_parity.py drives this file (it sets HOST_REPO, HOST_OUT, RUN_ID and TERRIER_BUILD_IMAGE). By hand:
 #   TERRIER_BUILD_IMAGE=ghcr.io/pjg93-222/terrier-build@sha256:<digest> HOST_REPO=C:/Users/pgoff/worktrees/dep-terrier-build \
@@ -92,11 +95,14 @@ services:
         source: stage
         target: /stage
         read_only: true
-      - type: bind
-        source: ${HOST_OUT:?the scratch folder the stores are exported to}
+      # the exported copies; the volume must exist and belong to uid 10001 (compute_parity.export_via_volume does both)
+      - type: volume
+        source: export_out
         target: /out
-        bind: {create_host_path: false}
     command: ["export", "/out"]
 
 volumes:
   stage:
+  export_out:
+    external: true
+    name: terrier-export-${RUN_ID:?set RUN_ID, the run id of this export}

@@ -1,0 +1,12 @@
+# Opt-out override of compute.compose.yaml for `tools/compute_parity.py --export-bind`: terrier-export writes /out straight into the
+# bind-mounted scratch folder ($HOST_OUT) instead of the default named volume. Use it only where that folder is on a native file
+# system (a Linux host). On Docker Desktop the folder is a Windows share (9p): SQLite's open, PRAGMA integrity_check and rename then
+# crawl (over 40 minutes on the 731 MB street store, against seconds on a volume). Compose merges `volumes` by target, so this
+# replaces the /out volume mount only; the default file's `export_out` volume is then unused, and `docker compose config` drops it.
+services:
+  terrier-export:
+    volumes:
+      - type: bind
+        source: ${HOST_OUT:?the scratch folder the stores are exported to}
+        target: /out
+        bind: {create_host_path: false}

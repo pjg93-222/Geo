@@ -6,7 +6,7 @@ replace it. Design: `COMPUTE_CONTAINERS_DESIGN.md` (sections 1.1, 2.1, 4, 6). Th
 **Status (2026-10-12, evening):** Docker Desktop 4.95.0 (WSL2 backend, engine 29.8.2) is installed. `roads`, `street` and `contacts` (CO-05)
 have run in the container and passed parity against the Windows build, on a LOCAL build of both images from e60d68e: the CI images of
 release v2026.10.12.8 are private in GHCR and an anonymous pull is refused (`unauthorized`), so their digests are not yet compared
-with the local ones. Street and contacts need `--export-volume` (section 5). Section 5 lists what the other steps need.
+with the local ones. The export goes through a named volume by default (section 5); `--export-bind` opts out. Section 5 lists what the other steps need.
 
 ## 1. What is where
 
@@ -15,7 +15,8 @@ with the local ones. Street and contacts need `--export-volume` (section 5). Sec
 | `tools/hostpaths.py` | every machine path a build tool used to hard-code, as an environment variable (section 2). Defaults are today's Windows paths, so the laptop builds as before |
 | `tools/build_step.py` | `run <step> --district d` / `export <out> <files>` / `fingerprint`. The container entrypoint, and also what the Windows side runs, so both sides take the same code path |
 | `Dockerfile.build` | the toolchain, no code and no data: target `geo` (CPython 3.12.14, = `work\.venv`; `python:3.12.14-slim-trixie`) and target `score` (CPython 3.12.10, = system Python; still `python:3.12.10-slim-bookworm`, because the registry has no 3.12.10 trixie image); both apply Debian's security updates at build, hashed locks `requirements.build.lock` / `requirements.score.lock` |
-| `compute.compose.yaml` | services `terrier-build` (network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume) and `terrier-export` (copies stores from the volume to a scratch folder) |
+| `compute.compose.yaml` | services `terrier-build` (network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume) and `terrier-export` (copies stores from the `stage` volume into a second named volume, `terrier-export-<run id>`, with an integrity check; the harness `docker cp`s them to the scratch folder and removes it) |
+| `compute.export-bind.compose.yaml` | opt-out override (`--export-bind`): `terrier-export` writes `/out` into the bind-mounted scratch folder instead of the volume. Native-Linux hosts only |
 | `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact |
 | `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release |
 | `.github/workflows/release.yml` job `scan` + `tools/image_gate.py` | trivy on `terrier-web`, `terrier-build` and `terrier-build-score` by digest, the platform's image policy (D-181, D-182: fixable HIGH/CRITICAL vulnerabilities, misconfigurations, secrets and pip/npm licences that are forbidden, restricted or unknown block; unfixed vulnerabilities and OS-package licences are reported). The draft release waits for it. Tests: `tools/test_image_gate.py` |
@@ -100,11 +101,13 @@ so the harness reports the check's own verdict, not a count).
 - `street` and `contacts` are wired: `--steps roads,street,contacts`. Live sizes: street 713 MB, contacts 207 MB. Windows times
   (from `_build/run_remaining.status.jsonl`, CT; CO runs about 1.1x): street 7 min, contacts 3 min; the design estimates 7-10 and 5-7.
   Three runs (A1, A2, B) plus the export is about 45-60 minutes and about 4 GB of disk (3 x 0.94 GB scratch + the stage volume).
-  **Pass `--export-volume`.** Without it `terrier-export` writes `/out` into the bind-mounted Windows scratch folder, and the
-  `PRAGMA integrity_check` that `tools/copy_db.py` runs on the copy then reads the 731 MB street store page by page over Docker
-  Desktop's 9p file share: over 40 minutes with no progress output (the process sits in `p9_client_rpc`) against 31 seconds on a
-  volume. The flag exports into a named volume (`compute.export-volume.compose.yaml`), copies the files out with `docker cp` and
-  removes the volume; the default is unchanged. Measured 2026-10-12 (machine loaded by other jobs): street + contacts, A1 ~11 min,
+  **The export goes through a named volume, by default.** `terrier-export` writes `/out` into a volume (`terrier-export-<run id>`, ext4
+  inside the Docker VM); the harness creates it, gives it to uid 10001, runs the export, `docker cp`s the files into the scratch folder and
+  removes the holder container (`rm -v`) and the volume, also when the export fails. A bind-mounted Windows scratch folder is the slow way:
+  the `PRAGMA integrity_check` that `tools/copy_db.py` runs on the copy reads the 731 MB street store page by page over Docker Desktop's
+  9p file share (4 KB reads at 0.34-0.78 ms; over 40 minutes with no progress output, the process sits in `p9_client_rpc`) against 31
+  seconds on a volume. `--export-bind` (adds `compute.export-bind.compose.yaml`) restores the bind export; use it only where the folder is
+  on a native file system (a Linux host). Measured 2026-10-12 (machine loaded by other jobs): street + contacts, A1 ~11 min,
   A2 ~9 min, B build ~21 min, export 31 s, comparison with both negative controls ~17 min (street alone: 6 min to digest three copies).
 - Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `shown` and `scores` (the **score** image: the
   3.12.10 interpreter), `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
@@ -120,7 +123,8 @@ so the harness reports the check's own verdict, not a count).
 ## 6. Cleanup and rules
 
 - `docker compose -f compute.compose.yaml -p terrier-compute down -v` removes the stage volume (the stores inside are voter-derived).
-  Scratch folders are removed only on Paul's word.
+  Scratch folders are removed only on Paul's word. A killed parity run can leave its export volume and holder behind:
+  `docker rm -v terrier-export-cp-B-<utc>` and `docker volume rm terrier-export-B-<utc>` (`docker volume ls` shows them).
 - Never mount or edit the live `C:\Users\pgoff\Documents\Terrier\outputs\cu-geography-v3\.local`. The compose file has no mount for it,
   and a test fails if `cu-geography-v3` appears in it.
 - No network in a build container (`network_mode: none`). Images run by digest only; the harness refuses a tag.

@@ -332,8 +332,8 @@ class RunTests(unittest.TestCase):
             self.calls.append(('windows', out.name))
             make_store(out / 'roads.sqlite3', ROWS, stamp='w%d' % len(self.calls))
 
-        def container(image, repo, district, steps, out, run_id, names, export_volume=False):
-            self.calls.append(('container', out.name, tuple(names), export_volume))
+        def container(image, repo, district, steps, out, run_id, names, export_bind=False):
+            self.calls.append(('container', out.name, tuple(names), export_bind))
             make_store(out / 'roads.sqlite3', b_rows, stamp='c')
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
@@ -362,13 +362,15 @@ class RunTests(unittest.TestCase):
         self.assertTrue(report['ok'])
         self.assertEqual(report['fingerprint_container'], {'python': 'box'})
 
-    def test_export_volume_is_opt_in(self):
+    def test_the_volume_export_is_the_default_and_export_bind_opts_out(self):
         self.main()
         self.assertIs(self.calls[2][3], False)
         self.calls.clear()
-        code, text = self.main('--export-volume', scratch=self.root / 'scratch2')
+        code, text = self.main('--export-bind', scratch=self.root / 'scratch2')
         self.assertEqual(code, 0, text)
         self.assertIs(self.calls[2][3], True)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):       # the old opt-in flag is gone, loudly
+            self.main('--export-volume', scratch=self.root / 'scratch3')
 
     def test_a_different_container_store_fails_the_run(self):
         code, text = self.main(b_rows=ROWS[:2])
@@ -404,7 +406,7 @@ class RunTests(unittest.TestCase):
 
 
 class ExportViaVolumeTests(unittest.TestCase):
-    """export_via_volume with the docker CLI replaced by a recorder: the order of the calls and the cleanup."""
+    """export_via_volume and container_build with the docker CLI replaced by a recorder: the order of the calls and the cleanup."""
 
     IMAGE = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64
 
@@ -434,7 +436,8 @@ class ExportViaVolumeTests(unittest.TestCase):
         self.assertEqual(calls[0], ['volume', 'create', 'terrier-export-B-1'])
         self.assertIn('10001:10001', calls[1])
         self.assertEqual(calls[1][calls[1].index('--user') + 1], '0')
-        self.assertEqual(calls[2][1:5], ['-f', str(P.COMPOSE_FILE), '-f', str(P.EXPORT_VOLUME_FILE)])
+        self.assertEqual(calls[2][1:3], ['-f', str(P.COMPOSE_FILE)])                       # the default compose file alone: no override
+        self.assertNotIn(str(P.EXPORT_BIND_FILE), calls[2])
         self.assertEqual(calls[2][-5:], ['terrier-export', 'export', '/out', 'street.sqlite3', 'contacts.sqlite3'])
         self.assertEqual(calls[-1], ['volume', 'rm', 'terrier-export-B-1'])
 
@@ -448,15 +451,41 @@ class ExportViaVolumeTests(unittest.TestCase):
             self.export(patches)
         self.assertEqual(calls[-1], ['volume', 'rm', 'terrier-export-B-1'])
 
-    def test_the_override_replaces_only_the_out_mount_of_the_export_service(self):
-        text = (REPO / 'compute.export-volume.compose.yaml').read_text(encoding='utf-8')
+    def build(self, patches, **kwargs):
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            P.container_build(self.IMAGE, Path('repo'), 'co-05', ['street'], Path('out'), 'B-1', ['street.sqlite3'], **kwargs)
+
+    def test_a_container_build_exports_through_a_volume_unless_export_bind_is_given(self):
+        calls, patches = self.record()
+        self.build(patches)
+        self.assertEqual(calls[0][-5:], ['terrier-build', 'run', 'street', '--district', 'co-05'])
+        self.assertEqual([c[:2] for c in calls[1:]], [['volume', 'create'], ['run', '--rm'], ['compose', '-f'], ['create', '--name'],
+                                                      ['cp', 'terrier-export-cp-B-1:/out/.'], ['rm', '-v'], ['volume', 'rm']])
+        self.assertFalse(any(str(P.EXPORT_BIND_FILE) in c for c in calls))
+
+    def test_export_bind_exports_straight_into_the_scratch_folder_with_the_bind_override_and_no_volume(self):
+        calls, patches = self.record()
+        self.build(patches, export_bind=True)
+        self.assertEqual(len(calls), 2)                                                      # the build step, the export: nothing else
+        self.assertEqual(calls[1][1:5], ['-f', str(P.COMPOSE_FILE), '-f', str(P.EXPORT_BIND_FILE)])
+        self.assertEqual(calls[1][-4:], ['terrier-export', 'export', '/out', 'street.sqlite3'])
+        self.assertFalse(any(c[0] in ('volume', 'cp', 'create', 'rm') for c in calls))
+
+    def test_the_default_file_exports_into_a_named_volume_and_the_bind_override_replaces_only_that_mount(self):
+        default = read('compute.compose.yaml')
+        export = default[default.index('  terrier-export:'):default.index('\nvolumes:')]
+        self.assertEqual(re.findall(r'- type: (\w+)\n\s+source: export_out\n\s+target: /out', export), ['volume'])
+        self.assertNotIn('HOST_OUT', re.sub(r'(?m)^\s*#.*$', '', default))                  # the default no longer needs the scratch folder
+        self.assertRegex(default, r'(?m)^  export_out:\n    external: true\n    name: terrier-export-\$\{RUN_ID:\?')
+        text = read('compute.export-bind.compose.yaml')
         body = '\n'.join(l for l in text.splitlines() if not l.lstrip().startswith('#'))
-        self.assertEqual(re.findall(r'^  (\S+):$', body, re.M), ['terrier-export', 'export_out'])      # one service, one volume
-        self.assertEqual(re.findall(r'^\s+- type: (\w+)', body, re.M), ['volume'])
+        self.assertEqual(re.findall(r'^  (\S+):$', body, re.M), ['terrier-export'])           # one service, no volumes of its own
+        self.assertEqual(re.findall(r'^\s+- type: (\w+)', body, re.M), ['bind'])
         self.assertEqual(re.findall(r'^\s+target: (.+)$', body, re.M), ['/out'])
-        self.assertIn('external: true', body)
-        self.assertIn('name: terrier-export-${RUN_ID:?', body)
-        self.assertNotIn('bind', body)
+        self.assertIn('source: ${HOST_OUT:?', body)
+        self.assertNotIn('type: volume', body)
         self.assertNotIn('cu-geography-v3', text)
 
 
