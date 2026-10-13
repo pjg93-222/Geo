@@ -9,8 +9,11 @@ has run twice on Windows (A1, A2) and once in the containers (B), on LOCAL build
 (`unauthorized`), so their digests are not yet compared with the local ones. `roads`, `street`, `contacts`, `shown` (CSV and manifest, byte for
 byte, sha256 `a0e96d47...` = the live table) PASS. `scores` is exact in every table (person, evidence, household, street_household, demo_name,
 metadata apart from `built_utc` and `w1.seconds`, ... : no float differs, 0 ULP) except the two FTS5 shadow tables `demo_search_data` and
-`demo_search_idx`, which hold the physical layout of the demo-name search index and differ because the SQLite libraries differ (section 7); a
-ruling on that rule is open. The export goes through a named volume by default (section 5); `--export-bind` opts out.
+`demo_search_idx`, which hold the physical layout of the demo-name search index and differ because the SQLite libraries differ. Under the D-177 rule
+of 2026-10-13 (section 9: shadow tables are compared by their rebuilt form and by 400 MATCH queries) the finished run was judged again, without a
+rebuild: **all six artifacts PASS, every negative control is detected** (section 9). The full chain is green, so the build is cut over (D-188):
+`tools/compute_build.py` builds in the containers by default and `TERRIER_COMPUTE=windows` is the one fallback (section 8); no production build
+has been run through it yet. The export goes through a named volume by default (section 5); `--export-bind` opts out.
 
 ## 1. What is where
 
@@ -22,12 +25,13 @@ ruling on that rule is open. The export goes through a named volume by default (
 | `compute.compose.yaml` | services `terrier-build` (geo image) and `terrier-score` (score image, `TERRIER_SCORE_IMAGE`; the same mounts, shared through one YAML anchor): network none, read-only root, uid 10001, inputs read-only, writes only the `stage` volume; and `terrier-export` (copies stores from the `stage` volume into a second named volume, `terrier-export-<run id>`, with an integrity check; the harness `docker cp`s them to the scratch folder and removes it) |
 | `compute.export-bind.compose.yaml` | opt-out override (`--export-bind`): `terrier-export` writes `/out` into the bind-mounted scratch folder instead of the volume. Native-Linux hosts only |
 | `tools/compute_parity.py` | the parity run: Windows twice (A1, A2), container once (B), compare, PASS/FAIL per artifact. Each step has a toolchain: roads, street, contacts run in the geo image and, on Windows, the work venv (`--python`); shown, scores in the score image and, on Windows, the system Python 3.12 (`--score-python`, `$TERRIER_PY312`). An image is `--image` / `--score-image`, else `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest (section 3, step 4) |
+| `tools/compute_build.py` | the production build (section 8, D-188): roads, street, contacts, shown, scores of one district into a new folder, in the containers by default, on Windows when `TERRIER_COMPUTE=windows`. Images from `$TERRIER_BUILD_IMAGE` / `$TERRIER_SCORE_IMAGE`, else the verified current release manifest |
 | `.github/workflows/release.yml` job `build-image` | on a `v<YYYY>.<MM>.<DD>.<n>` tag: builds both targets, pushes `ghcr.io/pjg93-222/terrier-build` (geo) and `terrier-build-score` by digest, SBOMs, `terrier-build.digests.json` on the draft release. Job `draft-release` folds both digests into the release's `digests.json`, which the platform's `ops/release.py` reads, so the signed manifest carries them |
 | `.github/workflows/release.yml` job `scan` + `tools/image_gate.py` | trivy on `terrier-web`, `terrier-build` and `terrier-build-score` by digest, the platform's image policy (D-181, D-182: fixable HIGH/CRITICAL vulnerabilities, misconfigurations, secrets and pip/npm licences that are forbidden, restricted or unknown block; unfixed vulnerabilities and OS-package licences are reported). The draft release waits for it. Tests: `tools/test_image_gate.py` |
 | `tools/test_compute.py` | the tests (also in the release workflow's test job) |
 
-Steps wired in `tools/build_step.py`, in the order Terrier's Windows runner (`_build/run_nowithhold.ps1`) runs them, each one row of
-`STEPS`: `roads`, `street`, `contacts` (toolchain `geo`), `shown` (`tools/shown_areas.py --district d`; writes `area_scores_shown.csv`
+Steps wired in `tools/build_step.py`, in the order of the build chain, each one row of `STEPS` (on Windows the untracked `_build/run_remaining.ps1`
+runs roads, street and contacts as R2-R4 and `_build/run_nowithhold.ps1` runs shown and scores; no runner drives the whole chain, section 8): `roads`, `street`, `contacts` (toolchain `geo`), `shown` (`tools/shown_areas.py --district d`; writes `area_scores_shown.csv`
 and its `.manifest.json`) and `scores` (`tools/build_scores_v3.py --district d --receipt <data dir>/scores_receipt.json`; writes
 `scores.sqlite3`; the receipt would otherwise go into the repo's `_build`, which is read-only in a container) (toolchain `score`).
 `shown` and `scores` read the earlier stores (street, contacts, the shown table) from the same folder, so run them after those.
@@ -100,7 +104,9 @@ PARITY PASS: 3 artifact check(s), 0 failed; report ...\smoke-1\parity_report.jso
 
 The negative controls work on copies of B in the scratch folder, never on a live store: per SQLite store one row removed and, separately,
 one stored value changed by its smallest step (a REAL cell by one ULP, else an INTEGER by 1, a TEXT or BLOB in its last bit); per other
-file one bit flipped in the middle. Each must make the comparison FAIL (the line says "detected"). A store is compared exactly (the
+file one bit flipped in the middle; for a store with an FTS5 table that keeps its text (`demo_search`), a third: one name gets a word added with the
+index kept in line, and the FTS5 comparison itself (section 9) must fail. Each must make the comparison FAIL (the line says "detected").
+`--reuse-windows --reuse-container` judges a finished run's A1, A2 and B again, building nothing (for a changed comparison rule). A store is compared exactly (the
 digest hashes `repr` of every cell, which round-trips a float), so a one-ULP change is seen: the harness has no ULP tolerance, and a
 float difference of D-177's "a few ULP" would show as a FAIL naming the table, to be judged by hand.
 
@@ -164,13 +170,8 @@ so the harness reports the check's own verdict, not a count).
 
 ## 7. Known gaps
 
-- FTS5 shadow tables: `scores.sqlite3` has `demo_search` (FTS5, external content `demo_name`). Its shadow tables `demo_search_data` and
-  `demo_search_idx` are the physical segment layout of the index: the `score` image's Debian SQLite 3.40.1 lays them out differently from the
-  Windows SQLite 3.49.1 for the same names, so a strict table comparison fails on exactly those two tables. Evidence that the logical index is
-  the same (2026-10-13): `demo_name`, `demo_search` (the virtual table's own rows) and `demo_search_docsize` are equal; 400 of 400 FTS5 `MATCH`
-  queries return the same row sets on A1 and B; after `INSERT INTO demo_search(demo_search) VALUES('rebuild')` run by one library on copies of both,
-  the shadow tables are equal (and A1's original already equals the rebuilt form). The harness still reports the FAIL: treating FTS5 shadow
-  tables as physical (compared by the rebuild-canonical form) is a change of the D-177 standard and is not made here.
+- FTS5 shadow tables: settled by the D-177 rule of 2026-10-13, section 9. A contentless FTS5 table (`contacts.sqlite3`'s `search`) cannot be rebuilt, so its shadow
+  tables must still be exactly equal; they were in the finished run.
 - Run under Docker so far: both images built locally from e60d68e and `roads`, `street`, `contacts`, `shown`, `scores` of CO-05 (parity
   above). Not yet run: `walk`, `density`, the bundle and `--api`. The CI job itself has run
   (v2026.10.12.8) but its images were not pulled; compare their digests with a local build only after the registry login that is Paul's.
@@ -184,3 +185,96 @@ so the harness reports the check's own verdict, not a count).
 - `current.py` (the manifest reader) is Melange's `ops/release_lib/current.py`. Until a signed release names `terrier-build` (the Geo workflow
   must run on a `v*` tag with the folded `digests.json`) and that script is in the Melange tree at the default path, the harness stops unless
   `--image` or `$TERRIER_BUILD_IMAGE` names a digest.
+
+## 8. The production build (cut-over, D-188)
+
+D-188: switch when the parity run is green, keep a one-flag Windows fallback. The full CO-05 chain is green under the FTS5 rule of D-177 (section 9),
+so `tools/compute_build.py` is the build of the five stores of a district, and it runs in the containers unless told otherwise.
+
+**What it is.** One command builds `roads`, `street`, `contacts`, `shown` and `scores` of a district, in that order, into a NEW folder (`--out`; never a
+`.local` folder, and it must be empty). In the container mode each step runs in the compose service of its toolchain (`terrier-build`, the geo image:
+roads, street, contacts; `terrier-score`, the score image: shown, scores), all in one stage volume, and the stores leave the volume through the named export
+volume and `docker cp` (section 5), the harness's own `container_build`. The files are the same six that the parity run compares: `roads.sqlite3`,
+`street.sqlite3`, `contacts.sqlite3`, `area_scores_shown.csv`, `area_scores_shown.manifest.json`, `scores.sqlite3` (co-05: in `--out` itself; another
+district: in its folder below it). `compute_build_receipt.json` beside them names the mode, the images and where each came from, the run id and the
+interpreter and library versions of the side that built. The tool does not put anything live: Paul's swap (`_build\swap_co_live.ps1` for Colorado) does.
+
+**The switch.** `TERRIER_COMPUTE` unset, empty or `container`: the containers. `TERRIER_COMPUTE=windows`: the fallback, the same steps on the laptop with the
+work venv (geo steps) and the system Python 3.12 (score steps), exactly the way the A runs of the parity run build them (`build_step.py run`, into the same
+`--out`). Any other value stops before anything runs. There is no other switch: no flag, no per-step choice. The images are not read in `windows` mode.
+
+**Images.** `$TERRIER_BUILD_IMAGE` and `$TERRIER_SCORE_IMAGE`, each pinned by digest (a tag is refused), while no signed release names the build images; when a variable
+is empty, the digest the laptop's verified current release manifest names (Melange `ops\release_lib\current.py image terrier-build` and
+`terrier-build-score`; no verified answer stops the run, there is no guess). Until the manifest names them, the values are the local builds of e60d68e that the
+parity run used. The environment variable is the only place they are set; nothing here sets one for the machine or the user.
+
+**The demo key.** `scores` derives every demo name, their search index and `metadata.demo_key` from the district's `.demo-key`, and makes a random one when there
+is none, which would change every name. So `compute_build.py` starts the build from `$TERRIER_DEMO_KEY` (64 hex digits) or else the district's own `.demo-key` in
+its data folder (`<repo>\.local\.demo-key` for Colorado; read, never printed or written to a log or the receipt; it reaches the build container as an environment
+variable, as the throwaway key of the parity run did), and stops when it has neither. In `windows` mode
+the key is also written to `--out\.demo-key` (build_step.seed_demo_key); treat that folder like `.local`.
+
+**Run it** (PowerShell, from the checkout that holds the district's `.local`; Docker Desktop running; the machine idle, as for the smoke in section 4):
+
+```powershell
+Set-Location C:\Users\pgoff\Documents\Terrier\outputs\cu-geography-v3
+$py = 'C:\Users\pgoff\Documents\Terrier\work\.venv\Scripts\python.exe'
+$env:TERRIER_BUILD_IMAGE = 'ghcr.io/pjg93-222/terrier-build@sha256:62d170907fadbd1cb6535795dc333ffe4f98cbdbb6398d76f7602f89666e40c1'
+$env:TERRIER_SCORE_IMAGE = 'ghcr.io/pjg93-222/terrier-build-score@sha256:9f0c4fe5cde759ac474c80dcd5bbdb84b17731052fb7b4ed3eda779684195b55'
+& $py tools\compute_build.py --district co-05 --out C:\Users\pgoff\terrier-builds\co-05-<date> --plan     # prints the mode, the service and image of each step; starts nothing
+& $py tools\compute_build.py --district co-05 --out C:\Users\pgoff\terrier-builds\co-05-<date>           # roads to scores: 36 minutes to the export when measured, on a loaded machine
+```
+
+**Fall back to Windows** (one variable, the same command line):
+
+```powershell
+$env:TERRIER_COMPUTE = 'windows'
+& $py tools\compute_build.py --district co-05 --out C:\Users\pgoff\terrier-builds\co-05-<date>-win
+Remove-Item Env:TERRIER_COMPUTE        # back to the containers
+```
+
+The stage volume keeps the run's stores (voter-derived) until `docker compose -f compute.compose.yaml -p terrier-compute down -v` (section 6); the export volume is removed by the tool.
+Run the chain from `roads`: a later step reads the stores of the earlier ones from the same stage volume, so `--steps shown,scores` alone finds no `street.sqlite3`
+in a container (it is not seeded from `.local`, which is never mounted). A one-step Windows build is still `build_step.py run <step>` with `TERRIER_LOCAL_DIR` set.
+
+**What was not changed.** The `_build\*.ps1` runners are in the ignored `_build\` folder (`.gitignore`: `_build/`): none is tracked in git, and none drives roads to scores
+(`run_remaining.ps1` and `run_fast.ps1` run roads, street, contacts and walk as R2-R5; `run_nowithhold.ps1` runs shown, scores, ingest, extend, bundle, import and density).
+They were not edited and still run today's Windows path, so a run of one of them is a Windows build whatever `TERRIER_COMPUTE` says. `tools/compute_build.py` is the tracked
+production entry. Walk, density and the bundle are not containerised yet (section 7).
+
+## 9. The FTS5 rule and the full-chain verdict (D-177, 2026-10-13)
+
+**The rule** (Claude, 2026-10-13, under D-177's content-level equivalence; Paul may overrule). The shadow tables of an FTS5 table (`<fts>_data`, `_idx`, `_docsize`,
+`_config`, `_content`) are physical index structures, not data: the SQLite library that writes them decides their layout. `compute_parity.compare_store` still compares every
+other table exactly. When the shadow tables of an FTS5 table are not exactly equal in A1 and B (and everything else already matches), `fts_parity` compares them two ways, and
+both must hold: (i) rebuild-canonical form: on scratch copies of both sides (system temp, removed again), `INSERT INTO <fts>(<fts>) VALUES('rebuild')` with ONE SQLite
+library (the harness interpreter's), then the shadow tables must be exactly equal; (ii) identical MATCH results on the stores as built: 400 queries, the same for every side
+(the words of more than two letters in A1's indexed text, sorted, shuffled with seed 7, the first 400, each asked as a quoted phrase), the same rowids. If A2's shadow tables
+differ from A1's, A2 is rebuilt and compared too. A contentless table (`content=''`, `contacts.sqlite3`'s `search`) cannot be rebuilt: its shadow tables must be exactly equal or
+the store fails. Nothing else is relaxed: a table that only looks like a shadow (`thing_data`) stays exact, and so does the virtual table's own rows.
+
+**Negative control.** `change_one_indexed_name` adds a word to one indexed name in a copy of B and brings the index in line with it (external content: `rebuild`; own content:
+the UPDATE does it). The FTS5 comparison itself must fail, not only the exact comparison of `demo_name`. On the real stores it does, in (i): `demo_search_data` and
+`demo_search_docsize` differ after the rebuild. (ii) alone would not catch it (the 400 sampled words do not include the new one: 400 of 400 identical), which is why (i) is the rule's
+main test and (ii) the guard against an index that disagrees with its text. The unit tests also build an index that is stale against its text (equal after a rebuild, caught by
+(ii)).
+
+**Evidence** (the finished full-chain run of 2026-10-13, judged again without rebuilding anything: `compute_parity.py --reuse-windows --reuse-container --negative-control`
+at cba5e34, report `parity_report.json` in the run's scratch folder; the images are the local builds above, `terrier-build` fingerprint python 3.12.14 / SQLite 3.46.1,
+`terrier-build-score` python 3.12.10 / SQLite 3.40.1, Windows 3.53.1 / 3.49.1):
+
+| Shadow table of `demo_search` | rows | A1 = A2 | A1 = B |
+|---|---|---|---|
+| `demo_search_data` | 901 | yes (sha256 801885c7...) | no (B: 96028988...) |
+| `demo_search_idx` | 1,026 | yes (74cfcf55...) | no (B: 44fd9f4d...) |
+| `demo_search_docsize` | 491,308 | yes | yes (4ec835e6...) |
+| `demo_search_config` | 1 | yes | yes |
+| `demo_search` (the table's own rows, read through `demo_name`) | 491,308 | yes | yes (b457ea94...) |
+
+After `rebuild` by SQLite 3.53.1 on copies of A1 and B the shadow tables are equal (9 s for the whole comparison), and 400 of 400 MATCH queries return the same rowids. `contacts.sqlite3`
+has a contentless FTS5 table, `search`; its shadow tables are exactly equal in A1 and B, so no rebuild is needed.
+
+**Verdict: PARITY PASS, 17 of 17.** `roads`, `street`, `contacts`, `area_scores_shown.csv`, `area_scores_shown.manifest.json`, `scores.sqlite3` pass; the negative controls are all
+detected: row removed and one value changed by its smallest step in roads, street, contacts and scores (a REAL cell by one ULP in street and scores), one bit flipped in the shown
+table and its manifest, and one changed indexed name in scores. `street.sqlite3` and `scores.sqlite3` do not equal the recorded `co_baseline` fixture (inputs or tools moved since
+2026-10-09; non-gating, as before); the A1/A2/B comparison stands. Left out as run-to-run variance, named: `street.metadata[created_at_utc]`, `scores.metadata[built_utc, w1.seconds]`.

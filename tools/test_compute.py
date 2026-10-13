@@ -1257,6 +1257,13 @@ def pins(text):
 
 
 class BuildImageFilesTests(unittest.TestCase):
+    def test_the_runbook_documents_the_switch_the_images_and_the_demo_key_of_the_production_build(self):
+        text = read('COMPUTE.md')
+        for needed in ('tools/compute_build.py', 'TERRIER_COMPUTE', "$env:TERRIER_COMPUTE = 'windows'", 'TERRIER_BUILD_IMAGE', 'TERRIER_SCORE_IMAGE',
+                       'terrier-build@sha256:62d17090', 'terrier-build-score@sha256:9f0c4fe5', '.demo-key', '_build/', 'none is tracked in git'):
+            self.assertIn(needed, text)
+        self.assertIn('TERRIER_COMPUTE', read('tools/compute_build.py'))
+
     def test_the_geo_lock_is_the_laptop_set_and_every_entry_is_hashed(self):
         lock = read('requirements.build.lock')
         self.assertEqual(pins(lock), pins(read('requirements.lock.txt')))
