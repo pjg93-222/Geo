@@ -332,8 +332,8 @@ class RunTests(unittest.TestCase):
             self.calls.append(('windows', out.name))
             make_store(out / 'roads.sqlite3', ROWS, stamp='w%d' % len(self.calls))
 
-        def container(image, repo, district, steps, out, run_id, names):
-            self.calls.append(('container', out.name, tuple(names)))
+        def container(image, repo, district, steps, out, run_id, names, export_volume=False):
+            self.calls.append(('container', out.name, tuple(names), export_volume))
             make_store(out / 'roads.sqlite3', b_rows, stamp='c')
 
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
@@ -361,6 +361,14 @@ class RunTests(unittest.TestCase):
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
         self.assertTrue(report['ok'])
         self.assertEqual(report['fingerprint_container'], {'python': 'box'})
+
+    def test_export_volume_is_opt_in(self):
+        self.main()
+        self.assertIs(self.calls[2][3], False)
+        self.calls.clear()
+        code, text = self.main('--export-volume', scratch=self.root / 'scratch2')
+        self.assertEqual(code, 0, text)
+        self.assertIs(self.calls[2][3], True)
 
     def test_a_different_container_store_fails_the_run(self):
         code, text = self.main(b_rows=ROWS[:2])
@@ -393,6 +401,63 @@ class RunTests(unittest.TestCase):
             (self.root / 'full' / 'file').write_text('x')
             with self.assertRaises(SystemExit):
                 P.main(['--scratch', str(self.root / 'full'), '--image', 'x@sha256:' + 'a' * 64])
+
+
+class ExportViaVolumeTests(unittest.TestCase):
+    """export_via_volume with the docker CLI replaced by a recorder: the order of the calls and the cleanup."""
+
+    IMAGE = 'ghcr.io/x/terrier-build@sha256:' + 'a' * 64
+
+    def record(self, fail_on=None):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv[1:] if argv[0] == 'docker' else argv)
+            if fail_on and argv[1:3] == fail_on:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, stdout='')
+
+        return calls, [mock.patch.object(P.shutil, 'which', lambda name: 'docker'), mock.patch.object(P.subprocess, 'run', fake_run)]
+
+    def export(self, patches):
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            P.export_via_volume(self.IMAGE, Path('repo'), Path('out'), 'B-1', ['street.sqlite3', 'contacts.sqlite3'])
+
+    def test_the_volume_is_made_owned_by_the_build_user_used_copied_out_and_removed(self):
+        calls, patches = self.record()
+        self.export(patches)
+        self.assertEqual([c[:2] for c in calls], [['volume', 'create'], ['run', '--rm'], ['compose', '-f'], ['create', '--name'],
+                                                  ['cp', 'terrier-export-cp-B-1:/out/.'], ['rm', '-v'],
+                                                  ['volume', 'rm']])
+        self.assertEqual(calls[0], ['volume', 'create', 'terrier-export-B-1'])
+        self.assertIn('10001:10001', calls[1])
+        self.assertEqual(calls[1][calls[1].index('--user') + 1], '0')
+        self.assertEqual(calls[2][1:5], ['-f', str(P.COMPOSE_FILE), '-f', str(P.EXPORT_VOLUME_FILE)])
+        self.assertEqual(calls[2][-5:], ['terrier-export', 'export', '/out', 'street.sqlite3', 'contacts.sqlite3'])
+        self.assertEqual(calls[-1], ['volume', 'rm', 'terrier-export-B-1'])
+
+    def test_a_failed_export_still_removes_the_holder_and_the_volume(self):
+        calls, patches = self.record(fail_on=['cp', 'terrier-export-cp-B-1:/out/.'])
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.export(patches)
+        self.assertEqual([c[:2] for c in calls][-2:], [['rm', '-v'], ['volume', 'rm']])
+        calls, patches = self.record(fail_on=['compose', '-f'])
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.export(patches)
+        self.assertEqual(calls[-1], ['volume', 'rm', 'terrier-export-B-1'])
+
+    def test_the_override_replaces_only_the_out_mount_of_the_export_service(self):
+        text = (REPO / 'compute.export-volume.compose.yaml').read_text(encoding='utf-8')
+        body = '\n'.join(l for l in text.splitlines() if not l.lstrip().startswith('#'))
+        self.assertEqual(re.findall(r'^  (\S+):$', body, re.M), ['terrier-export', 'export_out'])      # one service, one volume
+        self.assertEqual(re.findall(r'^\s+- type: (\w+)', body, re.M), ['volume'])
+        self.assertEqual(re.findall(r'^\s+target: (.+)$', body, re.M), ['/out'])
+        self.assertIn('external: true', body)
+        self.assertIn('name: terrier-export-${RUN_ID:?', body)
+        self.assertNotIn('bind', body)
+        self.assertNotIn('cu-geography-v3', text)
 
 
 # ---- the image, the compose file, the locks, the workflow ------------------------------------------------------------------------

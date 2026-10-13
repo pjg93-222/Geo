@@ -3,8 +3,10 @@
 D-173 / D-177: Terrier's store builds run in a container and are proven content-identical to the Windows build before they
 replace it. Design: `COMPUTE_CONTAINERS_DESIGN.md` (sections 1.1, 2.1, 4, 6). This file is the runbook. HOSTED.md is the serve side.
 
-**Status (2026-10-12):** the code, tests, image definition, compose file and CI job are written and tested on synthetic inputs.
-Nothing has run in a container: Docker Desktop is not installed and no image has been built. Section 5 lists what each step needs.
+**Status (2026-10-12, evening):** Docker Desktop 4.95.0 (WSL2 backend, engine 29.8.2) is installed. `roads`, `street` and `contacts` (CO-05)
+have run in the container and passed parity against the Windows build, on a LOCAL build of both images from e60d68e: the CI images of
+release v2026.10.12.8 are private in GHCR and an anonymous pull is refused (`unauthorized`), so their digests are not yet compared
+with the local ones. Street and contacts need `--export-volume` (section 5). Section 5 lists what the other steps need.
 
 ## 1. What is where
 
@@ -98,6 +100,12 @@ so the harness reports the check's own verdict, not a count).
 - `street` and `contacts` are wired: `--steps roads,street,contacts`. Live sizes: street 713 MB, contacts 207 MB. Windows times
   (from `_build/run_remaining.status.jsonl`, CT; CO runs about 1.1x): street 7 min, contacts 3 min; the design estimates 7-10 and 5-7.
   Three runs (A1, A2, B) plus the export is about 45-60 minutes and about 4 GB of disk (3 x 0.94 GB scratch + the stage volume).
+  **Pass `--export-volume`.** Without it `terrier-export` writes `/out` into the bind-mounted Windows scratch folder, and the
+  `PRAGMA integrity_check` that `tools/copy_db.py` runs on the copy then reads the 731 MB street store page by page over Docker
+  Desktop's 9p file share: over 40 minutes with no progress output (the process sits in `p9_client_rpc`) against 31 seconds on a
+  volume. The flag exports into a named volume (`compute.export-volume.compose.yaml`), copies the files out with `docker cp` and
+  removes the volume; the default is unchanged. Measured 2026-10-12 (machine loaded by other jobs): street + contacts, A1 ~11 min,
+  A2 ~9 min, B build ~21 min, export 31 s, comparison with both negative controls ~17 min (street alone: 6 min to digest three copies).
 - Still to add as rows in `STEPS` (each reads earlier stores from the same folder): `shown` and `scores` (the **score** image: the
   3.12.10 interpreter), `walk` (needs `.walk-salt` copied into the stage first), `density`, and the bundle (`build_bundle_v4.py` writes
   to `--out-dir` and `--receipt`, both outside `TERRIER_LOCAL_DIR`, and imports Django settings: set `CU_DATA_DIR` and `CU_SECRET_KEY` to
@@ -120,8 +128,9 @@ so the harness reports the check's own verdict, not a count).
 
 ## 7. Known gaps
 
-- Nothing here has run under Docker: the Dockerfile, the compose file and the CI job are checked by tests that read them (digests,
-  hashes, mounts, pinned actions) and by YAML parsing, not by a build.
+- Run under Docker so far: the `geo` image built locally from e60d68e and `roads`, `street`, `contacts` of CO-05 (parity PASS). Not
+  yet run: the `score` image on a real step, `walk`, `shown`, `scores`, `density`, the bundle and `--api`. The CI job itself has run
+  (v2026.10.12.8) but its images were not pulled; compare their digests with a local build only after the registry login that is Paul's.
 - `tools/luna_district` (OR/CT phase 3, T6) still calls `ctypes.windll` without a POSIX branch (`common.available_ram_gb`,
   `peak_working_set_gb`); the seams are in, the container does not run it. `build_walk.py` and `build_scores_v3.py` already degrade.
 - The images' Debian SQLite (the `geo` image is Debian 13, the `score` image Debian 12 with 3.40.1) differs from the host's (3.53.1 in

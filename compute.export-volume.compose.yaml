@@ -1,0 +1,16 @@
+# Override of compute.compose.yaml for `tools/compute_parity.py --export-volume`: terrier-export writes /out into a NAMED VOLUME
+# (ext4 inside the Docker VM) instead of the bind-mounted Windows scratch folder. SQLite's open, PRAGMA integrity_check and rename then
+# never cross Docker Desktop's Windows file share (9p): on the 731 MB street store that check ran for over 40 minutes over the bind
+# mount and took seconds on a volume. The harness creates the volume (it must exist and belong to uid 10001), runs the export, copies
+# the files out with `docker cp` and removes the volume. Compose merges `volumes` by target, so this replaces the /out bind only.
+services:
+  terrier-export:
+    volumes:
+      - type: volume
+        source: export_out
+        target: /out
+
+volumes:
+  export_out:
+    external: true
+    name: terrier-export-${RUN_ID:?set RUN_ID, the run id of this export}

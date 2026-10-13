@@ -2,6 +2,7 @@
 
     <venv python> tools/compute_parity.py --scratch <new folder> [--steps roads] [--district co-05]
                   [--image ghcr.io/pjg93-222/terrier-build@sha256:...] [--api] [--negative-control] [--skip-container]
+                  [--export-volume]
 
   A1, A2  the Windows build of the steps, twice, into <scratch>/A1 and <scratch>/A2. What differs between them is the legitimate
           run-to-run variance (a stamp, a run id): those tables, and only those, are left out of the comparison with B
@@ -31,6 +32,7 @@ from tools import districts as D             # noqa: E402
 from tools import hostpaths as H             # noqa: E402
 
 COMPOSE_FILE = REPO / 'compute.compose.yaml'
+EXPORT_VOLUME_FILE = REPO / 'compute.export-volume.compose.yaml'
 STORE_META = ('schema_sha256', 'objects', 'user_version')
 
 
@@ -141,19 +143,49 @@ def windows_fingerprint(python, repo):
                                      check=True, capture_output=True, text=True).stdout)
 
 
-def compose(image, repo, out, run_id, *args, capture=False):
+def docker_exe():
     docker = shutil.which('docker')
     if not docker:
         raise SystemExit('compute_parity: docker is not on PATH (Docker Desktop is not installed or not running)')
+    return docker
+
+
+def compose(image, repo, out, run_id, *args, capture=False, files=()):
     env = {**os.environ, 'TERRIER_BUILD_IMAGE': image, 'HOST_REPO': str(repo), 'HOST_OUT': str(out), 'RUN_ID': run_id}
-    return subprocess.run([docker, 'compose', '-f', str(COMPOSE_FILE), '--profile', 'terrier', *args], env=env, check=True,
-                          capture_output=capture, text=True).stdout
+    overrides = [part for f in files for part in ('-f', str(f))]
+    return subprocess.run([docker_exe(), 'compose', '-f', str(COMPOSE_FILE), *overrides, '--profile', 'terrier', *args], env=env,
+                          check=True, capture_output=capture, text=True).stdout
 
 
-def container_build(image, repo, district, steps, out, run_id, names):
+def export_via_volume(image, repo, out, run_id, names):
+    """The export with /out in a named volume (compute.export-volume.compose.yaml), then `docker cp` into `out`. The volume is
+    created here and given to uid 10001 (a new volume is root's), and is removed again, also when the export fails."""
+    docker, volume, holder = docker_exe(), 'terrier-export-' + run_id, 'terrier-export-cp-' + run_id
+
+    def run(*argv):
+        subprocess.run([docker, *argv], check=True, stdout=subprocess.DEVNULL)
+
+    run('volume', 'create', volume)
+    try:
+        run('run', '--rm', '--pull', 'never', '--network', 'none', '--user', '0', '-v', volume + ':/out', '--entrypoint', 'chown',
+            image, '10001:10001', '/out')
+        compose(image, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names, files=[EXPORT_VOLUME_FILE])
+        run('create', '--name', holder, '--pull', 'never', '--network', 'none', '-v', volume + ':/out:ro', image)
+        try:
+            run('cp', holder + ':/out/.', str(out))
+        finally:
+            run('rm', '-v', holder)
+    finally:
+        run('volume', 'rm', volume)
+
+
+def container_build(image, repo, district, steps, out, run_id, names, export_volume=False):
     for step in steps:
         compose(image, repo, out, run_id, 'run', '--rm', 'terrier-build', 'run', step, '--district', district)
-    compose(image, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names)
+    if export_volume:
+        export_via_volume(image, repo, out, run_id, names)
+    else:
+        compose(image, repo, out, run_id, 'run', '--rm', 'terrier-export', 'export', '/out', *names)
 
 
 def container_fingerprint(image, repo, out, run_id):
@@ -184,6 +216,9 @@ def main(argv=None):
     parser.add_argument('--negative-control', action='store_true', help='also prove the comparison fails when one row is removed')
     parser.add_argument('--skip-container', action='store_true', help='Windows only: learn the run-to-run variance (A1 vs A2)')
     parser.add_argument('--reuse-windows', action='store_true', help='keep an existing <scratch>/A1 and A2 instead of building them again')
+    parser.add_argument('--export-volume', action='store_true',
+                        help='export through a named Docker volume + docker cp, not the bind-mounted scratch folder: required for big '
+                             'stores (SQLite integrity_check over the Windows file share takes tens of minutes on street)')
     args = parser.parse_args(argv)
     steps = [s for s in args.steps.split(',') if s]
     unknown = [s for s in steps if s not in S.STEPS]
@@ -214,7 +249,7 @@ def main(argv=None):
     if not args.skip_container:
         print('B: container build of %s (stage volume %s)' % (', '.join(steps), run_id), flush=True)
         folders['B'].mkdir(parents=True, exist_ok=True)
-        container_build(args.image, args.repo, d['id'], steps, folders['B'], run_id, names)
+        container_build(args.image, args.repo, d['id'], steps, folders['B'], run_id, names, export_volume=args.export_volume)
         report['fingerprint_container'] = container_fingerprint(args.image, args.repo, folders['B'], run_id)
 
     def verdict(name, ok, detail):
