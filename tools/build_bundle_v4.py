@@ -83,6 +83,17 @@ def dumps(value):
     return json.dumps(value, separators=(',', ':'), ensure_ascii=False)
 
 
+def write_zip(path, payload_files):
+    """The bundle's ZIP, byte for byte the same on every platform: members sorted, one fixed stamp, and create_system 3 (ZipInfo says 0 on
+    Windows and 3 elsewhere, so the archive's own headers differed by platform; 3 matches the Unix mode that writestr puts in external_attr)."""
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for name in sorted(payload_files):
+            info = zipfile.ZipInfo(name, date_time=(2026, 10, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            archive.writestr(info, payload_files[name])
+
+
 # ---- inputs ------------------------------------------------------------------------------------------------------
 
 def read_area_table(path):
@@ -290,6 +301,38 @@ def round_coords(coords):
     if isinstance(coords[0], (int, float)):
         return [round(coords[0], ROUND), round(coords[1], ROUND)]
     return [round_coords(c) for c in coords]
+
+
+def start_ring(ring):
+    """A closed ring written from its smallest (x, y), after round_coords: the same ring (orientation and closing point kept), but the GEOS
+    of the platform no longer decides where it starts (Paul 2026-10-13: "Always start at the same point"). A vertex the ring visits twice
+    can be that smallest one: of the starts at it, the one whose rotated ring sorts first, so the result never depends on where it began."""
+    body = ring[:-1]
+    low = min(body)
+    start = min((i for i, point in enumerate(body) if point == low), key=lambda i: body[i:] + body[:i])
+    body = body[start:] + body[:start]
+    return body + [body[0]]
+
+
+def canonical_polygon(rings):
+    """[exterior, *holes] with each ring from start_ring and the holes in the order of their start vertex: GEOS lists the holes of a
+    dissolved polygon in an order of its own (parity 2026-10-13: the same holes, in another order, in the Windows and the container build)."""
+    if not rings:
+        return []
+    exterior, *holes = (start_ring(ring) for ring in rings)
+    return [exterior, *sorted(holes)]
+
+
+def canonical_geometry(geometry):
+    """geometry.json's {level: {id: feature}} with every polygon (each of a multipolygon) from canonical_polygon: the same shapes, but
+    no platform's GEOS decides where a ring starts or in which order the holes come. Precision, key order, the exterior first and the
+    order of the polygons of a multipolygon stay as they were."""
+    def rings(kind, coordinates):
+        if kind == 'Polygon':
+            return canonical_polygon(coordinates)
+        return [canonical_polygon(polygon) for polygon in coordinates]
+    return {level: {ident: {**f, 'geometry': {**f['geometry'], 'coordinates': rings(f['geometry']['type'], f['geometry']['coordinates'])}}
+                    for ident, f in features.items()} for level, features in geometry.items()}
 
 
 def polygons_only(geom):
@@ -587,7 +630,7 @@ def build(args, log):
     key = manifest['snapshot']
     payload_files = {
         'manifest.json': dumps(manifest).encode('utf-8'), 'rows.json': blobs['rows.json'],
-        'geometry.json': dumps(geometry).encode('utf-8'), 'streets.geojson': blobs['streets.geojson'],
+        'geometry.json': dumps(canonical_geometry(geometry)).encode('utf-8'), 'streets.geojson': blobs['streets.geojson'],
         'district.geojson': blobs['district.geojson'],
         'area_indices.json': dumps(area_file).encode('utf-8'), 'adjacency.json': dumps(adjacency).encode('utf-8'),
     }
@@ -597,17 +640,13 @@ def build(args, log):
     out = Path(args.out_dir) / (key + '.zip')
     out.parent.mkdir(parents=True, exist_ok=True)
     temporary = out.with_suffix('.zip.building')
-    with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for name in sorted(payload_files):
-            info = zipfile.ZipInfo(name, date_time=(2026, 10, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, payload_files[name])
+    write_zip(temporary, payload_files)
     zip_sha = sha256_file(temporary)
     if not args.skip_validate:
         box.stage('running', 'validate', 'the app validator on the finished bundle')
         validate_zip(temporary)
     os.replace(temporary, out)
-    Path(str(out) + '.sha256').write_text('%s *%s\n' % (zip_sha, out.name), encoding='ascii')
+    Path(str(out) + '.sha256').write_text('%s *%s\n' % (zip_sha, out.name), encoding='ascii', newline='\n')       # LF on Windows too: the container writes LF
     result = {
         'snapshot': key, 'zip': out.name, 'zip_sha256': zip_sha, 'zip_bytes': out.stat().st_size,
         'base_snapshot': base_key, 'base_zip_sha256': base_sha, 'area_table_sha256': area_sha,

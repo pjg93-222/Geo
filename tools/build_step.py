@@ -82,9 +82,9 @@ STEPS = {
     'bundle': Step('tools/build_bundle_v4.py', 'bundle-out/*.zip', also=('bundle-out/*.zip.sha256',), keep=('bundle_receipt.json',),
                    needs=('area_scores_shown.csv', 'scores.sqlite3', 'extend', '@rowfw'),
                    args=('--base', '{v3zip}', '--out-dir', '{data}/bundle-out', '--receipt', '{data}/bundle_receipt.json'),
-                   env=(('CU_DISTRICT', '{district}'), ('CU_DATA_DIR', '{local}/.cu-validate'), ('CU_SECRET_KEY', 'terrier-build-validate-only')),
-                   held='parity 2026-10-13: geometry.json of the container bundle is not byte-identical to the Windows build (one tract and one precinct '
-                        'polygon start at another vertex; the same polygons), and D-177 keeps the bundle zip byte-identical'),
+                   env=(('CU_DISTRICT', '{district}'), ('CU_DATA_DIR', '{local}/.cu-validate'), ('CU_SECRET_KEY', 'terrier-build-validate-only'))),
+    # bundle was held (`held`) until its parity passed (2026-10-13): the builder now writes every ring from its smallest vertex, the holes in start
+    # order and the zip's headers alike on every platform (COMPUTE.md section 10)
     'density': Step('tools/build_density.py', 'density.json', needs=('scores.sqlite3',)),
 }
 LIBRARIES = ('numpy', 'pandas', 'geopandas', 'shapely', 'pyogrio', 'pyproj', 'pyarrow', 'scipy', 'joblib', 'Django')

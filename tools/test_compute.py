@@ -1116,6 +1116,21 @@ class RunTests(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertEqual([c[0] for c in self.calls], ['container'])
 
+    def test_single_reference_builds_the_windows_side_once_and_is_judged_exactly(self):
+        code, text = self.main('--single-reference', '--steps', 'bundle', '--negative-control')       # the bundle has no stamp: B equals the one build
+        self.assertEqual(code, 0, text)
+        self.assertEqual([c[0] for c in self.calls], ['windows', 'container'])
+        self.assertFalse((self.root / 'scratch' / 'A2').exists())
+        self.assertRegex(text, r'PASS  bundle-out/k3\.zip +byte-identical')
+        self.assertRegex(text, r'PASS  negative control bundle-out/k3\.zip .*detected')
+        self.assertIs(json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))['single_reference'], True)
+        code, text = self.main('--single-reference', scratch=self.root / 'roads')            # a store with a stamp is not equal to its one reference
+        self.assertEqual(code, 1, text)
+        self.assertRegex(text, r'FAIL  roads\.sqlite3')
+        self.calls.clear()
+        self.main('--steps', 'bundle', scratch=self.root / 'two')
+        self.assertEqual([c[0] for c in self.calls], ['windows', 'windows', 'container'])      # the default is still A1, A2, B
+
     def test_refusals(self):
         with contextlib.redirect_stderr(io.StringIO()):
             for argv in (['--scratch', str(self.root / '.local' / 'x'), '--image', 'x@sha256:' + 'a' * 64],
@@ -1388,9 +1403,10 @@ class BuildImageFilesTests(unittest.TestCase):
             self.assertIn(needed, text)
         self.assertIn('TERRIER_COMPUTE', read('tools/compute_build.py'))
 
-    def test_the_runbook_documents_the_later_steps_their_inputs_the_held_bundle_and_the_runners(self):
+    def test_the_runbook_documents_the_later_steps_their_inputs_the_bundle_parity_and_the_runners(self):
         text = read('COMPUTE.md')
         for needed in ('## 10.', '--inputs-from', '--link-inputs', '--drop-stage', 'TERRIER_WALK_SALT', '.walk-salt', 'Step.held', 'D-177', 'import_summary',
+                       '--single-reference', 'canonical ring start', 'create_system',
                        '.bak-20261013', 'run_remaining.ps1', 'run_fast.ps1', 'run_nowithhold.ps1', '(b)', '(c)', 'meta[built_utc, qa.peak_memory_mb, qa.timing]'):
             self.assertIn(needed, text)
         for step in S.STEPS:
@@ -1520,7 +1536,7 @@ class ComputeBuildTests(unittest.TestCase):
     """tools/compute_build.py: the store build runs in the containers unless TERRIER_COMPUTE=windows. Both builds are replaced by fakes
     that write the stores, so nothing starts: no Docker, no Windows tool."""
 
-    CHAIN = ['roads', 'street', 'contacts', 'shown', 'scores', 'walk', 'ingest', 'extend', 'density']          # bundle is held
+    CHAIN = ['roads', 'street', 'contacts', 'shown', 'scores', 'walk', 'ingest', 'extend', 'bundle', 'density']          # nothing is held
     KEY = '0123456789abcdef' * 4
     SALT = 'fedcba9876543210' * 4
 
@@ -1581,9 +1597,10 @@ class ComputeBuildTests(unittest.TestCase):
         self.assertEqual((mode, images, district, steps, bind), ('container', {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}, 'co-05', self.CHAIN, False))
         self.assertEqual(names, ('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'area_scores_shown.csv',
                                  'area_scores_shown.manifest.json', 'scores.sqlite3', 'walk.sqlite3', 'ingest/*.zip',
-                                 'ingest/ingest_receipt.json', 'ingest/v2/*', 'extend/*.zip', 'density.json'))
+                                 'ingest/ingest_receipt.json', 'ingest/v2/*', 'extend/*.zip', 'bundle-out/*.zip', 'bundle-out/*.zip.sha256',
+                                 'bundle_receipt.json', 'density.json'))
         self.assertRegex(run_id, r'^P-\d{8}T\d{6}Z$')
-        self.assertIn('BUILD OK (container): 12 file(s)', text)
+        self.assertIn('BUILD OK (container): 15 file(s)', text)
         receipt = json.loads((self.root / 'out' / 'compute_build_receipt.json').read_text(encoding='utf-8'))
         self.assertEqual((receipt['mode'], receipt['image_sources'], receipt['fingerprint']),
                          ('container', {'geo': 'explicit', 'score': 'explicit'}, {'where': 'box'}))
@@ -1629,7 +1646,7 @@ class ComputeBuildTests(unittest.TestCase):
         self.assertEqual((plan['mode'], plan['steps'], plan['images']), ('container', self.CHAIN, {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}))
         self.assertEqual(plan['where'], {'roads': 'terrier-build', 'street': 'terrier-build', 'contacts': 'terrier-build',
                                          'shown': 'terrier-score', 'scores': 'terrier-score', 'walk': 'terrier-build',
-                                         'ingest': 'terrier-build', 'extend': 'terrier-build', 'density': 'terrier-build'})
+                                         'ingest': 'terrier-build', 'extend': 'terrier-build', 'bundle': 'terrier-build', 'density': 'terrier-build'})
         self.assertFalse((self.root / 'out').exists())
         plan = json.loads(self.run_main('--plan', environ={'TERRIER_COMPUTE': 'windows'})[1])
         self.assertEqual((plan['mode'], plan['images'], plan['where']['shown']), ('windows', {}, str(CB.H.PY312)))
@@ -1696,22 +1713,29 @@ class ComputeBuildTests(unittest.TestCase):
         self.assertEqual(self.seeded, [('copy', folder, self.NEEDED_BY_WALK)])                  # the Windows fallback starts from the same inputs
         self.assertEqual(json.loads(self.run_main('--steps', 'walk', '--inputs', str(folder), '--plan', out='planned')[1])['inputs'], list(self.NEEDED_BY_WALK))
 
+    def test_the_bundle_is_in_the_default_chain_now_its_parity_passed(self):
+        self.assertEqual([name for name, spec in S.STEPS.items() if spec.held], [])
+        plan = json.loads(self.run_main('--plan', key_file=self.root / 'x', environ={'TERRIER_DEMO_KEY': self.KEY})[1])
+        self.assertEqual(plan['steps'], self.CHAIN)
+        self.assertIn('bundle-out/*.zip', plan['files'])
+        self.assertEqual(plan['inputs'], [])                       # bundle reads the shown table, the score store and the extend folder: all made by the chain
+
     def test_a_held_step_is_left_out_of_the_default_chain_and_refused_in_a_container_but_builds_on_windows(self):
-        self.assertEqual([name for name, spec in S.STEPS.items() if spec.held], ['bundle'])
-        self.assertIn('D-177', S.STEPS['bundle'].held)
+        """The mechanism stays for the next step that fails its parity: held by a patched bundle step."""
         folder = self.root / 'district'
         (folder / 'extend').mkdir(parents=True)
         for name in ('area_scores_shown.csv', 'scores.sqlite3', 'extend/k.zip'):
             (folder / name).write_bytes(b'x')
-        plan = json.loads(self.run_main('--plan', key_file=self.root / 'x', environ={'TERRIER_DEMO_KEY': self.KEY})[1])
-        self.assertNotIn('bundle', plan['steps'])
-        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
-            self.run_main('--steps', 'bundle', '--inputs', str(folder))
-        self.assertEqual(stop.exception.code, 2)
-        self.assertIn('held', err.getvalue())
-        self.assertEqual(self.calls, [])
-        code, text = self.run_main('--steps', 'bundle', '--inputs', str(folder), environ={'TERRIER_COMPUTE': 'windows'}, out='win')
-        self.assertEqual((code, self.calls[-1][0], self.calls[-1][3]), (0, 'windows', ['bundle']))          # the Windows build is the accepted one
+        with mock.patch.dict(S.STEPS, {'bundle': S.STEPS['bundle']._replace(held='parity FAIL (D-177)')}):
+            plan = json.loads(self.run_main('--plan', key_file=self.root / 'x', environ={'TERRIER_DEMO_KEY': self.KEY})[1])
+            self.assertNotIn('bundle', plan['steps'])
+            with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
+                self.run_main('--steps', 'bundle', '--inputs', str(folder))
+            self.assertEqual(stop.exception.code, 2)
+            self.assertIn('held', err.getvalue())
+            self.assertEqual(self.calls, [])
+            code, text = self.run_main('--steps', 'bundle', '--inputs', str(folder), environ={'TERRIER_COMPUTE': 'windows'}, out='win')
+            self.assertEqual((code, self.calls[-1][0], self.calls[-1][3]), (0, 'windows', ['bundle']))          # the Windows build is the accepted one
 
     def test_drop_stage_removes_the_folder_of_the_run_from_the_stage_volume_after_a_container_build_only(self):
         self.assertEqual(self.run_main(environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x')[0], 0)

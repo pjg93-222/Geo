@@ -2,7 +2,7 @@
 
     <venv python> tools/compute_parity.py --scratch <new folder> [--steps roads] [--district co-05] [--inputs-from <finished run's folder>]
                   [--image ghcr.io/pjg93-222/terrier-build@sha256:...] [--score-image ghcr.io/pjg93-222/terrier-build-score@sha256:...]
-                  [--api] [--negative-control] [--skip-container] [--export-bind]
+                  [--api] [--negative-control] [--skip-container] [--single-reference] [--export-bind]
 
   Each step has a toolchain (tools/build_step.py STEPS): roads, street, contacts, walk, ingest, extend, bundle and density run in the geo
   image (terrier-build) and on Windows in the work venv (--python); shown and scores run in the score image (terrier-build-score) and on
@@ -674,6 +674,9 @@ def main(argv=None):
     parser.add_argument('--api', action='store_true', help='also run co_baseline\'s golden endpoint check on A1 and B (co-05, full set)')
     parser.add_argument('--negative-control', action='store_true', help='also prove the comparison fails when one row is removed')
     parser.add_argument('--skip-container', action='store_true', help='Windows only: learn the run-to-run variance (A1 vs A2)')
+    parser.add_argument('--single-reference', action='store_true',
+                        help='the Lighter proof (Paul 2026-10-13): build the Windows side once (A1, no A2) and compare B with it exactly, nothing left out as '
+                             'run-to-run variance; for artifacts whose Windows build has no stamp (the bundle zip). A store with a stamp fails it')
     parser.add_argument('--reuse-windows', action='store_true', help='keep an existing <scratch>/A1 and A2 instead of building them again')
     parser.add_argument('--reuse-container', action='store_true',
                         help='with --reuse-windows: keep an existing <scratch>/B too and only judge the three again (a changed comparison rule); '
@@ -733,7 +736,8 @@ def main(argv=None):
     report['inputs_from'] = str(args.inputs_from) if args.inputs_from else None
     report['inputs'] = needed
 
-    for label in ('A1', 'A2'):
+    report['single_reference'] = args.single_reference
+    for label in ('A1',) if args.single_reference else ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():
             print('%s: reusing %s' % (label, folders[label]), flush=True)
             continue
@@ -743,6 +747,8 @@ def main(argv=None):
             print('%s: inputs %s %s from %s' % (label, ', '.join(needed), 'hard-linked' if args.link_inputs else 'copied', args.inputs_from), flush=True)
             copy_inputs(folders[label], d, needed, args.inputs_from, link=args.link_inputs)
         windows_build(pythons, args.repo, d['id'], steps, folders[label])
+    if args.single_reference:
+        folders['A2'] = folders['A1']                                # one reference: A1 against itself shows no variance, so B must equal it
     names = expand_names(folders['A1'], names)                       # a `*` name (a bundle's file name is its snapshot key) as A1 made it
     report['fingerprint_windows'] = windows_fingerprint(pythons, args.repo, toolchains)
     if args.reuse_container:

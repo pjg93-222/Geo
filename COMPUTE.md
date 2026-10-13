@@ -15,8 +15,9 @@ rebuild: **all six artifacts PASS, every negative control is detected** (section
 `tools/compute_build.py` builds in the containers by default and `TERRIER_COMPUTE=windows` is the one fallback (section 8); no production build
 has been run through it yet. The export goes through a named volume by default (section 5); `--export-bind` opts out.
 
-**Status (2026-10-13, later):** `walk`, `ingest`, `extend` and `density` of CO-05 pass parity from one set of inputs and are in `tools/build_step.py`, `tools/compute_build.py` and the runners; `bundle` is wired and does
-not pass: the container's `geometry.json` differs from the Windows build in the start vertex of two polygons, and D-177 keeps the bundle zip byte-identical, so it is held (section 10). `import_summary` and the steps that start servers stay on the host.
+**Status (2026-10-13, later):** `walk`, `ingest`, `extend` and `density` of CO-05 pass parity from one set of inputs and are in `tools/build_step.py`, `tools/compute_build.py` and the runners; `bundle` first failed
+(the container's `geometry.json` differed from the Windows build, and D-177 keeps the bundle zip byte-identical), was held (`Step.held`), and passes now that `tools/build_bundle_v4.py` writes a canonical form (section 10): it is in the
+default chain and in the runner. `import_summary` and the steps that start servers stay on the host.
 `--inputs` (build) and `--inputs-from` (parity) supply the stores a run of some steps reads; the untracked runners call the build and fall back to Windows with `TERRIER_COMPUTE=windows`. Only CO-05 was run.
 
 ## 1. What is where
@@ -195,7 +196,7 @@ so the harness reports the check's own verdict, not a count).
 D-188: switch when the parity run is green, keep a one-flag Windows fallback. The full CO-05 chain is green under the FTS5 rule of D-177 (section 9),
 so `tools/compute_build.py` is the build of the five stores of a district, and it runs in the containers unless told otherwise.
 
-**What it is.** One command builds the steps of a district (default: all of section 10 but the held bundle; the first five are `roads`, `street`, `contacts`, `shown` and `scores`), in that order, into a NEW folder (`--out`; never a
+**What it is.** One command builds the steps of a district (default: all of section 10, and a step marked `held` would be left out; the first five are `roads`, `street`, `contacts`, `shown` and `scores`), in that order, into a NEW folder (`--out`; never a
 `.local` folder, and it must be empty). In the container mode each step runs in the compose service of its toolchain (`terrier-build`, the geo image:
 roads, street, contacts; `terrier-score`, the score image: shown, scores), all in one stage volume, and the stores leave the volume through the named export
 volume and `docker cp` (section 5), the harness's own `container_build`. The files are the same six that the parity run compares: `roads.sqlite3`,
@@ -242,8 +243,8 @@ Run the chain from `roads`: a later step reads the stores of the earlier ones fr
 in a container (it is not seeded from `.local`, which is never mounted). A one-step Windows build is still `build_step.py run <step>` with `TERRIER_LOCAL_DIR` set.
 
 **The runners** are in the ignored `_build\` folder (`.gitignore`: `_build/`): none is tracked in git. Since 2026-10-13 `run_remaining.ps1`, `run_fast.ps1` and `run_nowithhold.ps1` call `tools/compute_build.py` for the
-steps of section 10 (not the bundle) and run their old Windows lines unchanged when `TERRIER_COMPUTE=windows`; the copies from before the change are `run_remaining.ps1.bak-20261013`, `run_fast.ps1.bak-20261013` and
-`run_nowithhold.ps1.bak-20261013` beside them. A run of one of them without the variable is a container build.
+steps of section 10 (the bundle too, since its parity passed) and run their old Windows lines unchanged when `TERRIER_COMPUTE=windows`; the copies from before the change are `run_remaining.ps1.bak-20261013`, `run_fast.ps1.bak-20261013` and
+`run_nowithhold.ps1.bak-20261013` beside them (`run_nowithhold.ps1.bak-20261013b` is the copy from before the bundle line was added). A run of one of them without the variable is a container build.
 
 ## 9. The FTS5 rule and the full-chain verdict (D-177, 2026-10-13)
 
@@ -296,7 +297,7 @@ The five steps of section 9 were joined by five more: `walk` (`tools/build_walk.
 | shown, scores | `run_nowithhold.ps1` 181-182, 209-214 | `area_scores_shown.csv`, `scores.sqlite3` (co-05: `scores.unmask.sqlite3`, a side file) | row framework, street, contacts | (a), section 9 |
 | ingest | `run_nowithhold.ps1` 183, 215; `tools/ingest.py` | the v2 folder and its zip; used to write `ingest_receipt.json` into the (read-only) geography folder | CSV, geography | (a), after a `--receipt` seam |
 | extend | `run_nowithhold.ps1` 183, 216; `tools/extend_geography.py` | the v3 folder and its zip | CSV, the v2 folder, geography, `hierarchy\*.zip` | (a): it downloads only a `hierarchy` zip that is missing (co-05; `tools/prepare_geography.py` 20-22 returns at once for a file that exists) |
-| bundle | `run_nowithhold.ps1` 185, 217-224; `tools/build_bundle_v4.py` 597-610, 673 | `data\<key>.zip` and `.sha256` in the checkout's `data\` (inert until imported), and a receipt | the v3 zip, the shown table, the score store, the row framework, blocks; validates with Django settings and touches no database | (a) by what it does, and **held**: the container build is not byte-identical (below) |
+| bundle | `run_nowithhold.ps1` 185, 217-224; `tools/build_bundle_v4.py` 597-610, 673 | `data\<key>.zip` and `.sha256` in the checkout's `data\` (inert until imported), and a receipt | the v3 zip, the shown table, the score store, the row framework, blocks; validates with Django settings and touches no database | (a), after a canonical form in the builder (below): parity PASS, no longer held |
 | density | `run_nowithhold.ps1` 187, 232-236; `tools/build_density.py` 80, 104-106 | `density.json` (co-05: `density.unmask.json`) | `blocks.zip`, the score store | (a) |
 | import | `run_nowithhold.ps1` 186, 226-231, 239-244; `server/research/management/commands/import_summary.py`, `server/research/bundles.py` 225-254 | the snapshot folder and the district's `accounts.sqlite3` rows, in the server's data dir | the bundle zip | (b): stays on the host |
 | prepare_geography (R1) | `run_remaining.ps1` 159, `run_fast.ps1` 206; `tools/prepare_geography.py` 20-31 | Census downloads | the network | (c): stays on the host |
@@ -312,16 +313,28 @@ B in the geo container with the volume export. Verdicts (`compare_store`/`compar
 | `ingest/ingest_receipt.json` | PASS: byte-identical once the receipt is written with LF on Windows too (it was CRLF there: every value was equal, 35 of 35) |
 | `extend/<key>.zip` | PASS: same as ingest |
 | `density.json` | PASS: byte-identical, sha256 `20147ce2...` |
-| `bundle-out/<key>.zip` and its `.sha256` | **FAIL**: B differs from A1 byte for byte; A1 and A2 are byte-identical |
+| `bundle-out/<key>.zip` and its `.sha256` | **FAIL** in this run: B differs from A1 byte for byte; A1 and A2 are byte-identical. **PASS** after the canonical form below (second run, further down) |
 
 Negative controls (one per step, on a copy of B): a row removed and a REAL cell moved one ULP in the walk store; one bit flipped in the largest member of the ingest and extend zips; one byte in `density.json` and the receipt: all detected. The bundle's control was not
-run once its comparison failed (it would look caught anyway).
+run in this run once its comparison failed (it would look caught anyway); it ran in the second run.
 
-**Why the bundle is held.** In the container's bundle only `geometry.json` differs, and in two features of it: one of the 179 tracts and one of the 326 precincts, polygons that `dissolve` (`unary_union`) makes from their blocks. Both are the same polygon
-(`equals` is true, the normalised coordinates are equal, the symmetric difference has area 0); the ring starts at another vertex, so 67 and 126 coordinates sit at another position in the list and `geometry.json` is 3 bytes longer. `rows.json`,
-`adjacency.json`, `area_indices.json`, `manifest.json`, `streets.geojson` and `district.geojson` are byte-identical. GEOS is 3.13.1 on both sides; the likeliest cause is the order a Windows and a Linux build of GEOS take inside the cascaded union (not
-verified). D-177 keeps the bundle zip byte-identical, and a float tolerance would not cover a different start vertex, so this is a FAIL and Paul's to rule on (accept geometric equality for the bundle, or have `build_bundle_v4.py` write a
-canonical ring start, which changes the Windows bytes too). Until then `tools/compute_build.py` leaves `bundle` out of its default chain and refuses it in a container (`Step.held`); `TERRIER_COMPUTE=windows` builds it, and the runners keep running it on Windows.
+**Why the bundle was held, and the canonical form that released it (Paul 2026-10-13: the map bundle must be byte-identical on Windows and in the container, by writing every ring from the same start, "Always start at the same point").** In the
+container's bundle only `geometry.json` differed, and in two features of it: one of the 179 tracts and one of the 326 precincts, polygons that `dissolve` (`unary_union`) makes from their blocks. Both are the same polygon (`equals` is true, the
+symmetric difference has area 0). GEOS is 3.13.1 on both sides; the likeliest cause is the order a Windows and a Linux build of GEOS take inside the cascaded union (not verified). D-177 keeps the bundle zip byte-identical, and a float tolerance would
+not cover a different ring order, so `tools/build_bundle_v4.py` now writes a canonical form (`canonical_geometry`, applied to every ring of `geometry.json` just before it is serialized: the base bundle's blocks and ZCTAs too, so the file is canonical
+whole): **canonical ring start** (each ring, exterior and holes, each polygon of a multipolygon, from its smallest (x, y) after the 6-decimal rounding; orientation, the closing point, precision and key order unchanged; a vertex the ring visits twice at
+that point takes the start whose rotated ring sorts first); **holes in the order of their start vertex** (the exterior stays first; the order of the polygons of a multipolygon is not touched); `write_zip` (the zip with `create_system` 3 on every platform).
+Two things beside the ring start were found by the re-run and are needed for the same byte-identity: the first fix still failed because the same tract and precinct came with the same holes in another order (the first diagnosis, a different start
+vertex, was incomplete), and the zip's own headers differed (`ZipInfo.create_system` is 0 on Windows and 3 elsewhere and is written into the archive, so the zip would differ with every member equal); and the `.sha256` file is written with LF on
+Windows too (it was CRLF there, as the ingest receipt was). Tests: `tools/test_bundle_geometry.py`.
+
+**The second parity run (bundle only, 2026-10-13).** The proof standard of that run was the lighter one (Paul): ONE Windows reference build (A1) and the container build (B), compared exactly, no mask (`compute_parity.py --single-reference`; the bundle has
+no stamp: A1 and A2 of the first run were byte-identical). `compute_parity.py --steps bundle --inputs-from <folder> --link-inputs --single-reference --negative-control`, the geo image of section 8 (`terrier-build@sha256:62d17090...`), inputs: the shown table and
+score store of the first run's A1 and its `extend` zip (so both builds start from one base), scratch `terrier_parity4\full2`. Verdict: `bundle-out/<key>.zip` PASS, byte-identical in A1 and B (24,891,270 bytes, sha256 `7c478a71d1de...`);
+its `.sha256` PASS, byte-identical. Negative controls: one bit of `rows.json` changed in a copy of B, one byte of the `.sha256` changed, and one tract coordinate nudged by 1e-6 in `geometry.json` (rebuilt zip): all three FAIL the comparison, as they must.
+Against the bundle the first run's Windows build made (before the change): 9,668 of 9,668 features are equal as shapes (`equals`), all 18,632 rings are closed and start at their smallest vertex, the holes of all 10,008 polygons are in start order, and
+`manifest.json`, `rows.json`, `adjacency.json`, `area_indices.json`, `streets.geojson` and `district.geojson` are byte-identical to the old bundle's. The A1 and B copies were deleted after the comparison (voter-derived stores); only `parity_report.json` is kept.
+The new bytes are a one-time change of the served file's bytes (`geometry.json`, the zip, its `.sha256`), not of its shapes; nothing was rebuilt for production and no snapshot was imported. Only CO-05 was run: another district's bundle uses the same code.
 
 **How a step that reads earlier stores gets them.** A container sees no `.local` (section 6). A run of some steps reads what the steps before them left; `tools/build_step.py` names that per step (`needs`: `walk` needs roads, street,
 contacts and, for co-05, the score store; `extend` needs the `ingest` folder; `bundle` needs the shown table, the score store and the `extend` folder; for another district also its street salt and its `rowfw` folder). The steps of
@@ -340,10 +353,10 @@ in B; a zip they stamp differently (ingest and extend write `created_at` and the
 and the `.sha256` of the bundle are compared byte for byte (no line-ending allowance: `ingest.py` now writes its receipt with LF, as `shown_areas.py` does its manifest).
 
 **The runners** (untracked; the copies from before are `run_remaining.ps1.bak-20261013`, `run_fast.ps1.bak-20261013`, `run_nowithhold.ps1.bak-20261013`). `run_remaining.ps1` and `run_fast.ps1` run roads, street, contacts and walk (R2-R5) through
-`tools\compute_build.py --district d --steps <step> --inputs .local --out _build\compute-out\<id>-<utc> --drop-stage`; `run_nowithhold.ps1` does the same for shown, scores, ingest, extend and density, and leaves bundle, import, pincheck, smoke and
-the Colorado gate as they were. A build writes a new folder and the runner installs its files where the Windows step left them: a file it replaces is moved aside as `<name>.replaced-<utc>`, never deleted (an `ingest` or `extend` folder of an earlier
-run is moved aside whole); the Colorado side files stay side files (`scores.unmask.sqlite3`, `density.unmask.json`, hard-linked into a small inputs folder for the density step). `TERRIER_COMPUTE=windows` runs the old Windows lines, unchanged
+`tools\compute_build.py --district d --steps <step> --inputs .local --out _build\compute-out\<id>-<utc> --drop-stage`; `run_nowithhold.ps1` does the same for shown, scores, ingest, extend, bundle and density, and leaves import, pincheck, smoke and
+the Colorado gate as they were (`run_nowithhold.ps1.bak-20261013b`: the file with the bundle still on Windows). A build writes a new folder and the runner installs its files where the Windows step left them: a file it replaces is moved aside as `<name>.replaced-<utc>`, never deleted (an `ingest` or `extend` folder of an earlier
+run is moved aside whole); the Colorado side files stay side files (`scores.unmask.sqlite3`, `density.unmask.json`, hard-linked into a small inputs folder for the density step; the Colorado bundle step gets the new score store, the shown table and the extend zip its mark names the same way, and its zip, `.sha256` and receipt are installed in `data\` and `_build\nowithhold\bundle_receipt_<district>.json`, where the Windows step leaves them). `TERRIER_COMPUTE=windows` runs the old Windows lines, unchanged
 (the dry-run plan of each runner is identical to the original's); anything but `container` or `windows` stops. A runner started by `launch_run_*.ps1` has none of a shell's variables, so `TERRIER_COMPUTE` is read from the process, then
 the user's, then the machine's environment (`setx TERRIER_COMPUTE windows` is the fallback for a detached run). Images: the environment, else the two local builds of section 8. Do not mix the two modes within one district's ingest, extend, bundle
 chain: the container's `ingest` and `extend` leave their folders in `.local\[<district>\]ingest` and `extend`, the Windows ones in `_build\nowithhold`. Only CO-05 has been through the parity run: the OR-05 and CT-01 paths (their street salt, their
-`rowfw` folder, their own stores taken from `.local\<district>`) use the same code but have not been run, and no production build has been run through the changed runners; a sandbox test with stubs for the build and a fake tree ran the container path of every step these runners changed, the Windows path of `run_fast.ps1`, and compared the dry-run plans of all three in Windows mode with the originals' (identical).
+`rowfw` folder, their own stores taken from `.local\<district>`) use the same code but have not been run, and no production build has been run through the changed runners; a sandbox test with stubs for the build and a fake tree ran the container path of every step these runners changed, the Windows path of `run_fast.ps1`, and compared the dry-run plans of all three in Windows mode with the originals' (identical); the bundle line of `run_nowithhold.ps1` had the same kind of test (a stub build that checks the inputs it is given: the new score store and not the live one, the shown table, the extend zip of the mark; the zip installed in `data\`, the file it replaced moved aside, the mark naming the installed zip; the dry-run plans of `-Part CO` and `-Part Districts` in Windows mode identical to the `.bak-20261013b` file's).
