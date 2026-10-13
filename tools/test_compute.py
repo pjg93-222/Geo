@@ -378,10 +378,10 @@ class CompareTests(unittest.TestCase):
     def test_a_fact_in_metadata_that_differs_in_the_container_fails_even_though_the_table_is_noisy(self):
         ok, detail = P.compare('scores.sqlite3', *self.stores_like(b={'facts': 'changed'}))
         self.assertFalse(ok)
-        self.assertIn('table(s): metadata (key(s) inputs)', detail)
+        self.assertIn('table(s): metadata[inputs]', detail)
         ok, detail = P.compare('scores.sqlite3', *self.stores_like(b={'matches': 2}))               # inside the JSON value that also holds a timing
         self.assertFalse(ok)
-        self.assertIn('metadata (key(s) w1)', detail)
+        self.assertIn('metadata[w1]', detail)
 
     def test_metadata_variance_cases(self):
         v = P.metadata_variance
@@ -523,6 +523,34 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(P.perturb_one_value(path, skip={'score'})[0], 'metadata')          # keyed is WITHOUT ROWID, box is virtual
         with self.assertRaises(ValueError):
             P.perturb_one_value(path, skip={'score', 'metadata', 'keyed', 'box'})
+
+    def test_a_control_is_detected_only_when_the_changed_table_is_what_fails(self):
+        failure = 'B differs from the Windows build in table(s): demo_search_data, metadata[inputs, w1], person'
+        self.assertEqual(P.differing_tables(failure), ['demo_search_data', 'metadata', 'person'])
+        self.assertEqual(P.differing_tables('missing in B'), [])
+        self.assertEqual(P.differing_tables('PRAGMA integrity_check is not ok in B'), [])
+        self.assertTrue(P.control_detected(False, failure, 'person'))
+        self.assertFalse(P.control_detected(False, failure, 'household'))                    # it failed, but for other tables
+        self.assertFalse(P.control_detected(False, failure, 'person', already=['person']))   # that table already differed
+        self.assertFalse(P.control_detected(False, 'missing in B', 'person'))
+        self.assertFalse(P.control_detected(True, '3 tables, 9 rows; variance (left out): none', 'person'))
+
+    def test_a_store_that_already_fails_elsewhere_does_not_make_the_controls_look_caught(self):
+        folders = self.stores()
+        with closing(sqlite3.connect(folders[2] / 'roads.sqlite3')) as connection, connection:
+            connection.execute("INSERT INTO metadata VALUES ('extra', 'x')")                # B differs from A in a table of its own ...
+        ok, detail = P.compare_store('roads.sqlite3', *folders)
+        self.assertFalse(ok)
+        before = P.differing_tables(detail)
+        self.assertEqual(before, ['metadata'])
+        control = self.root / 'NC'
+        control.mkdir()
+        shutil.copyfile(folders[2] / 'roads.sqlite3', control / 'roads.sqlite3')
+        table = P.remove_one_row(control / 'roads.sqlite3', {'metadata'})                   # ... and the control touches another one
+        self.assertEqual(table, 'roads')
+        self.assertTrue(P.control_detected(*P.compare_store('roads.sqlite3', *folders[:2], control), table, before))
+        # a control that touches the table that already differs proves nothing and is reported as not detected
+        self.assertFalse(P.control_detected(False, detail, 'metadata', before))
 
     def test_negative_control_removes_one_row_and_is_detected(self):
         folders = self.stores()

@@ -28,6 +28,7 @@ import datetime
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -134,7 +135,7 @@ def compare_store(name, a1, a2, b):
         else:
             keys, mismatched = metadata_variance(*pairs)
             if mismatched:
-                return False, 'B differs from the Windows build in table(s): metadata (key(s) %s)' % ', '.join(mismatched)
+                return False, 'B differs from the Windows build in table(s): metadata[%s]' % ', '.join(mismatched)
             left_out.append('metadata[%s]' % ', '.join(keys))
     rows = sum(t['rows'] for t in tables['B'].values())
     return True, '%d tables, %s rows; run-to-run variance (left out): %s' % (len(tables['B']), '{:,}'.format(rows),
@@ -236,6 +237,20 @@ def perturb_one_value(path, skip=()):
             except sqlite3.Error:
                 continue
     raise ValueError('no value to change in %s' % path)
+
+
+def differing_tables(detail):
+    """The tables a failed compare_store detail names ('... in table(s): a, metadata[k1, k2], b'); [] for any other failure."""
+    if 'table(s): ' not in detail:
+        return []
+    listed = re.sub(r'\[[^\]]*\]', '', detail.split('table(s): ', 1)[1])
+    return [name.strip() for name in listed.split(',') if name.strip()]
+
+
+def control_detected(ok, detail, table, already=()):
+    """A negative control counts as detected only when the comparison fails BECAUSE of the table that was changed: it names that table,
+    and that table did not differ before (`already`). A store that fails for another reason must not make a control look caught."""
+    return not ok and table in differing_tables(detail) and table not in already
 
 
 def flip_one_byte(path):
@@ -437,12 +452,14 @@ def main(argv=None):
         print('%-5s %-34s %s' % ('PASS' if ok else 'FAIL', name, detail), flush=True)
         report['results'].append({'artifact': name, 'ok': ok, 'detail': detail})
 
+    before = {}                              # artifact -> the tables that already differ (what a negative control must not rely on)
     for name in names:
         if args.skip_container:
             ok, detail = compare(name, folders['A1'], folders['A2'], folders['A2'])
             detail = '(Windows only) ' + detail
         else:
             ok, detail = compare(name, folders['A1'], folders['A2'], folders['B'])
+        before[name] = differing_tables(detail)
         verdict(name, ok, detail)
         note = baseline_note(name, folders['A1']) if name.endswith('.sqlite3') and d['id'] == D.DEFAULT else None
         if note:
@@ -455,12 +472,14 @@ def main(argv=None):
             shutil.copyfile(folders['B'] / name, target)
             if name.endswith('.sqlite3'):
                 skip = noise_tables(name, folders['A1'], folders['A2'])
-                what, ok = 'one row removed from %s' % remove_one_row(target, skip), compare_store(name, folders['A1'], folders['A2'], control)[0]
-                verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
+                table = remove_one_row(target, skip)
+                found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control), table, before[name])
+                verdict('negative control ' + name, found, 'one row removed from %s: %s' % (table, 'detected' if found else 'NOT detected'))
                 shutil.copyfile(folders['B'] / name, target)
                 table, column, step = perturb_one_value(target, skip)
-                what, ok = 'one %s.%s value changed (%s)' % (table, column, step), compare_store(name, folders['A1'], folders['A2'], control)[0]
-                verdict('negative control ' + name + ' (value)', not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
+                found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control), table, before[name])
+                verdict('negative control ' + name + ' (value)', found, 'one %s.%s value changed (%s): %s' % (
+                    table, column, step, 'detected' if found else 'NOT detected'))
             else:
                 what, ok = 'one byte changed at offset %d' % flip_one_byte(target), compare_file(name, folders['A1'], folders['A2'], control)[0]
                 verdict('negative control ' + name, not ok, '%s: %s' % (what, 'detected' if not ok else 'NOT detected'))
