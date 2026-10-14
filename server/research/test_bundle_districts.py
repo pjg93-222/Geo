@@ -74,7 +74,7 @@ def oregon(payload):
     rf = manifest['row_framework']
     rf['base_snapshot'] = 'or-cd005-' + rf['base_snapshot'].split('-')[-1]
     manifest['snapshot'] = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256'],
-                                           OR['snapshot_prefix'])
+                                           OR['snapshot_prefix'], geometry_form=rf.get('geometry_form'))
     return retarget(with_support(payload, OR))
 
 

@@ -238,7 +238,10 @@ def validate_v4(payload, manifest):
     if 'threshold' in manifest or any(r['status'] == 'suppressed' or any(c[4] == 'suppressed' for c in r['measures'].values())
                                       for r in payload['rows.json']):
         _fail('The base summary still withholds small cells')
-    _keys(rf, RF_KEYS | (CANDIDATE_RF_KEYS if district['candidate'] else set()), 'row framework')
+    # geometry_form is optional: a legacy bundle has none and keeps the key it was built with; a new one records the form its geometry.json is written in
+    _keys(rf, RF_KEYS | (CANDIDATE_RF_KEYS if district['candidate'] else set()) | ({'geometry_form'} if 'geometry_form' in rf else set()), 'row framework')
+    if 'geometry_form' in rf and rf['geometry_form'] != AL.GEOMETRY_FORM:
+        _fail('Unsupported geometry form')
     if rf['version'] != AL.ROWFW_VERSION:
         _fail('Unsupported row framework version')
     if district['candidate'] and (rf['overall_weights'] != district['score_weights'] or rf['support_model'] != {
@@ -260,7 +263,7 @@ def validate_v4(payload, manifest):
     if rf['rulings'] != AL.RULINGS:
         _fail('Unexpected rulings')
     expected_key = AL.snapshot_key(rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256'],
-                                   settings.DISTRICT['snapshot_prefix'])
+                                   settings.DISTRICT['snapshot_prefix'], geometry_form=rf.get('geometry_form'))
     if manifest['snapshot'] != expected_key:
         _fail('Snapshot key does not follow from its inputs')
     if manifest['area_index_levels'] != {b: list(l) for b, l in AL.BASIS_LEVELS.items()}:

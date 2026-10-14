@@ -402,12 +402,18 @@ class SnapshotKeyTests(unittest.TestCase):
         args = ('b' * 64, 'c' * 64, 'd' * 64)
         self.assertEqual(AL.GEOMETRY_FORM, 'geom-canonical-1')
         joined = lambda *parts: 'co-cd005-' + hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()[:12]
-        self.assertEqual(AL.snapshot_key(*args), joined(*args, AL.ROWFW_VERSION, 'geom-canonical-1'))
-        self.assertNotEqual(AL.snapshot_key(*args), joined(*args, AL.ROWFW_VERSION))          # the key of the same inputs before the token
+        # (1) a bundle without the field (a legacy zip) keeps the key of the formula before 4d4098b: base|area|config|rowfw-version, no token
+        self.assertEqual(AL.snapshot_key(*args), joined(*args, 'rowfw-1.0.0'))
+        self.assertEqual(AL.snapshot_key(*args), 'co-cd005-5502e0f4d891')                       # the literal the old code gave for these inputs
+        self.assertEqual(AL.snapshot_key(*args, geometry_form=None), AL.snapshot_key(*args))
+        # (2) with the field the token is appended
+        self.assertEqual(AL.snapshot_key(*args, geometry_form=AL.GEOMETRY_FORM), joined(*args, AL.ROWFW_VERSION, 'geom-canonical-1'))
+        self.assertNotEqual(AL.snapshot_key(*args, geometry_form=AL.GEOMETRY_FORM), AL.snapshot_key(*args))
         kwargs = dict(base_key='co-cd005-0123456789ab', area_sha='c' * 64, run_id='r', created_at='x', concordance={},
                       frozen={'framework_config_sha256': 'e' * 64, 'plan_sha256': 'f' * 64, 'criteria_sha256': '1' * 64})
         manifest = build_bundle_v4.apply_v4_manifest({}, [], {}, **kwargs)
-        self.assertEqual(manifest['snapshot'], joined('co-cd005-0123456789ab', 'c' * 64, 'e' * 64, AL.ROWFW_VERSION, 'geom-canonical-1'))
+        self.assertEqual(manifest['row_framework']['geometry_form'], 'geom-canonical-1')       # the builder records the form ...
+        self.assertEqual(manifest['snapshot'], joined('co-cd005-0123456789ab', 'c' * 64, 'e' * 64, AL.ROWFW_VERSION, 'geom-canonical-1'))     # ... and keys on it
 
     def test_a_manifest_takes_the_district_prefix(self):
         kwargs = dict(base_key='or-cd005-0123456789ab', area_sha='c' * 64,

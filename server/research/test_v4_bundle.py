@@ -1,6 +1,7 @@
 """cu-summary-v4: the validator accepts the synthetic row-framework bundle, rejects every planted violation, and the
 importer fails closed on a checksum mismatch. Synthetic data only."""
 import copy
+import hashlib
 import io
 import json
 import tempfile
@@ -61,9 +62,25 @@ class V4ValidatorTests(TestCase):
     def test_snapshot_key_follows_from_its_inputs(self):
         manifest = self.world.payload['manifest.json']
         rf = manifest['row_framework']
+        self.assertEqual(rf['geometry_form'], AL.GEOMETRY_FORM)                      # the builder records the form of its geometry.json
         self.assertEqual(manifest['snapshot'], AL.snapshot_key(
-            rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256']))
+            rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256'], geometry_form=rf['geometry_form']))
         self.reject(lambda p: p['manifest.json'].update(snapshot='co-cd005-000000000000'), message='Snapshot key')
+
+    def test_a_legacy_bundle_without_geometry_form_validates_under_its_old_key(self):
+        """A zip built before the canonical geometry has no row_framework.geometry_form and the key of the old formula (no token): it still
+        validates (the hosted server imports such zips into a fresh .local). The new key without the field, or the old key with it, is refused."""
+        payload = self.fresh()
+        manifest = payload['manifest.json']
+        rf = manifest['row_framework']
+        old = 'co-cd005-' + hashlib.sha256('|'.join([rf['base_snapshot'], rf['area_table_sha256'], rf['framework_config_sha256'],
+                                                      'rowfw-1.0.0']).encode('utf-8')).hexdigest()[:12]
+        del rf['geometry_form']
+        manifest['snapshot'] = old
+        self.assertEqual(bundles.validate(payload)['snapshot'], old)
+        self.reject(lambda p: p['manifest.json']['row_framework'].pop('geometry_form'), message='Snapshot key')      # the new key without the field
+        self.reject(lambda p: p['manifest.json'].update(snapshot=old), message='Snapshot key')                       # the old key with the field
+        self.reject(lambda p: p['manifest.json']['row_framework'].update(geometry_form='geom-other-9'), message='geometry form')
 
     # -- nothing is withheld (Paul 2026-10-08) --------------------------------------------------------------------
     def test_every_area_is_shown_however_small_and_the_fixture_has_small_ones(self):

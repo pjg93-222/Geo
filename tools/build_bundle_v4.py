@@ -433,11 +433,12 @@ def apply_v4_manifest(manifest, rows, adjacency, *, base_key, area_sha, frozen, 
                       prefix='co-cd005-', d=None, overall_weights=None, support_model=None):
     """Turn a v3 manifest into the v4 manifest (mutates and returns it). A candidate district `d` passes the frozen overall's weights and
     the support model (candidate, party, race mode, signals); they are recorded in row_framework."""
-    key = AL.snapshot_key(base_key, area_sha, frozen['framework_config_sha256'], prefix)
+    key = AL.snapshot_key(base_key, area_sha, frozen['framework_config_sha256'], prefix, geometry_form=AL.GEOMETRY_FORM)
     manifest.update({
         'schema': 'cu-summary-v4', 'snapshot': key, 'created_at': created_at,
         'row_framework': {
             'version': AL.ROWFW_VERSION, 'base_snapshot': base_key, 'area_table_sha256': area_sha, **frozen,
+            'geometry_form': AL.GEOMETRY_FORM,
             'run_id': run_id, 'rulings': AL.RULINGS, 'area_indices_sha256': AL.sha256_json(rows),
             'adjacency_sha256': AL.sha256_json(adjacency)},
         'area_index_levels': {b: list(l) for b, l in AL.BASIS_LEVELS.items()},
