@@ -364,7 +364,7 @@ def frozen_check(rowfw_hashes):
     """Problems (a list of strings) with the frozen row-framework hashes against tools.area_layers.FROZEN_SHA256."""
     sys.path.insert(0, str(REPO))
     from tools import area_layers
-    return ['rowfw %s is %s, tools/area_layers.py expects %s' % (name, rowfw_hashes[FROZEN_FILES[key]], expected)
+    return ['rowfw %s is %s, tools/area_layers.py expects %s' % (FROZEN_FILES[key], rowfw_hashes[FROZEN_FILES[key]], expected)
             for key, expected in area_layers.FROZEN_SHA256.items()
             if rowfw_hashes[FROZEN_FILES[key]] != expected]
 

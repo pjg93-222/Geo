@@ -925,5 +925,17 @@ class LazyCacheTests(unittest.TestCase):
                          sorted(['files.rowfw.new.csv', 'files.snapshots.%s' % other, 'files.snapshots.%s.core.extra.json' % OLD_KEY]))
 
 
+class FrozenCheckTests(unittest.TestCase):
+    def test_mismatch_names_the_file(self):
+        from tools import area_layers
+        hashes = {B.FROZEN_FILES[key]: value for key, value in area_layers.FROZEN_SHA256.items()}
+        self.assertEqual(B.frozen_check(hashes), [])
+        key = next(iter(area_layers.FROZEN_SHA256))
+        hashes[B.FROZEN_FILES[key]] = 'corrupt'
+        problems = B.frozen_check(hashes)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(B.FROZEN_FILES[key], problems[0])
+
+
 if __name__ == '__main__':
     unittest.main()
