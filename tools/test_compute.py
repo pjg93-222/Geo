@@ -1456,17 +1456,38 @@ class BuildImageFilesTests(unittest.TestCase):
             self.assertIn(key, text)
         mounts, current = [], None
         for line in text.splitlines():
-            if re.match(r'\s+- type: (bind|volume)', line):
+            if re.match(r'\s+- type: (bind|volume|tmpfs)', line):
                 current = {'type': line.split(':')[1].strip()}
                 mounts.append(current)
             elif current is not None and (m := re.match(r'\s+(source|target|read_only): (.+)$', line)):
                 current[m.group(1)] = m.group(2).strip()
         self.assertGreaterEqual(len(mounts), 10)
-        writable = sorted(m['target'] for m in mounts if m.get('read_only') != 'true')
+        writable = sorted(m['target'] for m in mounts if m.get('read_only') != 'true' and m['type'] != 'tmpfs')
         self.assertEqual(writable, ['/glassbox-home/.claude/glassbox/events', '/out', '/stage'])
         self.assertEqual({m['target'] for m in mounts if m['type'] == 'bind' and m.get('read_only') == 'true'},
                          {'/terrier', '/sources/statara_co_cd005_20260904.csv', '/sources/terrier-sources', '/geography',
                           '/sibling/.local/.street-salt', '/sibling/.local/row-framework-20260930'})
+
+    def test_the_repo_bind_is_masked_at_its_live_local_and_build_folders_in_every_service_that_mounts_it(self):
+        """The /terrier bind is the whole tree, so the live checkout's .local (voter data) and _build would show through it: both are
+        covered by an empty tmpfs, in the shared mount list (build and score) and in the export service."""
+        text = read('compute.compose.yaml')
+        build = text[text.index('  terrier-build:'):text.index('  terrier-score:')]
+        export = text[text.index('  terrier-export:'):text.index('\nvolumes:')]
+        for part in (build, export):
+            self.assertEqual(part.count('target: /terrier\n'), 1)
+            for folder in ('/terrier/.local', '/terrier/_build'):
+                self.assertRegex(part, r'(?m)^      - type: tmpfs\n        target: %s\n' % re.escape(folder))
+        self.assertEqual(text.count('type: tmpfs'), 4)                      # these two masks, twice: nothing else is in memory
+        self.assertNotRegex(text, r'(?m)target: /terrier/\.local\n\s+read_only: false')
+        try:
+            import yaml
+        except ImportError:
+            return
+        config = yaml.safe_load(text.replace('\r\n', '\n'))
+        for name in ('terrier-build', 'terrier-score', 'terrier-export'):
+            targets = [v['target'] for v in config['services'][name]['volumes'] if v['type'] == 'tmpfs']
+            self.assertEqual(targets, ['/terrier/.local', '/terrier/_build'], name)
 
     def test_the_score_service_has_the_score_image_and_exactly_the_mounts_of_the_build_service(self):
         text = read('compute.compose.yaml')
@@ -1554,12 +1575,14 @@ class ComputeBuildTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'x')
 
-    def run_main(self, *args, environ=None, key_file=None, out='out', write=True):
+    def run_main(self, *args, environ=None, key_file=None, out='out', write=True, fail=None):
         """-> (exit code, stdout). The environment holds both image variables and only what `environ` adds. `key_file`: the folder that
         stands for the district's data folder (where its .demo-key would be)."""
         def container(images, repo, district, steps, folder, run_id, names, export_bind=False):
             self.calls.append(('container', images, district, list(steps), run_id, tuple(names), export_bind, os.environ.get('TERRIER_DEMO_KEY')))
             self.salts.append(os.environ.get('TERRIER_WALK_SALT'))
+            if fail is not None:
+                raise fail
             if write:
                 self.write(steps, folder)
 
@@ -1596,11 +1619,11 @@ class ComputeBuildTests(unittest.TestCase):
         (mode, images, district, steps, run_id, names, bind, key), = self.calls
         self.assertEqual((mode, images, district, steps, bind), ('container', {'geo': EXPLICIT, 'score': SCORE_EXPLICIT}, 'co-05', self.CHAIN, False))
         self.assertEqual(names, ('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', 'area_scores_shown.csv',
-                                 'area_scores_shown.manifest.json', 'scores.sqlite3', 'walk.sqlite3', 'ingest/*.zip',
+                                 'area_scores_shown.manifest.json', 'scores.sqlite3', 'scores_receipt.json', 'walk.sqlite3', 'ingest/*.zip',
                                  'ingest/ingest_receipt.json', 'ingest/v2/*', 'extend/*.zip', 'bundle-out/*.zip', 'bundle-out/*.zip.sha256',
                                  'bundle_receipt.json', 'density.json'))
         self.assertRegex(run_id, r'^P-\d{8}T\d{6}Z$')
-        self.assertIn('BUILD OK (container): 15 file(s)', text)
+        self.assertIn('BUILD OK (container): 16 file(s)', text)
         receipt = json.loads((self.root / 'out' / 'compute_build_receipt.json').read_text(encoding='utf-8'))
         self.assertEqual((receipt['mode'], receipt['image_sources'], receipt['fingerprint']),
                          ('container', {'geo': 'explicit', 'score': 'explicit'}, {'where': 'box'}))
@@ -1747,7 +1770,14 @@ class ComputeBuildTests(unittest.TestCase):
         code, text = self.run_main('--drop-stage', environ={'TERRIER_COMPUTE': 'windows', 'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='win')
         self.assertEqual((code, len(self.dropped)), (0, 1))                                    # a Windows build has no stage
         code, text = self.run_main('--drop-stage', environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='failed', write=False)
-        self.assertEqual((code, len(self.dropped)), (1, 1))                                    # a build that failed keeps its stage to look at
+        self.assertEqual((code, len(self.dropped)), (1, 2))                                    # a build that left files out drops its stage too: the stores are voter-derived
+        self.assertEqual(self.dropped[-1], self.calls[-1][4])
+        with self.assertRaises(RuntimeError):                                                  # and so does one that raised
+            self.run_main('--drop-stage', environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='raised', fail=RuntimeError('docker died'))
+        self.assertEqual((len(self.dropped), self.dropped[-1]), (3, self.calls[-1][4]))
+        with self.assertRaises(RuntimeError):                                                  # without --drop-stage the stage stays, as before
+            self.run_main(environ={'TERRIER_DEMO_KEY': self.KEY}, key_file=self.root / 'x', out='raised2', fail=RuntimeError('docker died'))
+        self.assertEqual(len(self.dropped), 3)
 
     def test_a_given_salt_wins_and_a_run_with_no_salt_stops_before_anything_is_seeded(self):
         folder = self.district_folder(salt=False)

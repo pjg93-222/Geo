@@ -120,29 +120,31 @@ def main(argv=None):
     if any(S.STEPS[s].walk_salt for s in steps):       # and the district's walk salt
         os.environ['TERRIER_WALK_SALT'] = walk_salt(d, args.inputs)
     out.mkdir(parents=True, exist_ok=True)
-    if mode == 'container':
-        if needed:
-            P.seed_stage(images, args.repo, out, run_id, d, args.inputs, needed)
-        P.container_build(images, args.repo, d['id'], steps, out, run_id, names)
-        fingerprint = P.container_fingerprint(images, args.repo, out, run_id)
-    else:
-        pythons = {'geo': args.python, 'score': args.score_python}
-        if needed:
-            P.copy_inputs(out, d, needed, args.inputs)
-        P.windows_build(pythons, args.repo, d['id'], steps, out)
-        fingerprint = P.windows_fingerprint(pythons, args.repo, toolchains)
-    found = [f for n in names for f in S.expand(out, n)]
-    missing = [n for n in names if not S.expand(out, n) or not all((out / f).is_file() for f in S.expand(out, n))]
-    if missing:                                        # an exit code alone is not completion
-        print('compute_build: FAILED, not in %s: %s' % (out, ', '.join(missing)), file=sys.stderr)
-        return 1
-    names = list(dict.fromkeys(found))
-    receipt = {'mode': mode, 'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources, 'run_id': run_id,
-               'fingerprint': fingerprint, 'files': names, 'inputs': {'from': str(args.inputs) if args.inputs else None, 'names': needed}}
-    (out / 'compute_build_receipt.json').write_text(json.dumps(receipt, indent=1, sort_keys=True) + '\n', encoding='utf-8')
-    if args.drop_stage and mode == 'container':
-        P.drop_stage(images, run_id)
-        print('compute_build: the folder %s is removed from the stage volume' % run_id)
+    try:
+        if mode == 'container':
+            if needed:
+                P.seed_stage(images, args.repo, out, run_id, d, args.inputs, needed)
+            P.container_build(images, args.repo, d['id'], steps, out, run_id, names)
+            fingerprint = P.container_fingerprint(images, args.repo, out, run_id)
+        else:
+            pythons = {'geo': args.python, 'score': args.score_python}
+            if needed:
+                P.copy_inputs(out, d, needed, args.inputs)
+            P.windows_build(pythons, args.repo, d['id'], steps, out)
+            fingerprint = P.windows_fingerprint(pythons, args.repo, toolchains)
+        found = [f for n in names for f in S.expand(out, n)]
+        missing = [n for n in names if not S.expand(out, n) or not all((out / f).is_file() for f in S.expand(out, n))]
+        if missing:                                        # an exit code alone is not completion
+            print('compute_build: FAILED, not in %s: %s' % (out, ', '.join(missing)), file=sys.stderr)
+            return 1
+        names = list(dict.fromkeys(found))
+        receipt = {'mode': mode, 'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources, 'run_id': run_id,
+                   'fingerprint': fingerprint, 'files': names, 'inputs': {'from': str(args.inputs) if args.inputs else None, 'names': needed}}
+        (out / 'compute_build_receipt.json').write_text(json.dumps(receipt, indent=1, sort_keys=True) + '\n', encoding='utf-8')
+    finally:
+        if args.drop_stage and mode == 'container':   # whatever the build did: the stores in the stage are voter-derived (a failed build is looked at in --out)
+            P.drop_stage(images, run_id)
+            print('compute_build: the folder %s is removed from the stage volume' % run_id)
     print('BUILD OK (%s): %d file(s) in %s' % (mode, len(names), out))
     return 0
 

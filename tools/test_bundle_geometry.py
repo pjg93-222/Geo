@@ -43,6 +43,22 @@ SHAPE = [[3.5, 2.0], [4.0, 4.5], [2.0, 6.0], [-1.25, 4.0], [0.5, 0.125], [2.5, -
 HOLE = [[1.0, 2.0], [1.0, 3.0], [2.0, 3.0], [2.0, 2.0], [1.0, 2.0]]                                  # clockwise, inside SHAPE
 
 
+class PassThroughTests(unittest.TestCase):
+    def test_a_feature_that_is_neither_polygon_nor_multipolygon_is_passed_through_unchanged(self):
+        """An empty GeometryCollection has no 'coordinates': canonical_geometry used to raise KeyError on it."""
+        empty = {'id': 'e', 'geometry': {'type': 'GeometryCollection', 'geometries': []}, 'bbox': [0.0, 0.0, 0.0, 0.0]}
+        point = {'id': 'p', 'geometry': {'type': 'Point', 'coordinates': [1.0, 2.0]}, 'bbox': [1.0, 2.0, 1.0, 2.0]}
+        polygon = level('Polygon', [rotated(SQUARE_CCW, 2)], ident='sq')['tract']['sq']
+        geometry = {'tract': {'e': empty, 'p': point, 'sq': polygon}}
+        before = copy.deepcopy(geometry)
+        result = B4.canonical_geometry(geometry)
+        self.assertEqual(result['tract']['e'], empty)
+        self.assertEqual(result['tract']['p'], point)
+        self.assertEqual(result['tract']['sq']['geometry']['coordinates'], [B4.start_ring(SQUARE_CCW)])     # the polygon is still canonical
+        self.assertEqual(list(result['tract']), ['e', 'p', 'sq'])                                           # order kept
+        self.assertEqual(geometry, before)                                                                  # the input is not mutated
+
+
 class StartRingTests(unittest.TestCase):
     def test_every_start_gives_the_same_ring(self):
         want = B4.start_ring(SHAPE)

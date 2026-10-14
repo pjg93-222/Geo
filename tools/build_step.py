@@ -63,7 +63,7 @@ STEPS = {
                      needs=('street.sqlite3', '@street-salt')),
     'shown': Step('tools/shown_areas.py', 'area_scores_shown.csv', image='score', also=('area_scores_shown.manifest.json',),
                   needs=('@rowfw',)),
-    'scores': Step('tools/build_scores_v3.py', 'scores.sqlite3', image='score', receipt='scores_receipt.json', demo_key=True,
+    'scores': Step('tools/build_scores_v3.py', 'scores.sqlite3', image='score', receipt='scores_receipt.json', keep=('scores_receipt.json',), demo_key=True,
                    needs=('street.sqlite3', 'contacts.sqlite3', 'area_scores_shown.csv', 'area_scores_shown.manifest.json', '@rowfw')),
     'walk': Step('tools/build_walk.py', 'walk.sqlite3', walk_salt=True,
                  needs=('roads.sqlite3', 'street.sqlite3', 'contacts.sqlite3', '@scores-store')),

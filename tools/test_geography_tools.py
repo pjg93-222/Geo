@@ -5,6 +5,7 @@ geopandas/shapely only, no Django, no real data, no network.
     <venv python> -m unittest tools.test_geography_tools          (from the V3 folder)
 """
 import csv
+import hashlib
 import io
 import json
 import re
@@ -394,6 +395,19 @@ class SnapshotKeyTests(unittest.TestCase):
         args = ('b' * 64, 'c' * 64, 'd' * 64)
         self.assertEqual(AL.snapshot_key(*args), AL.snapshot_key(*args, prefix='co-cd005-'))
         self.assertEqual(AL.snapshot_key(*args, 'or-cd005-')[len('or-cd005-'):], AL.snapshot_key(*args)[len('co-cd005-'):])
+
+    def test_the_geometry_form_token_is_part_of_the_v4_key(self):
+        """Canonical-geometry bundles get a key of their own: bundles.import_bundle refuses to replace the contents of an immutable snapshot
+        under an existing key, so a bundle whose geometry.json is written another way must not share the key of the older ones."""
+        args = ('b' * 64, 'c' * 64, 'd' * 64)
+        self.assertEqual(AL.GEOMETRY_FORM, 'geom-canonical-1')
+        joined = lambda *parts: 'co-cd005-' + hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()[:12]
+        self.assertEqual(AL.snapshot_key(*args), joined(*args, AL.ROWFW_VERSION, 'geom-canonical-1'))
+        self.assertNotEqual(AL.snapshot_key(*args), joined(*args, AL.ROWFW_VERSION))          # the key of the same inputs before the token
+        kwargs = dict(base_key='co-cd005-0123456789ab', area_sha='c' * 64, run_id='r', created_at='x', concordance={},
+                      frozen={'framework_config_sha256': 'e' * 64, 'plan_sha256': 'f' * 64, 'criteria_sha256': '1' * 64})
+        manifest = build_bundle_v4.apply_v4_manifest({}, [], {}, **kwargs)
+        self.assertEqual(manifest['snapshot'], joined('co-cd005-0123456789ab', 'c' * 64, 'e' * 64, AL.ROWFW_VERSION, 'geom-canonical-1'))
 
     def test_a_manifest_takes_the_district_prefix(self):
         kwargs = dict(base_key='or-cd005-0123456789ab', area_sha='c' * 64,

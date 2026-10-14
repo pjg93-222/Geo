@@ -326,13 +326,18 @@ def canonical_polygon(rings):
 def canonical_geometry(geometry):
     """geometry.json's {level: {id: feature}} with every polygon (each of a multipolygon) from canonical_polygon: the same shapes, but
     no platform's GEOS decides where a ring starts or in which order the holes come. Precision, key order, the exterior first and the
-    order of the polygons of a multipolygon stay as they were."""
+    order of the polygons of a multipolygon stay as they were. A feature whose geometry is neither a Polygon nor a MultiPolygon (an empty
+    GeometryCollection has no 'coordinates') is passed through unchanged."""
     def rings(kind, coordinates):
         if kind == 'Polygon':
             return canonical_polygon(coordinates)
         return [canonical_polygon(polygon) for polygon in coordinates]
-    return {level: {ident: {**f, 'geometry': {**f['geometry'], 'coordinates': rings(f['geometry']['type'], f['geometry']['coordinates'])}}
-                    for ident, f in features.items()} for level, features in geometry.items()}
+
+    def canonical_feature(f):
+        if f['geometry']['type'] not in ('Polygon', 'MultiPolygon'):
+            return f
+        return {**f, 'geometry': {**f['geometry'], 'coordinates': rings(f['geometry']['type'], f['geometry']['coordinates'])}}
+    return {level: {ident: canonical_feature(f) for ident, f in features.items()} for level, features in geometry.items()}
 
 
 def polygons_only(geom):

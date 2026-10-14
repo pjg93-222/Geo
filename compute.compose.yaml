@@ -51,6 +51,13 @@ services:
         target: /terrier
         read_only: true
         bind: {create_host_path: false}
+      # the repo bind is the whole tree, live .local and _build included: mask both with empty in-memory folders (a build writes to the stage volume only)
+      - type: tmpfs
+        target: /terrier/.local
+        tmpfs: {size: 1048576}
+      - type: tmpfs
+        target: /terrier/_build
+        tmpfs: {size: 1048576}
       # the vendor CSVs: the Colorado file and the OR/CT folder only, not the rest of Downloads
       - type: bind
         source: ${HOST_DOWNLOADS:-C:/Users/pgoff/Downloads}/statara_co_cd005_20260904.csv
@@ -103,6 +110,13 @@ services:
         target: /terrier
         read_only: true
         bind: {create_host_path: false}
+      # the repo bind is the whole tree, live .local and _build included: mask both with empty in-memory folders (a build writes to the stage volume only)
+      - type: tmpfs
+        target: /terrier/.local
+        tmpfs: {size: 1048576}
+      - type: tmpfs
+        target: /terrier/_build
+        tmpfs: {size: 1048576}
       - type: volume
         source: stage
         target: /stage

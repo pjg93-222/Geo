@@ -9,6 +9,10 @@ import json
 import re
 
 ROWFW_VERSION = 'rowfw-1.0.0'
+# The form of the bundle geometry.json, part of the snapshot key: server/research/bundles.py refuses to replace the contents of an immutable snapshot
+# under an existing key, so bundles written with canonical rings (tools/build_bundle_v4.py canonical_geometry) must not share a key with the
+# ones written before it. A change to how geometry.json is written bumps this token.
+GEOMETRY_FORM = 'geom-canonical-1'
 # The frozen inputs of rowfw-1.0.0. A bundle that claims another config, plan or criteria file is rejected.
 FROZEN_SHA256 = {
     'framework_config_sha256': '28e8d53db7e258d60d9eba87d0e186e877ac3cb4f4b0e6863e53d72b03cfc95a',
@@ -103,7 +107,7 @@ def sha256_json(value):
 
 
 def snapshot_key(base_key, area_table_sha256, config_sha256, prefix='co-cd005-'):
-    digest = hashlib.sha256(('|'.join([base_key, area_table_sha256, config_sha256, ROWFW_VERSION])).encode('utf-8')).hexdigest()
+    digest = hashlib.sha256(('|'.join([base_key, area_table_sha256, config_sha256, ROWFW_VERSION, GEOMETRY_FORM])).encode('utf-8')).hexdigest()
     return prefix + digest[:12]
 
 
