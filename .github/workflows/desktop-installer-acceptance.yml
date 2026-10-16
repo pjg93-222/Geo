@@ -1,0 +1,364 @@
+# Installer acceptance for the published Terrier 1.0.3 unsigned Windows installer.
+# Repository file: .github/workflows/desktop-installer-acceptance.yml (pjg93-222/Geo).
+#
+# Downloads the EXISTING release asset (public URL, no token), verifies its sha256, records the
+# expected NotSigned Authenticode status, installs it silently per-user on a disposable hosted
+# runner, launches the installed exe once with --melange-isolated-profile and once in production
+# mode, checks the access screen (no grant: no backend, no listening port), closes it by recorded
+# PID only, uninstalls silently and records what remains. Nothing is compiled, no release or tag is
+# created, no secret is used, and the only artifact is acceptance-terrier.json (no binaries).
+# Out of scope: approved functions behind the access gate (no grant) and auto-update (unsigned).
+#
+# Triggers: a push to main that changes this file, or workflow_dispatch. This repository's default branch
+# is main, so dispatch is available once the file is on main.
+name: desktop-installer-acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/desktop-installer-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-installer-acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      APP_ID: terrier
+      APP_NAME: Terrier
+      APP_VERSION: '1.0.3'
+      RELEASE_REPO: pjg93-222/Geo
+      RELEASE_TAG: desktop-preview-v1.0.3
+      ASSET: Terrier-1.0.3-win-x64-unsigned-installer.exe
+      ASSET_SHA256: 884520127a98cabd08776c4fe7599b27bf72ceacd230f6091db8ef7acd20794b
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Download, verify, install, launch, close by PID, uninstall
+        run: |
+          # Installer acceptance for one published unsigned desktop installer. No build, no grant, no update.
+          # Inputs come only from the job env (APP_ID, APP_NAME, APP_VERSION, RELEASE_REPO, RELEASE_TAG, ASSET, ASSET_SHA256).
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $app = $env:APP_ID; $name = $env:APP_NAME; $version = $env:APP_VERSION; $aumid = "org.melange.desktop.$app"
+          $root = Join-Path $env:RUNNER_TEMP 'acc'
+          $outDir = Join-Path $env:RUNNER_TEMP 'acceptance'
+          $jsonPath = Join-Path $outDir "acceptance-$app.json"
+          New-Item -ItemType Directory -Force -Path $root, $outDir | Out-Null
+          $installer = Join-Path $root $env:ASSET
+          $requestedDir = Join-Path $root "program\$name"
+          $isolatedRoot = Join-Path $root 'iso'
+          $stateRoot = Join-Path $env:USERPROFILE 'Documents\MelangeApplicationState'
+          $prodProfile = Join-Path $stateRoot $app
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+          $uninstallRoots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+
+          $obs = [ordered]@{
+            schema = 'melange-installer-acceptance-1'
+            app = $app; product = $name; version = $version
+            release = [ordered]@{ repository = $env:RELEASE_REPO; tag = $env:RELEASE_TAG; asset = $env:ASSET; expectedSha256 = $env:ASSET_SHA256 }
+            run = [ordered]@{ repository = $env:GITHUB_REPOSITORY; sha = $env:GITHUB_SHA; ref = $env:GITHUB_REF; event = $env:GITHUB_EVENT_NAME; runId = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; imageOS = $env:ImageOS; imageVersion = $env:ImageVersion; startedAt = (Get-Date).ToUniversalTime().ToString('o') }
+            outOfScope = @('approved functions behind the access gate: no grant is issued', 'auto-update: the build is unsigned and the native updater is fail-closed')
+            checks = [ordered]@{}
+            observations = [ordered]@{}
+          }
+          $failed = New-Object System.Collections.Generic.List[string]
+          $unverified = New-Object System.Collections.Generic.List[string]
+          function Check([string]$id, [bool]$ok, $detail) {
+            $obs.checks[$id] = [ordered]@{ ok = $ok; detail = $detail }
+            if ($ok) { Write-Host "PASS $id" } else { $failed.Add($id); Write-Host "::error title=$id::$(ConvertTo-Json $detail -Compress -Depth 5)" }
+          }
+          function Note([string]$id, $value) { $obs.observations[$id] = $value }
+          # Phase evidence: needs_request only when the access screen text was read; no direct evidence is 'unverified' (neither pass nor fail).
+          function PhaseCheck([string]$id, $launch) {
+            if ($launch.accessPhase -eq 'unobserved') {
+              $obs.checks[$id] = [ordered]@{ ok = $null; status = 'unverified'; detail = [ordered]@{ phase = 'unverified'; reason = 'no UIA text or other direct phase evidence'; uia = $launch.uia } }
+              $unverified.Add($id); Write-Host "::warning title=$id::access phase unverified (no direct evidence)"
+            } else { Check $id ($launch.accessPhase -eq 'needs_request') ([ordered]@{ phase = $launch.accessPhase; uia = $launch.uia }) }
+          }
+          function Tail([string]$path, [int]$lines = 60) { if (Test-Path -LiteralPath $path) { @(Get-Content -LiteralPath $path -Tail $lines -ErrorAction SilentlyContinue) } else { $null } }
+          function Listing([string]$dir) {
+            if (-not (Test-Path -LiteralPath $dir)) { return $null }
+            @(Get-ChildItem -LiteralPath $dir -Recurse -Depth 1 -Force -ErrorAction SilentlyContinue | Select-Object -First 120 | ForEach-Object { $_.FullName.Substring($dir.Length).TrimStart('\') + $(if ($_.PSIsContainer) { '\' } else { " ($($_.Length) B)" }) })
+          }
+          function RegValue([string]$key, [string]$valueName) {
+            $item = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+            if ($item -and $item.PSObject.Properties[$valueName]) { $v = $item.PSObject.Properties[$valueName].Value; if ($v -is [byte[]]) { [BitConverter]::ToString($v) } else { "$v" } } else { $null }
+          }
+          function UninstallEntries {
+            foreach ($r in $uninstallRoots) {
+              Get-ChildItem -LiteralPath $r -ErrorAction SilentlyContinue | ForEach-Object {
+                $v = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
+                if ($v -and $v.PSObject.Properties['DisplayName'] -and "$($v.DisplayName)" -like "$name*") {
+                  $e = [ordered]@{ hive = $r; key = $_.PSChildName }
+                  foreach ($f in 'DisplayName', 'DisplayVersion', 'Publisher', 'InstallLocation', 'UninstallString', 'QuietUninstallString', 'DisplayIcon') { $e[$f] = $(if ($v.PSObject.Properties[$f]) { "$($v.$f)" } else { $null }) }
+                  $e
+                }
+              }
+            }
+          }
+          function Shortcuts {
+            $shell = New-Object -ComObject WScript.Shell
+            foreach ($kind in 'Programs', 'Desktop') {
+              $lnk = Join-Path ([Environment]::GetFolderPath($kind)) "$name.lnk"
+              [ordered]@{ kind = $kind; path = $lnk; exists = (Test-Path -LiteralPath $lnk); target = $(if (Test-Path -LiteralPath $lnk) { $shell.CreateShortcut($lnk).TargetPath } else { $null }) }
+            }
+          }
+
+          Add-Type -TypeDefinition @'
+          using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+          public static class AcceptanceWindows {
+            delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+            public static List<string> Top(uint pid) {
+              var found = new List<string>();
+              EnumWindows((hwnd, l) => { uint owner; GetWindowThreadProcessId(hwnd, out owner); if (owner == pid) { var text = new StringBuilder(512); GetWindowText(hwnd, text, 512); if (text.Length > 0) found.Add((IsWindowVisible(hwnd) ? "1|" : "0|") + hwnd.ToInt64() + "|" + text); } return true; }, IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          function TopWindows([int]$processId) {
+            @([AcceptanceWindows]::Top([uint32]$processId) | ForEach-Object { $parts = $_ -split '\|', 3; [ordered]@{ visible = ($parts[0] -eq '1'); handle = [long]$parts[1]; title = $parts[2] } })
+          }
+          # Descendants of one launched PID, created after the launch (guards against PID reuse).
+          function ProcessTree([int]$rootId, [datetime]$since) {
+            $all = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since })
+            $ids = New-Object 'System.Collections.Generic.HashSet[int]'; [void]$ids.Add($rootId)
+            do { $before = $ids.Count; foreach ($p in $all) { if ($ids.Contains([int]$p.ParentProcessId)) { [void]$ids.Add([int]$p.ProcessId) } } } while ($ids.Count -ne $before)
+            @($all | Where-Object { $ids.Contains([int]$_.ProcessId) } | ForEach-Object {
+              $cl = "$($_.CommandLine)"
+              [ordered]@{ pid = [int]$_.ProcessId; parent = [int]$_.ParentProcessId; name = $_.Name; started = $_.CreationDate.ToUniversalTime().ToString('o'); path = $_.ExecutablePath
+                backendServer = ($cl -match 'desktop_backend\.py' -and $cl -match '\s--port\s'); accessHelper = ($cl -match '--desktop-(access-state|credential|owner-check)'); commandLine = $cl.Substring(0, [Math]::Min(300, $cl.Length)) }
+            })
+          }
+          # Stop only PIDs recorded from this launch's tree, and only if the live process is the same one (start time).
+          function StopRecorded($records) {
+            $stopped = @()
+            $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+            foreach ($rec in $records) {
+              if (-not $seen.Add([int]$rec.pid)) { continue }
+              $live = Get-Process -Id $rec.pid -ErrorAction SilentlyContinue
+              $start = $null; if ($live) { try { $start = $live.StartTime } catch { } }  # null when the PID now belongs to an unreadable process
+              if ($start -and [Math]::Abs(($start.ToUniversalTime() - [datetime]::Parse($rec.started, $null, 'RoundtripKind')).TotalSeconds) -lt 2) {
+                Stop-Process -Id $rec.pid -Force -ErrorAction SilentlyContinue; $stopped += $rec.pid
+              }
+            }
+            if ($stopped) { Wait-Process -Id $stopped -Timeout 15 -ErrorAction SilentlyContinue }
+            @($stopped)
+          }
+          function UiaText([long]$handle) {
+            try {
+              Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+              $element = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$handle)
+              $names = @()
+              for ($i = 0; $i -lt 6 -and $names.Count -eq 0; $i++) {
+                $names = @($element.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique -First 80)
+                if ($names.Count -eq 0) { Start-Sleep -Seconds 2 }
+              }
+              [ordered]@{ available = $true; names = $names }
+            } catch { [ordered]@{ available = $false; error = $_.Exception.Message } }
+          }
+          function AccessPhase($uia) {
+            $text = (@($uia.names) -join "`n")
+            if (-not $uia.available -or -not $text) { 'unobserved' }
+            elseif ($text -match 'Request administrator approval for this installation') { 'needs_request' }
+            elseif ($text -match 'Access could not be checked') { 'error' }
+            else { 'other' }
+          }
+
+          function LaunchApp([string]$mode, [string[]]$arguments, [string]$expectedTitle, [string]$userData, [bool]$expectLoginItem) {
+            $r = [ordered]@{ mode = $mode; arguments = $arguments; expectedTitle = $expectedTitle; userData = $userData }
+            $base = Join-Path $root "launch-$mode"
+            $since = (Get-Date).AddSeconds(-2)
+            $p = Start-Process -FilePath $exe -ArgumentList (@($arguments) + @('--enable-logging=file', "--log-file=$base.chromium.log")) -WorkingDirectory $root -PassThru -RedirectStandardOutput "$base.stdout.txt" -RedirectStandardError "$base.stderr.txt"
+            $r.mainPid = $p.Id
+            $tree = @(); $target = $null
+            try {
+              $r.processSessionId = (Get-Process -Id $p.Id -ErrorAction SilentlyContinue).SessionId
+              $titles = New-Object System.Collections.Generic.List[string]
+              $deadline = (Get-Date).AddSeconds(150)
+              while ((Get-Date) -lt $deadline -and -not $p.HasExited -and -not $target) {
+                foreach ($w in TopWindows $p.Id) {
+                  $seen = "$(if ($w.visible) { 'visible' } else { 'hidden' }): $($w.title)"; if (-not $titles.Contains($seen)) { $titles.Add($seen) }
+                  if ($w.title -eq $expectedTitle -and $w.visible) { $target = $w }
+                }
+                if (-not $target) { Start-Sleep -Milliseconds 500 }
+              }
+              $r.windowTitlesSeen = @($titles)
+              $r.window = $target
+              $r.exitedEarly = $p.HasExited
+              # Protected access bootstrap writes these records before the access screen can render a phase.
+              $deadline = (Get-Date).AddSeconds(60)
+              while ((Get-Date) -lt $deadline -and -not ((Test-Path (Join-Path $userData 'access-identity.dpapi')) -and (Test-Path (Join-Path $userData 'access-trust.dpapi')))) { Start-Sleep -Seconds 1 }
+              if ($expectLoginItem) { $deadline = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $deadline -and -not (RegValue $runKey $aumid)) { Start-Sleep -Seconds 1 } }
+              # Watch for a backend server or any listening TCP port in the app's process tree.
+              $listeners = New-Object 'System.Collections.Generic.HashSet[string]'; $backends = New-Object 'System.Collections.Generic.HashSet[string]'; $helpers = 0
+              for ($i = 0; $i -lt 10; $i++) {
+                $tree = @(ProcessTree $p.Id $since); $ids = @($tree | ForEach-Object { $_.pid })
+                foreach ($c in @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) { if ($ids -contains [int]$c.OwningProcess) { [void]$listeners.Add("$($c.LocalAddress):$($c.LocalPort) pid=$($c.OwningProcess)") } }
+                foreach ($t in $tree) { if ($t.backendServer) { [void]$backends.Add("pid=$($t.pid) $($t.commandLine)") }; if ($t.accessHelper) { $helpers++ } }
+                Start-Sleep -Seconds 2
+              }
+              $r.listeningPorts = @($listeners); $r.backendServers = @($backends); $r.accessHelperSamples = $helpers
+              $r.backendLogExists = Test-Path (Join-Path $userData 'logs\backend.log')
+              $r.windowsAtEnd = @(TopWindows $p.Id)
+              $r.uia = $(if ($target) { UiaText $target.handle } else { [ordered]@{ available = $false; error = 'no visible window with the expected title' } })
+              $r.accessPhase = AccessPhase $r.uia
+              $r.loginItem = RegValue $runKey $aumid
+              $r.loginItemApproved = RegValue $approvedKey $aumid
+              $r.userDataListing = Listing $userData
+            } finally {
+              $r.treeBeforeClose = @(ProcessTree $p.Id $since)
+              $r.closeMainWindowSent = $false
+              if (-not $p.HasExited) { $p.Refresh(); $r.closeMainWindowSent = $p.CloseMainWindow() }
+              $r.exitedAfterCloseMainWindow = $p.WaitForExit(45000)
+              Start-Sleep -Seconds 2
+              $remaining = @(ProcessTree $p.Id $since)
+              $r.recordedPids = @(@($r.treeBeforeClose) + $remaining | ForEach-Object { $_.pid } | Sort-Object -Unique)
+              $r.forceStoppedPids = @(StopRecorded (@($r.treeBeforeClose) + $remaining))
+              $r.exitCode = $(if ($p.HasExited) { $p.ExitCode } else { $null })
+              $r.strayProcessesUnderInstallDir = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { "pid=$($_.ProcessId) $($_.Name)" })
+              $r.stdoutTail = Tail "$base.stdout.txt" 40; $r.stderrTail = Tail "$base.stderr.txt" 40; $r.chromiumLogTail = Tail "$base.chromium.log" 60
+            }
+            $r
+          }
+
+          try {
+            Write-Host '::group::Runner session'
+            $self = [System.Diagnostics.Process]::GetCurrentProcess()
+            $session = [ordered]@{ sessionId = $self.SessionId; userInteractive = [Environment]::UserInteractive; user = "$env:USERDOMAIN\$env:USERNAME"; userProfile = $env:USERPROFILE
+              shellDocuments = [Environment]::GetFolderPath('MyDocuments'); screen = "$([AcceptanceWindows]::GetSystemMetrics(0))x$([AcceptanceWindows]::GetSystemMetrics(1))"
+              querySession = @(try { & query.exe session 2>&1 | ForEach-Object { "$_" } } catch { "query.exe unavailable: $($_.Exception.Message)" }) }
+            Note 'runnerSession' $session; $session | ConvertTo-Json -Depth 3
+            Note 'preexisting' ([ordered]@{ stateRootExists = (Test-Path $stateRoot); loginItem = (RegValue $runKey $aumid); uninstallEntries = @(UninstallEntries) })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::1. Download and verify sha256'
+            $url = "https://github.com/$env:RELEASE_REPO/releases/download/$env:RELEASE_TAG/$env:ASSET"
+            & curl.exe --fail --location --silent --show-error --retry 5 --retry-all-errors --output $installer $url
+            if ($LASTEXITCODE -ne 0) { throw "download failed (curl exit $LASTEXITCODE): $url" }
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+            $obs.release.url = $url; $obs.release.size = (Get-Item -LiteralPath $installer).Length; $obs.release.actualSha256 = $hash
+            Check 'download.sha256' ($hash -eq $env:ASSET_SHA256) ([ordered]@{ expected = $env:ASSET_SHA256; actual = $hash; size = $obs.release.size })
+            if ($hash -ne $env:ASSET_SHA256) { throw 'sha256 mismatch: the downloaded installer is not executed' }
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::2. Authenticode'
+            $sig = Get-AuthenticodeSignature -LiteralPath $installer
+            Check 'installer.notSigned' ("$($sig.Status)" -eq 'NotSigned') ([ordered]@{ status = "$($sig.Status)"; message = $sig.StatusMessage; expected = 'NotSigned (unsigned preview, recorded)' })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::3. Silent per-user install'
+            $inst = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$requestedDir") -PassThru
+            if (-not $inst.WaitForExit(900000)) { throw 'installer did not finish within 15 minutes' }
+            Check 'install.exitCode' ($inst.ExitCode -eq 0) ([ordered]@{ exitCode = $inst.ExitCode; arguments = "/S /D=$requestedDir" })
+            $entries = @(UninstallEntries)
+            $hkcu = @($entries | Where-Object { $_.hive -like 'HKCU:*' })
+            Note 'uninstallEntriesAfterInstall' $entries
+            Check 'install.hkcuUninstallKey' ($hkcu.Count -eq 1) ([ordered]@{ count = $hkcu.Count; entries = $entries })
+            Check 'install.perUserOnly' (@($entries | Where-Object { $_.hive -like 'HKLM:*' }).Count -eq 0) 'no HKLM uninstall entry (perMachine false)'
+            if ($hkcu.Count -ne 1) { throw 'no unique HKCU uninstall entry; later steps need its InstallLocation' }
+            $entry = $hkcu[0]
+            Check 'install.displayName' ("$($entry.DisplayName)" -like "$name*") $entry.DisplayName
+            Check 'install.displayVersion' ($entry.DisplayVersion -eq $version) $entry.DisplayVersion
+            $installDir = $entry.InstallLocation.TrimEnd('\')
+            Check 'install.customDirHonored' ($installDir -ieq $requestedDir) ([ordered]@{ requested = $requestedDir; installLocation = $installDir })
+            $exe = Join-Path $installDir "$name.exe"
+            Check 'install.programFiles' ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath (Join-Path $installDir 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $installDir "resources\runtime\$app"))) ([ordered]@{ exe = $exe; top = @(Get-ChildItem -LiteralPath $installDir -Name -ErrorAction SilentlyContinue) })
+            $links = @(Shortcuts)
+            Check 'install.shortcut' (@($links | Where-Object { $_.exists -and $_.target -ieq $exe }).Count -ge 1) $links
+            Note 'signatures' ([ordered]@{ installedExe = "$((Get-AuthenticodeSignature -LiteralPath $exe).Status)"; uninstaller = $(if (Test-Path -LiteralPath (Join-Path $installDir "Uninstall $name.exe")) { "$((Get-AuthenticodeSignature -LiteralPath (Join-Path $installDir "Uninstall $name.exe")).Status)" } else { 'not found' }) })
+            Check 'install.noLoginItemBeforeLaunch' ($null -eq (RegValue $runKey $aumid)) (RegValue $runKey $aumid)
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::4a. Launch with --melange-isolated-profile'
+            $isoUserData = Join-Path $isolatedRoot $app
+            $iso = LaunchApp 'isolated' @("--melange-isolated-profile=$isolatedRoot") "$name access [isolated test profile]" $isoUserData $false
+            $iso.isolatedProfileLog = Tail (Join-Path $isoUserData 'logs\isolated-profile.log') 5
+            $iso.discoveryCacheExists = Test-Path (Join-Path $isolatedRoot 'github-discovery')
+            $iso.productionStateRootExists = Test-Path $stateRoot
+            Note 'launchIsolated' $iso
+            Check 'isolated.window' ($null -ne $iso.window) ([ordered]@{ expected = $iso.expectedTitle; seen = $iso.windowTitlesSeen; sessionId = $iso.processSessionId })
+            $appWindows = @($iso.windowsAtEnd | Where-Object { $_.title -like "$name*" })  # IME helper windows carry their own titles
+            Check 'isolated.titleMarker' ($appWindows.Count -gt 0 -and @($appWindows | Where-Object { -not $_.title.EndsWith(' [isolated test profile]') }).Count -eq 0) $iso.windowsAtEnd
+            Check 'isolated.accessBootstrap' ((Test-Path (Join-Path $isoUserData 'access-identity.dpapi')) -and (Test-Path (Join-Path $isoUserData 'access-trust.dpapi'))) $iso.userDataListing
+            PhaseCheck 'isolated.accessPhase' $iso
+            Check 'isolated.noBackendOrPort' ($iso.listeningPorts.Count -eq 0 -and $iso.backendServers.Count -eq 0 -and -not $iso.backendLogExists) ([ordered]@{ ports = $iso.listeningPorts; backends = $iso.backendServers; backendLog = $iso.backendLogExists })
+            Check 'isolated.marker' ([bool]$iso.isolatedProfileLog -or (@($iso.stdoutTail) -match 'Isolated test profile active').Count -gt 0) ([ordered]@{ log = $iso.isolatedProfileLog; stdout = $iso.stdoutTail })
+            Check 'isolated.noLoginItem' ($null -eq $iso.loginItem) $iso.loginItem
+            Check 'isolated.productionProfileUntouched' (-not $iso.productionStateRootExists) $stateRoot
+            Check 'isolated.closedByPid' ($iso.strayProcessesUnderInstallDir.Count -eq 0) ([ordered]@{ closeMainWindowSent = $iso.closeMainWindowSent; graceful = $iso.exitedAfterCloseMainWindow; forceStopped = $iso.forceStoppedPids; stray = $iso.strayProcessesUnderInstallDir })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::4b. Launch in production mode'
+            $prod = LaunchApp 'production' @() "$name access" $prodProfile $true
+            Note 'launchProduction' $prod
+            Check 'production.window' ($null -ne $prod.window) ([ordered]@{ expected = $prod.expectedTitle; seen = $prod.windowTitlesSeen; sessionId = $prod.processSessionId })
+            Check 'production.profileCreated' ((Test-Path (Join-Path $prodProfile 'settings.json')) -and (Test-Path (Join-Path $prodProfile 'access-identity.dpapi')) -and (Test-Path (Join-Path $prodProfile 'access-trust.dpapi'))) ([ordered]@{ path = $prodProfile; listing = $prod.userDataListing })
+            PhaseCheck 'production.accessPhase' $prod
+            Check 'production.noBackendOrPort' ($prod.listeningPorts.Count -eq 0 -and $prod.backendServers.Count -eq 0 -and -not $prod.backendLogExists) ([ordered]@{ ports = $prod.listeningPorts; backends = $prod.backendServers; backendLog = $prod.backendLogExists })
+            Check 'production.loginItem' ("$($prod.loginItem)" -like "*$exe*" -and "$($prod.loginItem)" -like '*--desktop-updater*') ([ordered]@{ name = $aumid; value = $prod.loginItem; startupApproved = $prod.loginItemApproved })
+            Check 'production.closedByPid' ($prod.strayProcessesUnderInstallDir.Count -eq 0) ([ordered]@{ closeMainWindowSent = $prod.closeMainWindowSent; graceful = $prod.exitedAfterCloseMainWindow; forceStopped = $prod.forceStoppedPids; stray = $prod.strayProcessesUnderInstallDir })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::5. Silent uninstall'
+            $u = "$((@(UninstallEntries) | Where-Object { $_.hive -like 'HKCU:*' } | Select-Object -First 1).UninstallString)"
+            if ($u -notmatch '^\s*"?(.+?\.exe)"?\s*(.*)$') { throw "unparseable UninstallString: $u" }
+            $uExe = $Matches[1]; $uArgs = @(($Matches[2] -split '\s+' | Where-Object { $_ }) + '/S')
+            $un = Start-Process -FilePath $uExe -ArgumentList $uArgs -PassThru
+            [void]$un.WaitForExit(600000)
+            # The NSIS uninstaller re-runs itself from %TEMP%, so wait on the observable result instead of the first process.
+            $deadline = (Get-Date).AddMinutes(10)
+            while ((Get-Date) -lt $deadline -and ((Test-Path -LiteralPath $installDir) -or @(UninstallEntries).Count -gt 0)) { Start-Sleep -Seconds 2 }
+            Check 'uninstall.programDirRemoved' (-not (Test-Path -LiteralPath $installDir)) ([ordered]@{ uninstallString = $u; arguments = $uArgs; exitCode = $(if ($un.HasExited) { $un.ExitCode } else { $null }); dir = $installDir })
+            Check 'uninstall.registryRemoved' (@(UninstallEntries).Count -eq 0) @(UninstallEntries)
+            Check 'uninstall.loginItemRemoved' ($null -eq (RegValue $runKey $aumid) -and $null -eq (RegValue $approvedKey $aumid)) ([ordered]@{ run = (RegValue $runKey $aumid); startupApproved = (RegValue $approvedKey $aumid) })
+            $links = @(Shortcuts)
+            Check 'uninstall.shortcutsRemoved' (@($links | Where-Object { $_.exists }).Count -eq 0) $links
+            Check 'uninstall.userDataRetained' (Test-Path (Join-Path $prodProfile 'settings.json')) 'deleteAppDataOnUninstall is false: the production profile stays'
+            Note 'remainsAfterUninstall' ([ordered]@{
+              productionProfile = Listing $prodProfile
+              isolatedProfile = Listing $isolatedRoot
+              melangeDesktopAppData = Test-Path (Join-Path $env:APPDATA 'MelangeDesktop')
+              electronDefaultUserData = Test-Path (Join-Path $env:APPDATA $name)
+              updaterCache = Test-Path (Join-Path $env:LOCALAPPDATA "$app-desktop-updater")
+              credentialManagerEntries = @(& cmdkey.exe /list 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match 'MelangeSystems' }).Count
+            })
+            Write-Host '::endgroup::'
+          } catch {
+            $failed.Add('fatal'); $obs.fatal = "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
+            Write-Host "::error title=fatal::$($_.Exception.Message)"
+          } finally {
+            $obs.run.finishedAt = (Get-Date).ToUniversalTime().ToString('o')
+            # PASS only when every check, including the observed needs_request phase, passed; unverified phase evidence never counts as PASS.
+            $obs.failed = @($failed); $obs.unverified = @($unverified)
+            $obs.result = $(if ($failed.Count) { 'FAIL' } elseif ($unverified.Count) { 'PASS_WITH_UNVERIFIED' } else { 'PASS' })
+            $obs.phaseProven = ($unverified.Count -eq 0 -and $obs.checks.Contains('production.accessPhase') -and $obs.checks['production.accessPhase'].ok -eq $true -and $obs.checks.Contains('isolated.accessPhase') -and $obs.checks['isolated.accessPhase'].ok -eq $true)
+            $obs | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding utf8
+            Write-Host "acceptance-$app.json: $($obs.result) ($($obs.checks.Count) checks, failed: $($failed -join ', '); unverified: $($unverified -join ', '))"
+          }
+          if ($failed.Count) { exit 1 }
+          exit 0
+
+      - name: Upload acceptance record (JSON only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (= v4.6.2)
+        with:
+          name: acceptance-terrier
+          path: ${{ runner.temp }}/acceptance/acceptance-terrier.json
+          if-no-files-found: error
+          retention-days: 3
