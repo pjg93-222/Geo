@@ -296,6 +296,10 @@ jobs:
           $v = node -p "require('./package.json').version"
           if ($v -cne $env:VERSION) { throw "client version $v is not $env:VERSION" }
           npm ci --no-fund
+          # Tests that generate TLS fixtures spawn DESKTOP_TEST_PYTHON (default: bare `python`, which has no cryptography).
+          # Use the fresh build venv (pinned cryptography 49.0.0), never the bundled runtime Python.
+          $env:DESKTOP_TEST_PYTHON = "$env:VENV\Scripts\python.exe"
+          & $env:DESKTOP_TEST_PYTHON -E -s -c "import cryptography, sys; print(sys.executable, 'cryptography', cryptography.__version__)"
           npm test 2>&1 | Tee-Object -FilePath "$env:OUT\npm-test.log"
           npm audit --omit=dev --audit-level=high
 
