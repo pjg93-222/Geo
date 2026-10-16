@@ -322,18 +322,21 @@ jobs:
           # uninstall.silent verdict. Gated: the launcher, Uninstall <Name>.exe and the relaunched %TEMP% Un_*.exe (whose parent
           # is the launcher) must all exit 0, and no window may be visible. Exactly two descendants are tolerated, each matched on
           # image, exact command line, parent and exit code:
-          #   nsisExecutionPolicyProbe  - %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe with the exact argv observed in
+          #   nsisExecutionPolicyProbe  - image exactly %SystemRoot%\System32\... or, under WOW64 redirection of the 32-bit NSIS
+          #                               uninstaller, %SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe (Geo v6.1 run
+          #                               38902836244); the command line stays the exact System32 form observed in
           #                               Geo v5 run 38896840011, parent = an uninstaller process, exit code 0 or 1 (the probe's two outputs)
           #   probeConsoleHost          - %SystemRoot%\System32\conhost.exe "0x4", parent = the probe or an uninstaller process, exit 0
           # Any other descendant, or a tolerated one that deviates in any of those fields, fails the check. Probe absence is fine.
           function SilentVerdict($launcher, $members, $visibleWindows, [string[]]$argv, [string]$product) {
             $root = "$env:SystemRoot"
-            $probeImage = "$root\System32\WindowsPowerShell\v1.0\powershell.exe"
+            $probeImage = "$root\System32\WindowsPowerShell\v1.0\powershell.exe"   # the command line names this form in every run
+            $probeImages = @($probeImage, "$root\SysWOW64\WindowsPowerShell\v1.0\powershell.exe")
             $probeArgs = ' -C "if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }"'
             $hostImage = "$root\System32\conhost.exe"
             $exactCommand = { param($m, $image, $suffix, $prefix) $cl = "$($m.commandLine)"; $head = $prefix + $image + $(if ($prefix -eq '"') { '"' } else { '' })
               $cl.Length -eq ($head.Length + $suffix.Length) -and $cl.StartsWith($head, [StringComparison]::OrdinalIgnoreCase) -and $cl.Substring($head.Length) -ceq $suffix }
-            $imageIs = { param($m, $image) -not $m.path -or "$($m.path)" -ieq $image }  # path is recorded live; the command line carries the image either way
+            $imageIs = { param($m, $images) [bool]"$($m.path)" -and @($images | Where-Object { "$($m.path)" -ieq $_ }).Count -gt 0 }  # whole-path equality, no substring; an unrecorded image never matches
             $rows = @($members | ForEach-Object { [ordered]@{ pid = $_.pid; parent = $_.parent; name = $_.name; path = $_.path; exited = $_.exited; exitCode = $_.exitCode; commandLine = $_.commandLine; role = $null; ok = $false; reason = $null } })
             $uninstallerPids = @($rows | Where-Object { $_.name -ceq "Uninstall $product.exe" -and $_.pid -eq $launcher.pid } | ForEach-Object { $_.pid })
             foreach ($r in $rows) { if ($r.name -ceq "Uninstall $product.exe") { $r.role = 'uninstaller'; $r.ok = ($r.pid -eq $launcher.pid -and $r.exited -and $r.exitCode -eq 0); if (-not $r.ok) { $r.reason = 'uninstaller is not the launcher or did not exit 0' } } }
@@ -341,14 +344,14 @@ jobs:
             $nsisPids = @($rows | Where-Object { $_.role -in 'uninstaller', 'uninstallerRelaunch' } | ForEach-Object { $_.pid })
             foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'powershell.exe') {
               $r.role = 'nsisExecutionPolicyProbe?'
-              $checks = [ordered]@{ image = (& $imageIs $r $probeImage); argv = (& $exactCommand $r $probeImage $probeArgs '"'); parent = ($nsisPids -contains $r.parent); exit = ($r.exited -and $r.exitCode -in @(0, 1)) }
-              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } else { 'probe deviates: ' + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
+              $checks = [ordered]@{ image = (& $imageIs $r $probeImages); argv = (& $exactCommand $r $probeImage $probeArgs '"'); parent = ($nsisPids -contains $r.parent); exit = ($r.exited -and $r.exitCode -in @(0, 1)) }
+              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } elseif (-not "$($r.path)") { 'image not recorded' } else { 'probe deviates: ' + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
               if ($r.ok) { $r.role = 'nsisExecutionPolicyProbe' } } }
             $probePids = @($rows | Where-Object { $_.role -eq 'nsisExecutionPolicyProbe' } | ForEach-Object { $_.pid })
             foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'conhost.exe') {
               $r.role = 'probeConsoleHost?'
-              $checks = [ordered]@{ image = (& $imageIs $r $hostImage); argv = (& $exactCommand $r $hostImage ' 0x4' '\??\'); parent = (($probePids + $nsisPids) -contains $r.parent -and $probePids.Count -gt 0); exit = ($r.exited -and $r.exitCode -eq 0) }
-              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } else { 'console host deviates: ' + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
+              $checks = [ordered]@{ image = (& $imageIs $r @($hostImage)); argv = (& $exactCommand $r $hostImage ' 0x4' '\??\'); parent = (($probePids + $nsisPids) -contains $r.parent -and $probePids.Count -gt 0); exit = ($r.exited -and $r.exitCode -eq 0) }
+              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } elseif (-not "$($r.path)") { 'image not recorded' } else { 'console host deviates: ' + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
               if ($r.ok) { $r.role = 'probeConsoleHost' } } }
             foreach ($r in $rows) { if (-not $r.role) { $r.role = 'unexpected'; $r.ok = $false; $r.reason = 'unexpected descendant of the uninstaller' } }
             $relaunch = @($rows | Where-Object { $_.role -eq 'uninstallerRelaunch' })
@@ -361,19 +364,26 @@ jobs:
           }
           # Replay controls from recorded runs. Fields are verbatim from the run JSONs; those JSONs did not record parent PIDs
           # or image paths, so parents are the structural ones v6.1 records live (relaunch <- launcher, probe <- relaunch,
-          # console host <- probe) and paths are left empty (the image is still checked through the exact command line).
+          # console host <- probe) and images are the ones Geo v6.1 run 38902836244 recorded (SysWOW64 probe, System32 conhost).
+          # The Geo v6.1 set below is verbatim, recorded parents and images included.
           function SilentControls {
             $sys = "$env:SystemRoot"
             $launcher5 = [ordered]@{ pid = 7384; exited = $true; exitCode = 0 }
             $geo5 = @(
-              [ordered]@{ pid = 1260; parent = 3596; name = 'conhost.exe'; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" },
-              [ordered]@{ pid = 3596; parent = 8076; name = 'powershell.exe'; exited = $true; exitCode = 1; commandLine = "`"$sys\system32\WindowsPowerShell\v1.0\powershell.exe`" -C `"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }`"" },
+              [ordered]@{ pid = 1260; parent = 3596; name = 'conhost.exe'; path = "$sys\system32\conhost.exe"; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" },
+              [ordered]@{ pid = 3596; parent = 8076; name = 'powershell.exe'; path = "$sys\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"; exited = $true; exitCode = 1; commandLine = "`"$sys\system32\WindowsPowerShell\v1.0\powershell.exe`" -C `"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }`"" },
               [ordered]@{ pid = 7384; parent = 9000; name = 'Uninstall Terrier.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe" /currentuser /S' },
               [ordered]@{ pid = 8076; parent = 7384; name = 'Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Terrier\' })
             $launcher6 = [ordered]@{ pid = 6400; exited = $true; exitCode = 0 }
             $geo6 = @(
               [ordered]@{ pid = 1240; parent = 6400; name = 'Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Terrier\' },
               [ordered]@{ pid = 6400; parent = 9000; name = 'Uninstall Terrier.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe" /currentuser /S' })
+            $launcher61 = [ordered]@{ pid = 3808; exited = $true; exitCode = 0 }
+            $geo61 = @(
+              [ordered]@{ pid = 1296; parent = 5752; name = 'conhost.exe'; path = 'C:\Windows\system32\conhost.exe'; exited = $true; exitCode = 0; commandLine = '\??\C:\Windows\system32\conhost.exe 0x4' },
+              [ordered]@{ pid = 3808; parent = 7184; name = 'Uninstall Terrier.exe'; path = 'D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe" /currentuser /S' },
+              [ordered]@{ pid = 5752; parent = 7324; name = 'powershell.exe'; path = 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'; exited = $true; exitCode = 1; commandLine = '"C:\Windows\system32\WindowsPowerShell\v1.0\powershell.exe" -C "if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }"' },
+              [ordered]@{ pid = 7324; parent = 3808; name = 'Un_A.exe'; path = 'C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Terrier\' })
             $copy = { param($set) @($set | ForEach-Object { $c = [ordered]@{}; foreach ($k in $_.Keys) { $c[$k] = $_[$k] }; $c }) }
             $extra = (& $copy $geo5) + @([ordered]@{ pid = 4444; parent = 8076; name = 'helper.exe'; exited = $true; exitCode = 1; commandLine = 'helper.exe' })
             $extraZero = (& $copy $geo6) + @([ordered]@{ pid = 4445; parent = 1240; name = 'helper.exe'; exited = $true; exitCode = 0; commandLine = 'helper.exe' })
@@ -383,10 +393,19 @@ jobs:
             $parentChanged = & $copy $geo5; $parentChanged[1].parent = 4321
             $exitChanged = & $copy $geo5; $exitChanged[1].exitCode = 2
             $exitZero = & $copy $geo5; $exitZero[1].exitCode = 0
-            $hostOrphan = & $copy $geo6; $hostOrphan += [ordered]@{ pid = 1261; parent = 1240; name = 'conhost.exe'; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" }
+            $imageMissing = & $copy $geo61; $imageMissing[2].path = $null
+            $imageV2 = & $copy $geo61; $imageV2[2].path = 'C:\Windows\System32\WindowsPowerShell\v2.0\powershell.exe'
+            $imageUser = & $copy $geo61; $imageUser[2].path = 'C:\Users\runneradmin\powershell.exe'
+            $imageSuffix = & $copy $geo61; $imageSuffix[2].path = 'D:\x\C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+            $hostOrphan = & $copy $geo6; $hostOrphan += [ordered]@{ pid = 1261; parent = 1240; name = 'conhost.exe'; path = "$sys\system32\conhost.exe"; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" }
             $cases = @(
               @{ name = 'Geo v5 run 38896840011 set (probe present)'; expect = $true; launcher = $launcher5; set = $geo5 },
               @{ name = 'Geo v6 run 38900109141 set (probe absent)'; expect = $true; launcher = $launcher6; set = $geo6 },
+              @{ name = 'Geo v6.1 run 38902836244 set (WOW64 probe, real parents)'; expect = $true; launcher = $launcher61; set = $geo61 },
+              @{ name = 'probe with no recorded image'; expect = $false; launcher = $launcher61; set = $imageMissing },
+              @{ name = 'probe image ...\System32\WindowsPowerShell\v2.0'; expect = $false; launcher = $launcher61; set = $imageV2 },
+              @{ name = 'probe image in a user directory'; expect = $false; launcher = $launcher61; set = $imageUser },
+              @{ name = 'probe image with a WOW64 path as a suffix only'; expect = $false; launcher = $launcher61; set = $imageSuffix },
               @{ name = 'v5 set + extra child exiting 1'; expect = $false; launcher = $launcher5; set = $extra },
               @{ name = 'v6 set + extra child exiting 0'; expect = $false; launcher = $launcher6; set = $extraZero },
               @{ name = 'probe with a different argv'; expect = $false; launcher = $launcher5; set = $argvChanged },
