@@ -2,7 +2,8 @@
 # Repository file: .github/workflows/desktop-installer-acceptance.yml (pjg93-222/Geo).
 #
 # Downloads the EXISTING release asset (public URL, no token), verifies its sha256, records the
-# expected NotSigned Authenticode status, installs it silently per-user on a disposable hosted
+# expected NotSigned Authenticode status, compares the NSIS payload with the published preview zip
+# (7-Zip listings: file set, size, CRC32; the zip's sha256 is verified first), installs it silently per-user on a disposable hosted
 # runner, launches the installed exe once with --melange-isolated-profile and once in production
 # mode, checks the access screen (no grant: no backend, no listening port), closes it by recorded
 # PID only, uninstalls silently and records what remains. Nothing is compiled, no release or tag is
@@ -30,7 +31,7 @@ concurrency:
 jobs:
   acceptance:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       APP_ID: terrier
       APP_NAME: Terrier
@@ -39,6 +40,10 @@ jobs:
       RELEASE_TAG: desktop-preview-v1.0.3
       ASSET: Terrier-1.0.3-win-x64-unsigned-installer.exe
       ASSET_SHA256: 884520127a98cabd08776c4fe7599b27bf72ceacd230f6091db8ef7acd20794b
+      ZIP: Terrier-1.0.3-win-x64-unsigned-preview.zip
+      ZIP_SHA256: bbbdb3c808a6d1fde7b1e060aed3efd6939a2d6c68eda45ea926786a1989bc40
+      ZIP_PYC_ALLOWED: 'false'
+      ZIP_EXPECTED_NOTE: 'none: the hosted build zipped win-unpacked before any smoke, so the file sets must be identical'
     defaults:
       run:
         shell: pwsh
@@ -197,6 +202,69 @@ jobs:
             foreach ($phase in $PhaseTexts.Keys) { if ($text.Contains($PhaseTexts[$phase])) { return $phase } }
             'other'
           }
+          # Uninstaller argv from an UninstallString or QuietUninstallString: every existing option is its own element and
+          # '/S' is appended once, as a separate last element. (v4 built '/currentuser/S' by string concatenation.)
+          function UninstallArgv([string]$commandLine) {
+            $m = [regex]::Match($commandLine, '^\s*"?(?<exe>.+?\.exe)"?(?:\s+(?<rest>.*))?$', 'IgnoreCase')
+            if (-not $m.Success) { throw "unparseable uninstall command: $commandLine" }
+            [string[]]$options = @($m.Groups['rest'].Value -split '\s+' | Where-Object { $_ -and $_ -cne '/S' })
+            [string[]]$argv = @($options) + @('/S')
+            [ordered]@{ exe = $m.Groups['exe'].Value; argv = $argv }
+          }
+          function ArgvRegression {
+            $cases = @(
+              @{ in = '"C:\p\Uninstall App.exe"'; exe = 'C:\p\Uninstall App.exe'; argv = @('/S') },
+              @{ in = '"C:\p\Uninstall App.exe" /currentuser'; exe = 'C:\p\Uninstall App.exe'; argv = @('/currentuser', '/S') },
+              @{ in = '"C:\p\Uninstall App.exe" /currentuser /S'; exe = 'C:\p\Uninstall App.exe'; argv = @('/currentuser', '/S') },
+              @{ in = '"C:\p\Uninstall App.exe"  /allusers   /KEEP_APP_DATA '; exe = 'C:\p\Uninstall App.exe'; argv = @('/allusers', '/KEEP_APP_DATA', '/S') },
+              @{ in = 'C:\p\Uninstall.exe /currentuser'; exe = 'C:\p\Uninstall.exe'; argv = @('/currentuser', '/S') }
+            )
+            foreach ($c in $cases) {
+              $r = UninstallArgv $c.in
+              $same = $r.argv.Count -eq $c.argv.Count; for ($i = 0; $same -and $i -lt $c.argv.Count; $i++) { $same = $r.argv[$i] -ceq $c.argv[$i] }
+              $ok = $same -and $r.exe -ceq $c.exe -and $r.argv -is [array] -and @($r.argv | Select-Object -Unique).Count -eq $r.argv.Count -and $r.argv[-1] -ceq '/S'
+              [ordered]@{ input = $c.in; expected = $c.argv; actual = @($r.argv); exe = $r.exe; ok = $ok }
+            }
+          }
+          # One `7z l -slt` listing -> path => (size, CRC32). Directories are skipped; a zero-byte file's blank 7z CRC is
+          # read as 00000000 (the zip value); a leading 'win-unpacked/' (the B2 Mentat zip layout) is stripped.
+          function SltEntries([string[]]$lines) {
+            $entries = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+            $current = @{}; $started = $false
+            foreach ($line in @($lines) + @('')) {
+              if (-not $started) { if ($line -eq '----------') { $started = $true }; continue }
+              if ($line -ne '') { $i = $line.IndexOf(' = '); if ($i -gt 0) { $current[$line.Substring(0, $i)] = $line.Substring($i + 3) }; continue }
+              if ($current['Path'] -and $current['Folder'] -ne '+' -and -not ("$($current['Attributes'])".StartsWith('D') -and -not $current['CRC'])) {
+                $key = $current['Path'].Replace('\', '/'); if ($key.StartsWith('win-unpacked/')) { $key = $key.Substring(13) }
+                $size = [long]$current['Size']; $crc = "$($current['CRC'])".ToUpperInvariant(); if (-not $crc -and $size -eq 0) { $crc = '00000000' }
+                $entries[$key] = [ordered]@{ size = $size; crc = $crc }
+              }
+              $current = @{}
+            }
+            $entries
+          }
+          function CompareListings($installerEntries, $zipEntries, [bool]$pycAllowed) {
+            $isPyc = { param($k) $k -match '(^|/)__pycache__/[^/]+\.pyc$' }
+            $mismatched = @($installerEntries.Keys | Where-Object { $zipEntries.ContainsKey($_) -and ($installerEntries[$_].size -ne $zipEntries[$_].size -or $installerEntries[$_].crc -cne $zipEntries[$_].crc) })
+            $onlyInstaller = @($installerEntries.Keys | Where-Object { -not $zipEntries.ContainsKey($_) })
+            $onlyZip = @($zipEntries.Keys | Where-Object { -not $installerEntries.ContainsKey($_) })
+            $pycInstaller = @($onlyInstaller | Where-Object { & $isPyc $_ }); $pycZip = @($onlyZip | Where-Object { & $isPyc $_ })
+            $otherInstaller = @($onlyInstaller | Where-Object { -not (& $isPyc $_) }); $otherZip = @($onlyZip | Where-Object { -not (& $isPyc $_) })
+            $result = [ordered]@{
+              installerFiles = $installerEntries.Count; zipFiles = $zipEntries.Count
+              installerBytes = [long](@($installerEntries.Values | ForEach-Object { $_.size }) | Measure-Object -Sum).Sum
+              zipBytes = [long](@($zipEntries.Values | ForEach-Object { $_.size }) | Measure-Object -Sum).Sum
+              common = $installerEntries.Count - $onlyInstaller.Count; mismatchedCount = $mismatched.Count; mismatched = @($mismatched | Select-Object -First 50)
+              onlyInstallerCount = $onlyInstaller.Count; onlyZipCount = $onlyZip.Count
+              pycOnlyInstallerCount = $pycInstaller.Count; pycOnlyZipCount = $pycZip.Count; pycOnlyInstallerSample = @($pycInstaller | Select-Object -First 20); pycOnlyZipSample = @($pycZip | Select-Object -First 20)
+              otherOnlyInstaller = @($otherInstaller | Select-Object -First 50); otherOnlyZip = @($otherZip | Select-Object -First 50)
+              pycDifferenceAllowed = $pycAllowed
+            }
+            $result.identical = ($mismatched.Count -eq 0 -and $onlyInstaller.Count -eq 0 -and $onlyZip.Count -eq 0)
+            $result.ok = ($mismatched.Count -eq 0 -and $otherInstaller.Count -eq 0 -and $otherZip.Count -eq 0 -and ($pycAllowed -or ($pycInstaller.Count -eq 0 -and $pycZip.Count -eq 0)))
+            $result
+          }
+
           function LaunchApp([string]$mode, [string[]]$arguments, [string]$expectedTitle, [string]$userData, [bool]$expectLoginItem) {
             $r = [ordered]@{ mode = $mode; arguments = $arguments; expectedTitle = $expectedTitle; userData = $userData }
             $base = Join-Path $root "launch-$mode"
@@ -279,6 +347,51 @@ jobs:
             Check 'installer.notSigned' ("$($sig.Status)" -eq 'NotSigned') ([ordered]@{ status = "$($sig.Status)"; message = $sig.StatusMessage; expected = 'NotSigned (unsigned preview, recorded)' })
             Write-Host '::endgroup::'
 
+            Write-Host '::group::2b. Installer payload vs published zip (CRC32 parity; the zip is never executed)'
+            $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+            $zip = Join-Path $root $env:ZIP
+            $work = Join-Path $root 'cmp'
+            $parity = [ordered]@{ zip = $env:ZIP; expectedSha256 = $env:ZIP_SHA256; sevenZip = $sevenZip; expectedDifference = $env:ZIP_EXPECTED_NOTE }
+            try {
+              if (-not (Test-Path -LiteralPath $sevenZip)) { throw "7-Zip not found at $sevenZip" }
+              $parity.sevenZipVersion = "$((Get-Item -LiteralPath $sevenZip).VersionInfo.ProductVersion)"
+              $zipUrl = "https://github.com/$env:RELEASE_REPO/releases/download/$env:RELEASE_TAG/$env:ZIP"
+              & curl.exe --fail --location --silent --show-error --retry 5 --retry-all-errors --output $zip $zipUrl
+              if ($LASTEXITCODE -ne 0) { throw "zip download failed (curl exit $LASTEXITCODE): $zipUrl" }
+              $parity.url = $zipUrl; $parity.size = (Get-Item -LiteralPath $zip).Length
+              $parity.actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+              Check 'zip.sha256' ($parity.actualSha256 -eq $env:ZIP_SHA256) ([ordered]@{ expected = $env:ZIP_SHA256; actual = $parity.actualSha256; size = $parity.size })
+              if ($parity.actualSha256 -ne $env:ZIP_SHA256) { throw 'zip sha256 mismatch: comparison skipped' }
+              $drive = Get-PSDrive -Name $root.Substring(0, 1); $parity.freeBytes = $drive.Free
+              if ($drive.Free -lt 1.5 * (Get-Item -LiteralPath $installer).Length) { throw "free space $($drive.Free) B is below 1.5x the installer size" }
+              New-Item -ItemType Directory -Force -Path $work | Out-Null
+              [Console]::OutputEncoding = [Text.Encoding]::UTF8
+              $top = @(& $sevenZip l -sccUTF-8 $installer)
+              $parity.installerType = "$(@($top | Where-Object { $_ -match '^Type = ' }) | Select-Object -First 1)"
+              $payloads = @($top | Where-Object { $_ -match '\$PLUGINSDIR\\app-(64|32|arm64)\.7z\s*$' } | ForEach-Object { ($_ -split '\s+')[-1] })
+              $parity.payloads = $payloads
+              Check 'zip.installerPayload' ($parity.installerType -eq 'Type = Nsis' -and $payloads.Count -eq 1 -and $payloads[0] -eq '$PLUGINSDIR\app-64.7z') ([ordered]@{ type = $parity.installerType; payloads = $payloads })
+              if ($payloads -notcontains '$PLUGINSDIR\app-64.7z') { throw 'no single $PLUGINSDIR\app-64.7z payload' }
+              & $sevenZip e -sccUTF-8 $installer '$PLUGINSDIR\app-64.7z' "-o$work" -y | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "7z could not extract the NSIS payload (exit $LASTEXITCODE)" }
+              $instLines = @(& $sevenZip l -slt -sccUTF-8 (Join-Path $work 'app-64.7z')); $instExit = $LASTEXITCODE
+              $zipLines = @(& $sevenZip l -slt -sccUTF-8 $zip); $zipExit = $LASTEXITCODE
+              if ($instExit -ne 0 -or $zipExit -ne 0) { throw "7z listing failed (payload exit $instExit, zip exit $zipExit)" }
+              $comparison = CompareListings (SltEntries $instLines) (SltEntries $zipLines) ($env:ZIP_PYC_ALLOWED -eq 'true')
+              $parity.comparison = $comparison
+              Check 'zip.parity' $comparison.ok ([ordered]@{ installerFiles = $comparison.installerFiles; zipFiles = $comparison.zipFiles; mismatched = $comparison.mismatchedCount
+                pycOnlyInstaller = $comparison.pycOnlyInstallerCount; pycOnlyZip = $comparison.pycOnlyZipCount; otherOnlyInstaller = $comparison.otherOnlyInstaller; otherOnlyZip = $comparison.otherOnlyZip; expectedDifference = $env:ZIP_EXPECTED_NOTE })
+            } catch {
+              $parity.error = $_.Exception.Message
+              Check 'zip.parityCompleted' $false $parity.error
+            } finally {
+              # Only the files this step created: the zip and the extracted payload.
+              Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+              Note 'installerZipParity' $parity
+            }
+            Write-Host '::endgroup::'
+
             Write-Host '::group::3. Silent per-user install'
             $inst = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$requestedDir") -PassThru
             if (-not $inst.WaitForExit(900000)) { throw 'installer did not finish within 15 minutes' }
@@ -347,15 +460,33 @@ jobs:
             Write-Host '::endgroup::'
 
             Write-Host '::group::5. Silent uninstall'
-            $u = "$((@(UninstallEntries) | Where-Object { $_.hive -like 'HKCU:*' } | Select-Object -First 1).UninstallString)"
-            if ($u -notmatch '^\s*"?(.+?\.exe)"?\s*(.*)$') { throw "unparseable UninstallString: $u" }
-            $uExe = $Matches[1]; $uArgs = @(($Matches[2] -split '\s+' | Where-Object { $_ }) + '/S')
-            $un = Start-Process -FilePath $uExe -ArgumentList $uArgs -PassThru
-            [void]$un.WaitForExit(600000)
-            # The NSIS uninstaller re-runs itself from %TEMP%, so wait on the observable result instead of the first process.
+            $regression = @(ArgvRegression)
+            Check 'uninstall.argvRegression' (@($regression | Where-Object { -not $_.ok }).Count -eq 0) $regression
+            if (@($regression | Where-Object { -not $_.ok }).Count) { throw 'uninstaller argv builder failed its regression; the uninstaller was not executed' }
+            $current = @(UninstallEntries) | Where-Object { $_.hive -like 'HKCU:*' } | Select-Object -First 1
+            $u = "$($current.UninstallString)"
+            $plan = UninstallArgv $u
+            # The exact argv, element by element, is recorded before execution.
+            Note 'uninstallArgv' ([ordered]@{ uninstallString = $u; quietUninstallString = $current.QuietUninstallString; exe = $plan.exe; argc = $plan.argv.Count; argv = @($plan.argv); recordedAt = (Get-Date).ToUniversalTime().ToString('o') })
+            Write-Host "uninstall argv ($($plan.argv.Count)): $(@($plan.argv | ForEach-Object { "[$_]" }) -join ' ')"
+            $since = (Get-Date).AddSeconds(-2)
+            $un = Start-Process -FilePath $plan.exe -ArgumentList $plan.argv -PassThru
+            # The NSIS uninstaller re-runs itself from %TEMP%: follow its process tree (handles held so exit codes stay
+            # readable), watch every member for a visible window, and wait for the observable result.
+            $held = @{}; $visible = New-Object System.Collections.Generic.List[string]
             $deadline = (Get-Date).AddMinutes(10)
-            while ((Get-Date) -lt $deadline -and ((Test-Path -LiteralPath $installDir) -or @(UninstallEntries).Count -gt 0)) { Start-Sleep -Seconds 2 }
-            Check 'uninstall.programDirRemoved' (-not (Test-Path -LiteralPath $installDir)) ([ordered]@{ uninstallString = $u; arguments = $uArgs; exitCode = $(if ($un.HasExited) { $un.ExitCode } else { $null }); dir = $installDir })
+            do {
+              foreach ($t in @(ProcessTree $un.Id $since)) {
+                if (-not $held.ContainsKey($t.pid)) { $hp = Get-Process -Id $t.pid -ErrorAction SilentlyContinue; if ($hp) { try { [void]$hp.Handle; $held[$t.pid] = [ordered]@{ name = $t.name; commandLine = $t.commandLine; process = $hp } } catch { } } }
+                foreach ($w in TopWindows $t.pid) { if ($w.visible) { $seen = "pid=$($t.pid) $($t.name): $($w.title)"; if (-not $visible.Contains($seen)) { $visible.Add($seen) } } }
+              }
+              $busy = (Test-Path -LiteralPath $installDir) -or @(UninstallEntries).Count -gt 0 -or -not $un.HasExited -or @($held.Values | Where-Object { -not $_.process.HasExited }).Count -gt 0
+              if ($busy) { Start-Sleep -Milliseconds 500 }
+            } while ($busy -and (Get-Date) -lt $deadline)
+            $members = @($held.GetEnumerator() | Sort-Object Key | ForEach-Object { [ordered]@{ pid = $_.Key; name = $_.Value.name; exited = $_.Value.process.HasExited; exitCode = $(if ($_.Value.process.HasExited) { $_.Value.process.ExitCode } else { $null }); commandLine = $_.Value.commandLine } })
+            $launcher = [ordered]@{ pid = $un.Id; exited = $un.HasExited; exitCode = $(if ($un.HasExited) { $un.ExitCode } else { $null }) }
+            Check 'uninstall.silent' ($visible.Count -eq 0 -and $launcher.exited -and $launcher.exitCode -eq 0 -and @($members | Where-Object { -not $_.exited -or $_.exitCode -ne 0 }).Count -eq 0 -and $plan.argv[-1] -ceq '/S') ([ordered]@{ argv = @($plan.argv); visibleWindows = @($visible); launcher = $launcher; processes = $members })
+            Check 'uninstall.programDirRemoved' (-not (Test-Path -LiteralPath $installDir)) ([ordered]@{ uninstallString = $u; argv = @($plan.argv); dir = $installDir })
             Check 'uninstall.registryRemoved' (@(UninstallEntries).Count -eq 0) @(UninstallEntries)
             Check 'uninstall.loginItemRemoved' ($null -eq (RegValue $runKey $aumid) -and $null -eq (RegValue $approvedKey $aumid)) ([ordered]@{ run = (RegValue $runKey $aumid); startupApproved = (RegValue $approvedKey $aumid) })
             $links = @(Shortcuts)
