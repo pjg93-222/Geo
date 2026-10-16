@@ -42,8 +42,7 @@ jobs:
       ASSET_SHA256: 884520127a98cabd08776c4fe7599b27bf72ceacd230f6091db8ef7acd20794b
       ZIP: Terrier-1.0.3-win-x64-unsigned-preview.zip
       ZIP_SHA256: bbbdb3c808a6d1fde7b1e060aed3efd6939a2d6c68eda45ea926786a1989bc40
-      ZIP_PYC_ALLOWED: 'false'
-      ZIP_EXPECTED_NOTE: 'none: the hosted build zipped win-unpacked before any smoke, so the file sets must be identical'
+      ZIP_EXPECTED_NOTE: 'none: exact parity (the hosted build zipped win-unpacked before any smoke)'
     defaults:
       run:
         shell: pwsh
@@ -122,6 +121,15 @@ jobs:
 
           Add-Type -TypeDefinition @'
           using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+          public static class AcceptanceCrc {
+            static readonly uint[] Table = Build();
+            static uint[] Build() { var t = new uint[256]; for (uint i = 0; i < 256; i++) { uint c = i; for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1; t[i] = c; } return t; }
+            public static string OfFile(string path) {
+              uint crc = 0xFFFFFFFFu; var buffer = new byte[1 << 20];
+              using (var stream = System.IO.File.OpenRead(path)) { int n; while ((n = stream.Read(buffer, 0, buffer.Length)) > 0) for (int i = 0; i < n; i++) crc = Table[(crc ^ buffer[i]) & 0xFF] ^ (crc >> 8); }
+              return (crc ^ 0xFFFFFFFFu).ToString("X8");
+            }
+          }
           public static class AcceptanceWindows {
             delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
             [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
@@ -226,43 +234,89 @@ jobs:
               [ordered]@{ input = $c.in; expected = $c.argv; actual = @($r.argv); exe = $r.exe; ok = $ok }
             }
           }
-          # One `7z l -slt` listing -> path => (size, CRC32). Directories are skipped; a zero-byte file's blank 7z CRC is
-          # read as 00000000 (the zip value); a leading 'win-unpacked/' (the B2 Mentat zip layout) is stripped.
+          # One `7z l -slt` listing -> path => (size, CRC32). Fail-closed: a missing '----------' delimiter, a record without
+          # Path, a file without a numeric Size, a CRC that is not exactly 8 hex characters, a blank CRC on a non-empty file,
+          # or a duplicate normalised path throws. Directories are skipped; a zero-byte file's blank 7z CRC reads as 00000000
+          # (the zip value); a leading 'win-unpacked/' (the B2 Mentat zip layout) is stripped; '\' becomes '/'.
           function SltEntries([string[]]$lines) {
+            $all = @($lines)
+            $start = [Array]::IndexOf([string[]]$all, '----------')
+            if ($start -lt 0) { throw "7z -slt listing has no '----------' delimiter ($($all.Count) lines)" }
             $entries = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
-            $current = @{}; $started = $false
-            foreach ($line in @($lines) + @('')) {
-              if (-not $started) { if ($line -eq '----------') { $started = $true }; continue }
-              if ($line -ne '') { $i = $line.IndexOf(' = '); if ($i -gt 0) { $current[$line.Substring(0, $i)] = $line.Substring($i + 3) }; continue }
-              if ($current['Path'] -and $current['Folder'] -ne '+' -and -not ("$($current['Attributes'])".StartsWith('D') -and -not $current['CRC'])) {
+            $current = [ordered]@{}; $record = 0
+            foreach ($line in @($all[($start + 1)..($all.Count)]) + @('')) {
+              if ($null -eq $line) { $line = '' }
+              if ($line -ne '') {
+                $kv = [regex]::Match($line, '^(?<k>[^=]*?[^= ]) =(?: (?<v>.*))?$')
+                if (-not $kv.Success) { throw "malformed 7z -slt line in record $($record + 1): $line" }
+                $current[$kv.Groups['k'].Value] = $kv.Groups['v'].Value; continue
+              }
+              if ($current.Count -eq 0) { continue }
+              $record++
+              if (-not $current.Contains('Path') -or -not $current['Path']) { throw "7z -slt record $record has no Path" }
+              $isDir = $current['Folder'] -eq '+' -or "$($current['Attributes'])".StartsWith('D')
+              if (-not $isDir) {
+                $sizeText = "$($current['Size'])"; $size = 0L
+                if (-not [long]::TryParse($sizeText, [ref]$size) -or $size -lt 0) { throw "7z -slt record $record ($($current['Path'])) has no valid Size: '$sizeText'" }
+                if (-not $current.Contains('CRC')) { throw "7z -slt record $record ($($current['Path'])) has no CRC field" }
+                $crc = "$($current['CRC'])".ToUpperInvariant()
+                if ($crc -eq '') { if ($size -ne 0) { throw "7z -slt record $record ($($current['Path'])) has a blank CRC but size $size" }; $crc = '00000000' }
+                elseif ($crc -notmatch '^[0-9A-F]{8}$') { throw "7z -slt record $record ($($current['Path'])) has an invalid CRC '$crc'" }
                 $key = $current['Path'].Replace('\', '/'); if ($key.StartsWith('win-unpacked/')) { $key = $key.Substring(13) }
-                $size = [long]$current['Size']; $crc = "$($current['CRC'])".ToUpperInvariant(); if (-not $crc -and $size -eq 0) { $crc = '00000000' }
+                if ($entries.ContainsKey($key)) { throw "duplicate normalised path in 7z -slt listing: $key" }
                 $entries[$key] = [ordered]@{ size = $size; crc = $crc }
               }
-              $current = @{}
+              $current = [ordered]@{}
             }
-            $entries
+            # A Dictionary returned bare would be enumerated into the pipeline; wrap it.
+            , $entries
           }
-          function CompareListings($installerEntries, $zipEntries, [bool]$pycAllowed) {
-            $isPyc = { param($k) $k -match '(^|/)__pycache__/[^/]+\.pyc$' }
+          # Exact parity: identical path set, sizes and CRC32 on both sides. Empty listings are an error, not a match.
+          function CompareListings($installerEntries, $zipEntries) {
+            if ($null -eq $installerEntries -or $installerEntries.Count -eq 0) { throw 'the installer payload listing parsed to zero files' }
+            if ($null -eq $zipEntries -or $zipEntries.Count -eq 0) { throw 'the zip listing parsed to zero files' }
             $mismatched = @($installerEntries.Keys | Where-Object { $zipEntries.ContainsKey($_) -and ($installerEntries[$_].size -ne $zipEntries[$_].size -or $installerEntries[$_].crc -cne $zipEntries[$_].crc) })
             $onlyInstaller = @($installerEntries.Keys | Where-Object { -not $zipEntries.ContainsKey($_) })
             $onlyZip = @($zipEntries.Keys | Where-Object { -not $installerEntries.ContainsKey($_) })
-            $pycInstaller = @($onlyInstaller | Where-Object { & $isPyc $_ }); $pycZip = @($onlyZip | Where-Object { & $isPyc $_ })
-            $otherInstaller = @($onlyInstaller | Where-Object { -not (& $isPyc $_) }); $otherZip = @($onlyZip | Where-Object { -not (& $isPyc $_) })
             $result = [ordered]@{
               installerFiles = $installerEntries.Count; zipFiles = $zipEntries.Count
               installerBytes = [long](@($installerEntries.Values | ForEach-Object { $_.size }) | Measure-Object -Sum).Sum
               zipBytes = [long](@($zipEntries.Values | ForEach-Object { $_.size }) | Measure-Object -Sum).Sum
-              common = $installerEntries.Count - $onlyInstaller.Count; mismatchedCount = $mismatched.Count; mismatched = @($mismatched | Select-Object -First 50)
-              onlyInstallerCount = $onlyInstaller.Count; onlyZipCount = $onlyZip.Count
-              pycOnlyInstallerCount = $pycInstaller.Count; pycOnlyZipCount = $pycZip.Count; pycOnlyInstallerSample = @($pycInstaller | Select-Object -First 20); pycOnlyZipSample = @($pycZip | Select-Object -First 20)
-              otherOnlyInstaller = @($otherInstaller | Select-Object -First 50); otherOnlyZip = @($otherZip | Select-Object -First 50)
-              pycDifferenceAllowed = $pycAllowed
+              common = $installerEntries.Count - $onlyInstaller.Count
+              mismatchedCount = $mismatched.Count; mismatched = @($mismatched | Select-Object -First 50)
+              onlyInstallerCount = $onlyInstaller.Count; onlyInstaller = @($onlyInstaller | Select-Object -First 50)
+              onlyZipCount = $onlyZip.Count; onlyZip = @($onlyZip | Select-Object -First 50)
             }
-            $result.identical = ($mismatched.Count -eq 0 -and $onlyInstaller.Count -eq 0 -and $onlyZip.Count -eq 0)
-            $result.ok = ($mismatched.Count -eq 0 -and $otherInstaller.Count -eq 0 -and $otherZip.Count -eq 0 -and ($pycAllowed -or ($pycInstaller.Count -eq 0 -and $pycZip.Count -eq 0)))
+            $result.ok = ($mismatched.Count -eq 0 -and $onlyInstaller.Count -eq 0 -and $onlyZip.Count -eq 0)
             $result
+          }
+          # Negative controls (and one valid case) for the parser and comparer; they run before any listing is trusted.
+          function ParserControls {
+            $head = @('Path = x.7z', 'Type = 7z', '', '----------')
+            $file = { param($p, $s, $c) @("Path = $p", "Size = $s", "CRC = $c", 'Attributes = A', '') }
+            $valid = $head + (& $file 'a\b.txt' 3 '0A1B2C3D') + (& $file 'empty.txt' 0 '') + @('Path = a', 'Size = 0', 'Attributes = D', '')
+            $zipValid = $head + @('Path = win-unpacked\a\b.txt', 'Folder = -', 'Size = 3', 'CRC = 0a1b2c3d', '', 'Path = win-unpacked\empty.txt', 'Folder = -', 'Size = 0', 'CRC = 00000000', '', 'Path = win-unpacked\a', 'Folder = +', 'Size = 0', '')
+            $cases = @(
+              @{ name = 'empty input'; expect = 'reject'; run = { CompareListings (SltEntries @()) (SltEntries $zipValid) } },
+              @{ name = 'missing delimiter'; expect = 'reject'; run = { SltEntries (@('Path = x.7z', 'Type = 7z', '') + (& $file 'a.txt' 1 '00000001')) } },
+              @{ name = 'delimiter but no files on both sides'; expect = 'reject'; run = { CompareListings (SltEntries $head) (SltEntries $head) } },
+              @{ name = 'duplicate normalised path'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a\b.txt' 3 '0A1B2C3D') + (& $file 'a/b.txt' 3 '0A1B2C3D')) } },
+              @{ name = 'bad CRC XYZ'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a.txt' 1 'XYZ')) } },
+              @{ name = 'bad CRC 9 characters'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a.txt' 1 '123456789')) } },
+              @{ name = 'blank CRC on a non-empty file'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a.txt' 1 '')) } },
+              @{ name = 'record without Size'; expect = 'reject'; run = { SltEntries ($head + @('Path = a.txt', 'CRC = 00000001', '')) } },
+              @{ name = 'record without Path'; expect = 'reject'; run = { SltEntries ($head + @('Size = 1', 'CRC = 00000001', '')) } },
+              @{ name = 'size mismatch'; expect = 'reject'; run = { CompareListings (SltEntries $valid) (SltEntries ($head + (& $file 'a\b.txt' 4 '0A1B2C3D') + (& $file 'empty.txt' 0 ''))) } },
+              @{ name = 'one-sided file'; expect = 'reject'; run = { CompareListings (SltEntries ($valid + (& $file 'extra.dll' 2 '00000002'))) (SltEntries $zipValid) } },
+              @{ name = 'valid 7z vs zip layouts'; expect = 'pass'; run = { CompareListings (SltEntries $valid) (SltEntries $zipValid) } },
+              @{ name = 'CRC32 of "123456789" is CBF43926'; expect = 'pass'; run = { $t = [IO.Path]::GetTempFileName(); try { [IO.File]::WriteAllText($t, '123456789'); $v = [AcceptanceCrc]::OfFile($t); if ($v -cne 'CBF43926') { throw "CRC32 $v" } } finally { [IO.File]::Delete($t) } } }
+            )
+            foreach ($c in $cases) {
+              $outcome = $null; $why = $null
+              try { $r = & $c.run; if ($r -is [System.Collections.Specialized.OrderedDictionary] -and $r.Contains('ok')) { $outcome = $(if ($r.ok) { 'pass' } else { 'reject' }); $why = "ok=$($r.ok)" } else { $outcome = 'pass'; $why = 'parsed' } }
+              catch { $outcome = 'reject'; $why = $_.Exception.Message }
+              [ordered]@{ case = $c.name; expected = $c.expect; outcome = $outcome; ok = ($outcome -eq $c.expect); detail = $why }
+            }
           }
 
           function LaunchApp([string]$mode, [string[]]$arguments, [string]$expectedTitle, [string]$userData, [bool]$expectLoginItem) {
@@ -351,8 +405,12 @@ jobs:
             $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
             $zip = Join-Path $root $env:ZIP
             $work = Join-Path $root 'cmp'
+            $preCompressedExpected = $null; $loose = @()
             $parity = [ordered]@{ zip = $env:ZIP; expectedSha256 = $env:ZIP_SHA256; sevenZip = $sevenZip; expectedDifference = $env:ZIP_EXPECTED_NOTE }
             try {
+              $controls = @(ParserControls)
+              Check 'zip.parserControls' (@($controls | Where-Object { -not $_.ok }).Count -eq 0) $controls
+              if (@($controls | Where-Object { -not $_.ok }).Count) { throw 'listing parser failed its negative controls; no listing is trusted' }
               if (-not (Test-Path -LiteralPath $sevenZip)) { throw "7-Zip not found at $sevenZip" }
               $parity.sevenZipVersion = "$((Get-Item -LiteralPath $sevenZip).VersionInfo.ProductVersion)"
               $zipUrl = "https://github.com/$env:RELEASE_REPO/releases/download/$env:RELEASE_TAG/$env:ZIP"
@@ -377,10 +435,35 @@ jobs:
               $instLines = @(& $sevenZip l -slt -sccUTF-8 (Join-Path $work 'app-64.7z')); $instExit = $LASTEXITCODE
               $zipLines = @(& $sevenZip l -slt -sccUTF-8 $zip); $zipExit = $LASTEXITCODE
               if ($instExit -ne 0 -or $zipExit -ne 0) { throw "7z listing failed (payload exit $instExit, zip exit $zipExit)" }
-              $comparison = CompareListings (SltEntries $instLines) (SltEntries $zipLines) ($env:ZIP_PYC_ALLOWED -eq 'true')
+              # electron-builder stores preCompressedFileExtensions files (default .avi .mov .m4v .mp4 .m4p .qt .mkv .webm .vmdk)
+              # as separate NSIS File entries ($INSTDIR\resources\...), NOT inside app-64.7z (NsisTarget.ts generateForPreCompressed;
+              # extractAppPackage.nsh inserts customFiles_x64 after the payload). They are extracted, CRC32-hashed and merged.
+              $topSlt = @(& $sevenZip l -slt -sccUTF-8 $installer); if ($LASTEXITCODE -ne 0) { throw "7z could not list the installer (exit $LASTEXITCODE)" }
+              $d = [Array]::IndexOf([string[]]$topSlt, '----------'); if ($d -lt 0) { throw "the installer's 7z -slt listing has no '----------' delimiter" }
+              $topPaths = @($topSlt[($d + 1)..($topSlt.Count)] | Where-Object { "$_".StartsWith('Path = ') } | ForEach-Object { "$_".Substring(7) })
+              $installerEntries = SltEntries $instLines
+              $nsisOther = @(); $n = 0
+              foreach ($raw in $topPaths) {
+                if ($raw.StartsWith('$PLUGINSDIR\')) { continue }
+                $norm = ($raw -replace '^\$INSTDIR[\\/]', '').Replace('\', '/')
+                if (-not $norm.StartsWith('resources/')) { $nsisOther += $raw; continue }
+                $n++; $dest = Join-Path $work "loose\$n"
+                & $sevenZip e -sccUTF-8 $installer $raw "-o$dest" -y | Out-Null; $looseExit = $LASTEXITCODE
+                $files = @(Get-ChildItem -LiteralPath $dest -File -ErrorAction SilentlyContinue)
+                if ($looseExit -ne 0 -or $files.Count -ne 1) { throw "could not extract the loose NSIS file $raw (exit $looseExit, $($files.Count) files)" }
+                if ($installerEntries.ContainsKey($norm)) { throw "loose NSIS file duplicates an app-64.7z entry: $norm" }
+                $installerEntries[$norm] = [ordered]@{ size = [long]$files[0].Length; crc = [AcceptanceCrc]::OfFile($files[0].FullName) }
+                $loose += [ordered]@{ path = $norm; nsisPath = $raw; size = $installerEntries[$norm].size; crc = $installerEntries[$norm].crc }
+                [IO.Directory]::Delete($dest, $true)
+              }
+              $zipEntries = SltEntries $zipLines
+              $preCompressedExpected = @($zipEntries.Keys | Where-Object { $_ -match '\.(avi|mov|m4v|mp4|m4p|qt|mkv|webm|vmdk)$' } | Sort-Object | ForEach-Object { [ordered]@{ path = $_; size = $zipEntries[$_].size; crc = $zipEntries[$_].crc } })
+              $parity.nsisLooseFiles = $loose; $parity.nsisTopLevelCount = $topPaths.Count; $parity.nsisTopLevelOther = @($nsisOther | Select-Object -First 50)
+              $parity.zipPreCompressedFiles = $preCompressedExpected
+              $comparison = CompareListings $installerEntries $zipEntries
               $parity.comparison = $comparison
-              Check 'zip.parity' $comparison.ok ([ordered]@{ installerFiles = $comparison.installerFiles; zipFiles = $comparison.zipFiles; mismatched = $comparison.mismatchedCount
-                pycOnlyInstaller = $comparison.pycOnlyInstallerCount; pycOnlyZip = $comparison.pycOnlyZipCount; otherOnlyInstaller = $comparison.otherOnlyInstaller; otherOnlyZip = $comparison.otherOnlyZip; expectedDifference = $env:ZIP_EXPECTED_NOTE })
+              Check 'zip.parity' $comparison.ok ([ordered]@{ installerFiles = $comparison.installerFiles; zipFiles = $comparison.zipFiles; common = $comparison.common; mismatched = $comparison.mismatchedCount
+                onlyInstaller = $comparison.onlyInstaller; onlyZip = $comparison.onlyZip; nsisLooseFilesMerged = @($loose | ForEach-Object { $_.path }); expectedDifference = $env:ZIP_EXPECTED_NOTE })
             } catch {
               $parity.error = $_.Exception.Message
               Check 'zip.parityCompleted' $false $parity.error
@@ -423,6 +506,12 @@ jobs:
             Check 'install.customDirHonored' $honored $evidence
             $exe = Join-Path $installDir "$name.exe"
             Check 'install.programFiles' ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath (Join-Path $installDir 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $installDir "resources\runtime\$app"))) ([ordered]@{ exe = $exe; top = @(Get-ChildItem -LiteralPath $installDir -Name -ErrorAction SilentlyContinue) })
+            # Files that electron-builder stores outside app-64.7z must be on disk after install, equal (size + CRC32) to the zip.
+            $preResults = @(foreach ($e in @($preCompressedExpected)) {
+              $file = Join-Path $installDir ($e.path.Replace('/', '\')); $exists = Test-Path -LiteralPath $file -PathType Leaf
+              $size = $(if ($exists) { (Get-Item -LiteralPath $file).Length } else { $null }); $crc = $(if ($exists) { [AcceptanceCrc]::OfFile($file) } else { $null })
+              [ordered]@{ path = $e.path; exists = $exists; size = $size; crc = $crc; expectedSize = $e.size; expectedCrc = $e.crc; ok = ($exists -and $size -eq $e.size -and $crc -ceq $e.crc) } })
+            Check 'install.preCompressedAssets' ($null -ne $preCompressedExpected -and @($preResults | Where-Object { -not $_.ok }).Count -eq 0) ([ordered]@{ evaluated = ($null -ne $preCompressedExpected); expected = @($preCompressedExpected).Count; results = $preResults })
             $links = @(Shortcuts)
             Check 'install.shortcut' (@($links | Where-Object { $_.exists -and $_.target -ieq $exe }).Count -ge 1) $links
             Note 'signatures' ([ordered]@{ installedExe = "$((Get-AuthenticodeSignature -LiteralPath $exe).Status)"; uninstaller = $(if (Test-Path -LiteralPath (Join-Path $installDir "Uninstall $name.exe")) { "$((Get-AuthenticodeSignature -LiteralPath (Join-Path $installDir "Uninstall $name.exe")).Status)" } else { 'not found' }) })
@@ -485,7 +574,18 @@ jobs:
             } while ($busy -and (Get-Date) -lt $deadline)
             $members = @($held.GetEnumerator() | Sort-Object Key | ForEach-Object { [ordered]@{ pid = $_.Key; name = $_.Value.name; exited = $_.Value.process.HasExited; exitCode = $(if ($_.Value.process.HasExited) { $_.Value.process.ExitCode } else { $null }); commandLine = $_.Value.commandLine } })
             $launcher = [ordered]@{ pid = $un.Id; exited = $un.HasExited; exitCode = $(if ($un.HasExited) { $un.ExitCode } else { $null }) }
-            Check 'uninstall.silent' ($visible.Count -eq 0 -and $launcher.exited -and $launcher.exitCode -eq 0 -and @($members | Where-Object { -not $_.exited -or $_.exitCode -ne 0 }).Count -eq 0 -and $plan.argv[-1] -ceq '/S') ([ordered]@{ argv = @($plan.argv); visibleWindows = @($visible); launcher = $launcher; processes = $members })
+            # Silent = no visible window, and the uninstaller processes (the launcher, Uninstall <Name>.exe and the relaunched
+            # %TEMP% Un_*.exe) exited 0. Other children are evidence only. The NSIS uninstaller's own PowerShell execution-policy
+            # probe (exit 1 when the process policy is Restricted) is named explicitly and not gated.
+            foreach ($m in $members) {
+              $m.role = $(if ($m.name -ceq "Uninstall $name.exe") { 'uninstaller' } elseif ($m.name -match '^Un_[A-Z]\.exe$') { 'uninstallerRelaunch' }
+                elseif ($m.name -ieq 'powershell.exe' -and "$($m.commandLine)" -match 'Get-ExecutionPolicy -Scope Process') { 'nsisExecutionPolicyProbe' } else { 'otherChild' })
+            }
+            $gated = @($members | Where-Object { $_.role -in 'uninstaller', 'uninstallerRelaunch' })
+            $relaunch = @($gated | Where-Object { $_.role -eq 'uninstallerRelaunch' })
+            Check 'uninstall.silent' ($visible.Count -eq 0 -and $launcher.exited -and $launcher.exitCode -eq 0 -and $relaunch.Count -ge 1 -and @($gated | Where-Object { -not $_.exited -or $_.exitCode -ne 0 }).Count -eq 0 -and $plan.argv[-1] -ceq '/S') ([ordered]@{
+              argv = @($plan.argv); visibleWindows = @($visible); launcher = $launcher; relaunchObserved = ($relaunch.Count -ge 1)
+              gatedProcesses = $gated; evidenceOnly = @($members | Where-Object { $_.role -notin 'uninstaller', 'uninstallerRelaunch' }) })
             Check 'uninstall.programDirRemoved' (-not (Test-Path -LiteralPath $installDir)) ([ordered]@{ uninstallString = $u; argv = @($plan.argv); dir = $installDir })
             Check 'uninstall.registryRemoved' (@(UninstallEntries).Count -eq 0) @(UninstallEntries)
             Check 'uninstall.loginItemRemoved' ($null -eq (RegValue $runKey $aumid) -and $null -eq (RegValue $approvedKey $aumid)) ([ordered]@{ run = (RegValue $runKey $aumid); startupApproved = (RegValue $approvedKey $aumid) })
