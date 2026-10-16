@@ -275,8 +275,22 @@ jobs:
             $entry = $hkcu[0]
             Check 'install.displayName' ("$($entry.DisplayName)" -like "$name*") $entry.DisplayName
             Check 'install.displayVersion' ($entry.DisplayVersion -eq $version) $entry.DisplayVersion
-            $installDir = $entry.InstallLocation.TrimEnd('\')
-            Check 'install.customDirHonored' ($installDir -ieq $requestedDir) ([ordered]@{ requested = $requestedDir; installLocation = $installDir })
+            # electron-builder writes InstallLocation under HKCU\Software\<APP_GUID> (INSTALL_REGISTRY_KEY), not under the
+            # Uninstall key, so the install dir is the /D target, cross-checked against UninstallString's directory and the exe.
+            # A registry InstallLocation is optional evidence: recorded, and it must agree when present.
+            $uninstallDir = $(if ("$($entry.UninstallString)" -match '^\s*"?(.+?\.exe)"?\s*(.*)$') { Split-Path -Parent $Matches[1] } else { $null })
+            $installKey = "HKCU:\Software\$($entry.key)"
+            $registryLocation = RegValue $installKey 'InstallLocation'
+            $evidence = [ordered]@{ requested = $requestedDir; uninstallStringDir = $uninstallDir; requestedExeExists = (Test-Path -LiteralPath (Join-Path $requestedDir "$name.exe"))
+              installRegistryKey = $installKey; installRegistryLocation = $registryLocation; uninstallKeyInstallLocation = $entry.InstallLocation
+              installRegistryValues = [ordered]@{ KeepShortcuts = (RegValue $installKey 'KeepShortcuts'); ShortcutName = (RegValue $installKey 'ShortcutName'); MenuDirectory = (RegValue $installKey 'MenuDirectory') } }
+            $agrees = { param($location) -not $location -or $location.TrimEnd('\') -ieq $requestedDir }
+            $honored = $evidence.requestedExeExists -and "$uninstallDir" -ieq $requestedDir -and (& $agrees $registryLocation) -and (& $agrees $entry.InstallLocation)
+            # On a mismatch the check fails; later evidence is still collected from the directory the uninstaller names.
+            $installDir = $(if ($honored -or -not $uninstallDir -or -not (Test-Path -LiteralPath (Join-Path $uninstallDir "$name.exe"))) { $requestedDir } else { $uninstallDir })
+            $evidence.installDirUsed = $installDir
+            Note 'installLocation' $evidence
+            Check 'install.customDirHonored' $honored $evidence
             $exe = Join-Path $installDir "$name.exe"
             Check 'install.programFiles' ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath (Join-Path $installDir 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $installDir "resources\runtime\$app"))) ([ordered]@{ exe = $exe; top = @(Get-ChildItem -LiteralPath $installDir -Name -ErrorAction SilentlyContinue) })
             $links = @(Shortcuts)
@@ -331,6 +345,7 @@ jobs:
             Check 'uninstall.shortcutsRemoved' (@($links | Where-Object { $_.exists }).Count -eq 0) $links
             Check 'uninstall.userDataRetained' (Test-Path (Join-Path $prodProfile 'settings.json')) 'deleteAppDataOnUninstall is false: the production profile stays'
             Note 'remainsAfterUninstall' ([ordered]@{
+              installRegistryKeyExists = (Test-Path -LiteralPath $installKey)
               productionProfile = Listing $prodProfile
               isolatedProfile = Listing $isolatedRoot
               melangeDesktopAppData = Test-Path (Join-Path $env:APPDATA 'MelangeDesktop')
