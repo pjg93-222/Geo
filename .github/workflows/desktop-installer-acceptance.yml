@@ -160,31 +160,48 @@ jobs:
             if ($stopped) { Wait-Process -Id $stopped -Timeout 15 -ErrorAction SilentlyContinue }
             @($stopped)
           }
+          # Page texts of access.html / access-ui.js (Melange ops/desktop/client at a9be8919). Window chrome (frame title,
+          # application menu "<Name>", "Edit", "View") is NOT page evidence: v3 run 38892494162 saw only chrome and misread it as "other".
+          $PhaseTexts = [ordered]@{
+            needs_request = 'Request administrator approval for this installation.'
+            pending = 'This installation is waiting for administrator approval.'
+            needs_password = 'This installation is approved. Choose your local password, then sign in.'
+            locked = 'Sign in with your local password to open'
+            ready = 'You are signed in. Your local workspace is ready to open.'
+            revoked = 'Administrator access has been revoked.'
+            terrier_signin = 'This installation is approved. Continue to Terrier'
+            error = 'Access could not be checked. Your workspace has not been opened.'
+            fail_closed = 'This action could not be completed.'
+            checking = "Checking this installation's access."
+          }
+          $PageMarkers = @('APPLICATION ACCESS', 'Approved installations can work offline.') + @($PhaseTexts.Values)
+          function PageTextSeen($names) { foreach ($n in @($names)) { foreach ($m in $PageMarkers) { if ("$n".Contains($m)) { return $true } } }; $false }
           function UiaText([long]$handle) {
             try {
               Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
               $element = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$handle)
               $names = @()
-              for ($i = 0; $i -lt 6 -and $names.Count -eq 0; $i++) {
+              # Retry until page text (not only window chrome) is exposed, and past the transient "checking" text.
+              for ($i = 0; $i -lt 10; $i++) {
                 $names = @($element.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique -First 80)
-                if ($names.Count -eq 0) { Start-Sleep -Seconds 2 }
+                if ((PageTextSeen $names) -and -not ((@($names) -join "`n").Contains($PhaseTexts.checking))) { break }
+                Start-Sleep -Seconds 2
               }
-              [ordered]@{ available = $true; names = $names }
-            } catch { [ordered]@{ available = $false; error = $_.Exception.Message } }
+              [ordered]@{ available = $true; pageTextSeen = (PageTextSeen $names); names = $names }
+            } catch { [ordered]@{ available = $false; pageTextSeen = $false; error = $_.Exception.Message } }
           }
+          # 'unobserved' (no page text) becomes 'unverified'; any observed page text maps to its phase or to 'other'.
           function AccessPhase($uia) {
+            if (-not $uia.available -or -not $uia.pageTextSeen) { return 'unobserved' }
             $text = (@($uia.names) -join "`n")
-            if (-not $uia.available -or -not $text) { 'unobserved' }
-            elseif ($text -match 'Request administrator approval for this installation') { 'needs_request' }
-            elseif ($text -match 'Access could not be checked') { 'error' }
-            else { 'other' }
+            foreach ($phase in $PhaseTexts.Keys) { if ($text.Contains($PhaseTexts[$phase])) { return $phase } }
+            'other'
           }
-
           function LaunchApp([string]$mode, [string[]]$arguments, [string]$expectedTitle, [string]$userData, [bool]$expectLoginItem) {
             $r = [ordered]@{ mode = $mode; arguments = $arguments; expectedTitle = $expectedTitle; userData = $userData }
             $base = Join-Path $root "launch-$mode"
             $since = (Get-Date).AddSeconds(-2)
-            $p = Start-Process -FilePath $exe -ArgumentList (@($arguments) + @('--enable-logging=file', "--log-file=$base.chromium.log")) -WorkingDirectory $root -PassThru -RedirectStandardOutput "$base.stdout.txt" -RedirectStandardError "$base.stderr.txt"
+            $p = Start-Process -FilePath $exe -ArgumentList (@($arguments) + @('--force-renderer-accessibility', '--enable-logging=file', "--log-file=$base.chromium.log")) -WorkingDirectory $root -PassThru -RedirectStandardOutput "$base.stdout.txt" -RedirectStandardError "$base.stderr.txt"
             $r.mainPid = $p.Id
             $tree = @(); $target = $null
             try {
