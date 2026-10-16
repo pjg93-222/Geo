@@ -10,6 +10,7 @@ import {getMeta,sources} from './api/client';
 import type {Meta} from './types';
 import {PageHeader} from './components/Header';
 import {LoadingTerrier} from './components/TerrierMark';
+import {AuthGate} from './components/AuthGate';
 const loadMap=()=>import('./components/MapScreen');
 const MapScreen=lazy(()=>loadMap().then(m=>({default:m.MapScreen})));
 if(parseRoute().name==='map')void loadMap().catch(()=>{}); // React.lazy/AppBoundary handles a failed chunk.
@@ -61,7 +62,10 @@ class AppBoundary extends Component<{children:ReactNode},{failed:boolean}>{
   static getDerivedStateFromError(){return {failed:true};}
   render(){return this.state.failed?<main className="app-error" role="alert"><h1>This view could not open.</h1><p>Reload Terrier to try again.</p><button type="button" onClick={()=>location.reload()}>Reload</button></main>:this.props.children;}
 }
-createRoot(document.getElementById('root')!).render(<AppBoundary><V3App/></AppBoundary>);
+const signInOnly=location.pathname==='/desktop-signin';
+createRoot(document.getElementById('root')!).render(<AppBoundary><AuthGate>{signInOnly
+  ?<main className="terrier-auth"><section><h1>Signed in</h1><p role="status">Returning to your open workspace…</p></section></main>
+  :<V3App/>}</AuthGate></AppBoundary>);
 
 import './styles/completion.css';
 import './styles/workspace-shell.css';

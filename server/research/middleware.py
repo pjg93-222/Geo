@@ -16,6 +16,12 @@ class LocalAdministratorMiddleware:
 
     def __call__(self, request):
         request.local_admin_access = False
+        from .desktop_access import administrator_authorized
+        if administrator_authorized(request):
+            # AuthenticationMiddleware already resolved the user's real session.
+            # No account creation, role upgrade or passwordless login occurs here.
+            request.local_admin_access = True
+            return self.get_response(request)
         enabled = settings.LOCAL_ADMIN_ACCESS and not settings.HOSTED
         direct = not any(request.META.get(key) for key in (
             'HTTP_FORWARDED', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED_HOST',

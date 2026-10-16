@@ -42,6 +42,9 @@ def local_denied(request, field=False):
     if field and settings.HOSTED:
         from . import field_access
         return field_access.denied(request, field)
+    from .desktop_access import administrator_authorized
+    if administrator_authorized(request):
+        return None
     try:
         loopback = ip_address(request.META.get("REMOTE_ADDR", "")).is_loopback
     except ValueError:

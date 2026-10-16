@@ -31,22 +31,24 @@ function Brand({busy=false}:{busy?:boolean}){
   </Link>;
 }
 
-// One server instance per district: the list is read once per page load, and the menu jumps to the other instance's port.
+declare global {interface Window {desktop?:{districts:()=>Promise<DistrictList>;switchDistrict:(id:string)=>Promise<boolean>}}}
+// Desktop uses its verified native district mapping. Browser deployments retain their separate server addresses.
 // It stays hidden when the call fails or only one district exists.
 let districtList:Promise<DistrictList|null>|null=null;
 function DistrictSelect(){
   const [list,setList]=useState<DistrictList|null>(null);
+  const [error,setError]=useState('');
   useEffect(()=>{
     let live=true;
-    districtList??=localJson<DistrictList>('/api/v3/districts').catch(()=>null);
+    districtList??=(window.desktop?.districts?window.desktop.districts():localJson<DistrictList>('/api/v3/districts')).catch(()=>null);
     districtList.then(l=>{if(live)setList(l);});
     return ()=>{live=false;};
   },[]);
   if(!list||list.districts.length<2)return null;
-  return <select className="district-select" aria-label="District" value={list.current} onChange={e=>{
+  return <><select className="district-select" aria-label="District" value={list.current} onChange={e=>{
     const d=list.districts.find(x=>x.id===e.target.value);
-    if(d&&d.id!==list.current)location.assign(districtHref(d,location));
-  }}>{districtOptions(list.districts,list.current).map(o=><option key={o.id} value={o.id} disabled={o.disabled}>{o.label}</option>)}</select>;
+    if(d&&d.id!==list.current){setError('');if(window.desktop?.switchDistrict)window.desktop.switchDistrict(d.id).catch(()=>setError('The district could not be opened. Your current data is unchanged.'));else location.assign(districtHref(d,location));}
+  }}>{districtOptions(list.districts,list.current).map(o=><option key={o.id} value={o.id} disabled={o.disabled}>{o.label}</option>)}</select>{error&&<span role="alert">{error}</span>}</>;
 }
 
 // This district's settings, read once per page load; a failed read leaves the Colorado-style defaults.

@@ -11,6 +11,10 @@ export class ApiError extends Error{
   constructor(message:string,status:number,answered=false){super(message);this.status=status;this.answered=answered;}
 }
 const errorOf=(body:unknown):string|null=>body&&typeof body==='object'&&'error' in body&&typeof body.error==='string'?body.error:null;
+export const AUTHENTICATION_REQUIRED='terrier:authentication-required';
+function requireAuthentication(status:number){
+  if(status===401&&typeof window!=='undefined')window.dispatchEvent(new Event(AUTHENTICATION_REQUIRED));
+}
 
 export async function localJson<T>(url:string,signal?:AbortSignal):Promise<T>{
   const response=await fetch(url,{credentials:'same-origin',signal,cache:'no-store',headers:{Accept:'application/json'}});
@@ -20,6 +24,7 @@ async function readJson<T>(response:Response):Promise<T>{
   let body:unknown;
   try{body=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
   if(!response.ok){
+    requireAuthentication(response.status);
     const said=errorOf(body);
     throw new ApiError(said??'The local data could not be loaded.',response.status,said!==null);
   }
@@ -64,7 +69,7 @@ export function getStreet(bbox:[number,number,number,number],zoom:number,signal?
 export function searchPeople(text:string,signal?:AbortSignal):Promise<SearchResult>{return localJson(endpoint('/api/v3/search',{q:text.trim().slice(0,80)}),signal);}
 
 /** GET /api/auth/session. `hosted` and `email` (the Cloudflare Access identity the server verified) are there only on a hosted server. */
-export interface Session{authenticated?:boolean;csrf?:string;hosted?:boolean;email?:string|null}
+export interface Session{authenticated?:boolean;csrf?:string;hosted?:boolean;email?:string|null;account_identity?:string|null}
 export const getSession=(signal?:AbortSignal):Promise<Session>=>localJson<Session>('/api/auth/session',signal);
 
 // Writes carry the CSRF token the session endpoint hands out (same header and field as the legacy client). It is fetched once and kept.
@@ -85,6 +90,7 @@ export async function postJson<T>(url:string,body:unknown,signal?:AbortSignal):P
   let data:unknown;
   try{data=await response.json();}catch{throw new ApiError('The local data service returned an unreadable response.',response.status);}
   if(!response.ok){
+    if(!url.startsWith('/api/auth/'))requireAuthentication(response.status);
     const said=errorOf(data);
     throw new ApiError(said??'The request could not be completed.',response.status,said!==null);
   }

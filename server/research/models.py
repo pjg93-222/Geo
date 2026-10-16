@@ -24,6 +24,21 @@ class Invitation(models.Model):
     used_at = models.DateTimeField(null=True)
     reset = models.BooleanField(default=False)
 
+class DesktopPrincipalBinding(models.Model):
+    """Local account binding for one approved native installation; never shared data."""
+    server_id = models.UUIDField()
+    device_id = models.UUIDField()
+    principal_id = models.UUIDField()
+    account_identity = models.CharField(max_length=150, unique=True)
+    local_username = models.CharField(max_length=150, unique=True)
+    district_id = models.CharField(max_length=5)
+    mode = models.CharField(max_length=20)
+    user = models.OneToOneField(User, null=True, on_delete=models.PROTECT)
+    invitation_hash = models.CharField(max_length=64, default='')
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['server_id', 'principal_id'], name='desktop_server_principal_unique')]
+
 class LoginAttempt(models.Model):
     key = models.CharField(max_length=64, unique=True)
     failures = models.IntegerField(default=0)

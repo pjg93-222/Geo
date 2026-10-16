@@ -30,6 +30,8 @@ WSGI_APPLICATION = 'server.wsgi.application'
 INSTALLED_APPS = ['django.contrib.auth','django.contrib.contenttypes','django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles','server.research']
 MIDDLEWARE = ['django.middleware.security.SecurityMiddleware','server.research.demo.DemoGuardMiddleware','django.middleware.gzip.GZipMiddleware','django.middleware.http.ConditionalGetMiddleware','django.contrib.sessions.middleware.SessionMiddleware','django.middleware.common.CommonMiddleware','django.middleware.csrf.CsrfViewMiddleware','django.contrib.auth.middleware.AuthenticationMiddleware','server.research.middleware.LocalAdministratorMiddleware','django.contrib.messages.middleware.MessageMiddleware','django.middleware.clickjacking.XFrameOptionsMiddleware']
 DATABASES = {'default': {'ENGINE':'django.db.backends.sqlite3','NAME':str((STATE_DIR or DATA_DIR)/'accounts.sqlite3'),'OPTIONS':{'timeout':30}}}
+MIDDLEWARE.insert(MIDDLEWARE.index('django.contrib.auth.middleware.AuthenticationMiddleware') + 1,
+                  'server.research.desktop_access.DesktopPrincipalMiddleware')
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.Argon2PasswordHasher','django.contrib.auth.hashers.PBKDF2PasswordHasher']
 AUTH_PASSWORD_VALIDATORS = [{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator','OPTIONS':{'min_length':12}},{'NAME':'django.contrib.auth.password_validation.CommonPasswordValidator'},{'NAME':'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'}]
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -50,6 +52,7 @@ CSRF_COOKIE_SAMESITE = 'Strict'
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 HOSTED = os.environ.get('CU_DEPLOYMENT') == 'hosted'
+DESKTOP_BOUNDARY = os.environ.get('CU_DEPLOYMENT') == 'desktop'
 LOCAL_ADMIN_ACCESS = not HOSTED and os.environ.get('CU_LOCAL_ADMIN', '1') == '1'
 SESSION_COOKIE_SECURE = HOSTED
 CSRF_COOKIE_SECURE = HOSTED
