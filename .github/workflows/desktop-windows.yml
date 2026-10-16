@@ -359,6 +359,13 @@ jobs:
 
       # Headless only: the packaged backend on empty scratch data, through the bundled Python (smoke_backend.py --runtime).
       - name: Smoke - packaged backend
+        env:
+          # The Terrier backend refuses to start without an approved principal. The real client passes it in
+          # DESKTOP_ACCESS_PRINCIPAL (runtime.cjs:43); smoke_backend.py forwards DESKTOP_* variables and the backend's
+          # --district default is co-05. This is the synthetic recipient fixture of test_terrier_desktop_access.py:
+          # fixed test UUIDs, no real user, no secret. Scoped to this step; the binding it creates lives in the smoke's
+          # temporary state directory, which smoke_backend.py deletes.
+          DESKTOP_ACCESS_PRINCIPAL: '{"schemaVersion":1,"serverId":"11111111-1111-1111-1111-111111111111","deviceId":"22222222-2222-2222-2222-222222222222","principalId":"33333333-3333-3333-3333-333333333333","accountIdentity":"recipient_33333333333333333333333333333333","localAccountIdentity":"recipient_33333333333333333333333333333333","localUserId":null,"districtId":"co-05","role":"local_administrator","mode":"recipient"}'
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           & "$env:VENV\Scripts\python.exe" tooling/ops/desktop/packaging/smoke_backend.py --app terrier --runtime (Join-Path $env:UNPACKED 'resources\runtime\terrier') --output "$env:OUT\smoke-backend.json"
@@ -405,7 +412,8 @@ jobs:
                          'noticeGate': 'THIRD-PARTY-NOTICES/Python-and-packages.md identical in win-unpacked and zip, lists every bundled package',
                          'packagedConfig': 'version, appId, access trust == committed descriptor, update source, publisher null',
                          'installerAuthenticode': 'NotSigned',
-                         'smokeBackend': json.loads((out / 'smoke-backend.json').read_text(encoding='utf-8'))},
+                         'smokeBackend': json.loads((out / 'smoke-backend.json').read_text(encoding='utf-8')),
+                         'smokePrincipal': 'synthetic recipient fixture (test_terrier_desktop_access.py), district co-05, temporary state'},
             'notRun': {'SKIP-NEEDS-DATA (data/<live bundle>.zip is gitignored and absent on the runner)': env['DATA_DEPENDENT_SUITES'].split(),
                        'other': ['npm run test:e2e (Playwright)', 'verify-terrier.mjs / verify-actual-data.mjs / verify_v3_real.py (need a server or live data)',
                                  'Test-TerrierDesktop.ps1 (restarts a server)']},
@@ -486,7 +494,7 @@ jobs:
           - Access requires an administrator approval from the Melange access server. New users who are not on the access server's LAN cannot enroll yet.
 
           **What was verified on the runner**
-          - Django check and the CI test subset (release.yml's suites plus the pyarrow tests), frontend unit tests and build, client tests, npm audit (production, high), the native-runtime gate, the packaged configuration (access trust equals the installed apps' public descriptor; update source $GITHUB_REPOSITORY; no publisher), installer Authenticode NotSigned, and a packaged-runtime backend smoke on empty data.
+          - Django check and the CI test subset (release.yml's suites plus the pyarrow tests), frontend unit tests and build, client tests, npm audit (production, high), the native-runtime gate, the packaged configuration (access trust equals the installed apps' public descriptor; update source $GITHUB_REPOSITORY; no publisher), installer Authenticode NotSigned, and a packaged-runtime backend smoke on empty data with a synthetic test principal.
 
           **Not run**: suites that need the gitignored live-data bundle (listed in the provenance file), Playwright e2e, and live-data verifiers.
 
