@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "note": "The packaged Terrier sources (resources/runtime/terrier/sources) must be exactly these candidates minus the exclusions; desktop/check_package.py fails the desktop build otherwise. Adding a source file means it ships unless an exclusion with a reason is added here.",
+  "trackedDirectories": ["server", "tools"],
+  "rootFiles": ["manage.py", "data/criteria.json", "data/field_dictionary.csv"],
+  "required": [
+    "manage.py",
+    "data/criteria.json",
+    "data/field_dictionary.csv",
+    "frontend/dist/index.html",
+    "frontend/dist/brand/terrier-loading-hq.mp4",
+    "frontend/dist/ocr/tesseract-6.0.1/eng.traineddata.gz",
+    "frontend/dist/ocr/tesseract-6.0.1/asset-manifest.json",
+    "frontend/dist/ocr/tesseract-6.0.1/LICENSE-tessdata.txt",
+    "frontend/dist/ocr/tesseract-6.0.1/LICENSE-tesseract-core.txt",
+    "frontend/dist/ocr/tesseract-6.0.1/LICENSE-tesseract.js.txt",
+    "frontend/dist/ocr/tesseract-6.0.1/NOTICE.txt",
+    "server/research/location_evidence/southington-municipal-parcels-2026-10-17.json"
+  ],
+  "excluded": [
+    {"path": "*/test_*.py", "reason": "Python unit tests are not shipped (the staging filter skips test_ files)"},
+    {"path": "tools/household-index.test.ts", "reason": "a TypeScript unit test; tests are not shipped"},
+    {"path": "tools/p1_schema.json", "reason": "a development schema, not read at runtime"},
+    {"path": "server/research/location_evidence/README.md", "reason": "reviewer documentation for the parcel evidence bundle, not read at runtime"},
+    {"path": "frontend/dist/fixtures/*", "reason": "offline regression fixtures; the production app reads the local APIs and does not import them"},
+    {"path": "frontend/dist/brand/terrier-loading.mp4", "reason": "superseded loading video; the app ships terrier-loading-hq.mp4"},
+    {"path": "frontend/dist/brand/terrier-loading-first-gold.mp4", "reason": "unused loading video variant"}
+  ]
+}
