@@ -1,7 +1,9 @@
 import type {ImportedWalkAddress,ImportSource} from './walkAddressImport';
-import type {WalkContext,WalkListPayload,WalkRun,WalkSidePick} from '../api/walkTypes';
+import type {WalkContext,WalkEvidence,WalkListPayload,WalkRun,WalkSidePick} from '../api/walkTypes';
 import {csvValue} from './csv.ts';
-import {growBounds,usableBounds,walkRouteDistance} from './walkGeo.ts';
+import {cleanLine,doorPoints,growBounds,usableBounds,walkRouteDistance} from './walkGeo.ts';
+import {PRECISION_LABEL,STATUS_LABEL,decisionOptions,evidenceDoorKey,reasonText} from './walkEvidence.ts';
+import type {DecisionOption,EvidenceChoice} from './walkEvidence.ts';
 
 export interface ImportedWalkSelection {
   source:ImportSource;payload:WalkListPayload;personIds:readonly string[];
@@ -87,4 +89,61 @@ export function addressSheetsCsv(sheets:AddressSheetRow[][],listOffset=0):string
   const rows:unknown[][]=[['List','Door','Address','Unit','Street','City','State','ZIP','Side','Result','Notes','Source file','Source sheet','Source row','Source cell','Source text']];
   sheets.forEach((sheet,i)=>sheet.forEach((a,j)=>rows.push([i+1+listOffset,j+1,a.address,a.unit,a.street,a.city,a.state,a.zip,a.side==='both'?'Both':a.side,'',a.note??'',a.sourceFile??'',a.sourceSheet??'',a.sourceRow,a.sourceCell??'',a.sourceText??''])));
   return '\uFEFF'+rows.map(row=>row.map(v=>'"'+csvValue(v).replace(/[\r\n]+/g,' ').replace(/"/g,'""')+'"').join(',')).join('\r\n')+'\r\n';
+}
+
+// --- per-address evidence review -------------------------------------------------------------------------------------
+export interface EvidenceReviewRow{
+  key:string;original:string;sheet:string;status:string;location:string;reasons:string[];evidence:WalkEvidence;options:DecisionOption[];
+}
+const addressLine=(house:string,run:Pick<WalkRun,'street'>,unit:string)=>`${house||'(blank)'} ${run.street}${unit?` Apt ${unit}`:''}`.trim();
+/** One row per distinct door the service marked for review, across every sheet. The street text is the source's own, never a suggested rename. */
+export function evidenceReviewRows(payloads:readonly WalkListPayload[]):EvidenceReviewRow[]{
+  const rows=new Map<string,EvidenceReviewRow>();
+  for(const payload of payloads)for(const run of payload.runs)for(const door of run.doors){
+    const evidence=door.evidence;if(evidence?.decision!=='review')continue;
+    const key=evidenceDoorKey(run,door);if(rows.has(key))continue;
+    rows.set(key,{key,original:addressLine(evidence.original_house??door.house,run,door.unit),sheet:addressLine(door.house,run,door.unit),
+      status:STATUS_LABEL[evidence.address_status]??evidence.address_status,location:PRECISION_LABEL[evidence.location_precision]??evidence.location_precision,
+      reasons:evidence.reason_codes.map(reasonText),evidence,options:decisionOptions(evidence,door.lon!==null&&door.lat!==null)});
+  }
+  return [...rows.values()];
+}
+
+/**
+ * Apply the user's per-address choices to built payloads. Only doors the service marked 'review' change. Accepting keeps the placement;
+ * rejecting removes the map pin (house number, people and membership are unchanged, so a rejected recovered row keeps its recovered house).
+ * Doors are never dropped or duplicated, and choosing nothing again restores the original door because the input is never mutated.
+ */
+export function applyEvidenceDecisions(payloads:readonly WalkListPayload[],decisions:Readonly<Record<string,EvidenceChoice>>):WalkListPayload[]{
+  return payloads.map(payload=>{
+    let rejected=false;
+    const runs=payload.runs.map(run=>{
+      let changed=false;
+      const doors=run.doors.map(door=>{
+        const evidence=door.evidence,choice=evidence?.decision==='review'?decisions[evidenceDoorKey(run,door)]:undefined;
+        if(!evidence||!choice)return door;
+        changed=true;
+        if(choice==='accepted')return {...door,evidence:{...evidence,decision:'accepted' as const}};
+        rejected=true;
+        return {...door,lon:null,lat:null,placed_by:'unlocated' as const,evidence:{...evidence,location_precision:'unlocated' as const,decision:'rejected' as const}};
+      });
+      return changed?{...run,doors}:run;
+    });
+    if(runs.every((run,i)=>run===payload.runs[i]))return payload;
+    if(!rejected)return {...payload,runs};
+    // A removed pin must not keep widening the map.
+    const bounds=growBounds(null,runs.flatMap(run=>[...cleanLine(run.path),...cleanLine(run.approach),...doorPoints(run)]));
+    if(!bounds)return {...payload,runs};   // no point remains: keep the original bbox/context
+    return {...payload,runs,bbox:bounds,context:payload.context?{...payload.context,bbox:bounds}:payload.context};
+  });
+}
+
+/** Manifest entries for every door with evidence that was reviewed, is still unaccepted, or carries reason codes. `reviewedAt`: ISO time by door key. */
+export function addressReviewEntries(sheets:readonly WalkListPayload[],reviewedAt:Readonly<Record<string,string>>={}){
+  return sheets.flatMap((sheet,index)=>sheet.runs.flatMap(run=>run.doors.flatMap(door=>{
+    const evidence=door.evidence,key=evidenceDoorKey(run,door);
+    if(!evidence||evidence.decision==='accepted'&&!evidence.reason_codes.length&&!reviewedAt[key])return [];
+    return [{list:index+1,door:door.seq,address:door.address??addressLine(door.house,run,door.unit),original_house:evidence.original_house,address_status:evidence.address_status,
+      location_precision:evidence.location_precision,decision:evidence.decision,reason_codes:evidence.reason_codes,reviewed_at:reviewedAt[key]??null}];
+  })));
 }

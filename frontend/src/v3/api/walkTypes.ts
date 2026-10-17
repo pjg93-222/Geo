@@ -8,6 +8,20 @@ export type WalkCode = 'S' | 'U' | 'O' | 'NH' | 'MV';
 export type WalkPlacement = 'geocode' | 'fuzzy' | 'nearest' | 'interpolated' | 'parcel' | 'unlocated';
 export type WalkListKind = 'standard' | 'reknock';
 
+// Per-address evidence on imported-address doors (older payloads and street walk lists carry none). `rejected` is set only by the frontend.
+export type WalkAddressStatus = 'source_exact' | 'independently_confirmed' | 'recovered_number' | 'conflicting' | 'unresolved';
+export type WalkLocationPrecision = 'parcel' | 'source_point' | 'interpolated' | 'unlocated';
+export type WalkReviewDecision = 'accepted' | 'review' | 'rejected';
+export interface WalkEvidence {
+  version: 1;
+  address_status: WalkAddressStatus;
+  location_precision: WalkLocationPrecision;
+  decision: WalkReviewDecision;
+  reason_codes: string[];
+  source_placement: string | null;
+  original_house: string | null;   // '' = blank before recovery; null = unchanged
+}
+
 export interface WalkArea { ss?: string; sh?: string; precinct?: string }
 
 // GET /api/v3/walk/options?level=ss|sh|precinct[&ss=&sh=]
@@ -37,7 +51,7 @@ export interface WalkVoter {
   party: string; age: number | null; gender: string; reg_date: string;
   last: WalkLast | null;
 }
-export interface WalkDoor { seq: number; house: string; unit: string; placed_by: WalkPlacement; lon: number | null; lat: number | null; voters: WalkVoter[]; city?: string; state?: string; zip?: string; address?: string; warnings?: string[]; location_evidence?: unknown }
+export interface WalkDoor { seq: number; house: string; unit: string; placed_by: WalkPlacement; lon: number | null; lat: number | null; voters: WalkVoter[]; city?: string; state?: string; zip?: string; address?: string; warnings?: string[]; location_evidence?: unknown; evidence?: WalkEvidence }
 export interface WalkRun {
   stop: number; street_id: number; street: string; side: WalkSidePick; precinct: string; locality?: string;
   from_house: string; to_house: string; walk_m: number; approach_m?: number;

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from . import walk_address_views as A
 from . import walk_location_evidence as L
 
 
@@ -25,7 +26,7 @@ class LocationEvidenceTests(unittest.TestCase):
         self.anchor = {**self.target,'person_id':'b','stop_id':2,'street_id':2,'house':'20','lon':-72.88,'lat':41.641,'placed_by':'geocode'}
         self.omission = {'street_id':1,'street':'Oak Rd','house':'10','unit':'','precinct':'P1','person_ids':['a'],
                          'original':{'lon':-72.5,'lat':41.8,'span_id':8,'road_name':'ELM RD','placed_by':'nearest'},
-                         'reason':'Wrong source road; map placement omitted.'}
+                         'reason':'Wrong source road; map placement omitted.', 'codes':['inferred_off_road']}
         self.entry = {'address':{'house':'10','street':'Oak Rd','unit':'','city':'Town','state':'CT','zip':None},
                       'aliases':[], 'location':{'lon':-72.88,'lat':41.6401,'kind':'municipal_parcel'},
                       'polygon':{'rings':[[[-72.8802,41.6400],[-72.8798,41.6400],[-72.8798,41.6402],[-72.8802,41.6402],[-72.8802,41.6400]]]},
@@ -110,6 +111,64 @@ class LocationEvidenceTests(unittest.TestCase):
         self.assertFalse(corrections)
         self.assertIn(missing['reason'], omissions[0]['reason'])
         self.assertEqual(omissions[0]['reviewed_evidence'][0]['source'], missing['source'])
+
+    def door(self, clean, omissions=(), corrections=()):
+        """Door evidence for person 'a' exactly as build_import_payload derives it."""
+        row = next(r for r in clean if r['person_id'] == 'a')
+        door = {'placed_by': row['placed_by'], 'voters': [{'person_id': 'a'}]}
+        proof = next((c for c in corrections if 'a' in c['person_ids']), None)
+        return A.door_evidence(door, [o for o in omissions if 'a' in o['person_ids']], proof, [], {'a': 'nearest'})
+
+    def unconfirmed(self, **alternate):
+        missing = {k:deepcopy(self.entry[k]) for k in ('address','source')}
+        missing['reason'] = 'No confirming municipal parcel for this exact address.'
+        if alternate:
+            missing['alternate_street_check'] = {'source': deepcopy(self.entry['source']), 'note': 'Not proof.', **alternate}
+        return missing
+
+    def test_unconfirmed_without_alternate_match_is_unresolved_review_on_the_source_street(self):
+        clean, omissions, corrections, _ = self.repair(entries=[], missing=[self.unconfirmed(matching_address=None)])
+        self.assertEqual(omissions[0]['codes'], ['inferred_off_road', 'no_confirming_parcel'])
+        self.assertEqual((omissions[0]['street'], clean[0]['street_id'], clean[0]['placed_by']), ('Oak Rd', 1, 'unlocated'))
+        self.assertEqual(self.door(clean, omissions), {'version': 1, 'address_status': 'unresolved', 'location_precision': 'unlocated',
+            'decision': 'review', 'reason_codes': ['inferred_off_road', 'no_confirming_parcel'],
+            'source_placement': 'nearest', 'original_house': None})
+        self.assertEqual(self.omission['codes'], ['inferred_off_road'])  # input omission is not mutated
+
+    def test_alternate_street_parcel_is_conflicting_and_never_renames_or_places(self):
+        clean, omissions, corrections, _ = self.repair(entries=[], missing=[self.unconfirmed(matching_address='10 OAKS ST')])
+        self.assertFalse(corrections)
+        self.assertIsNone(clean[0]['lon'])
+        self.assertEqual((omissions[0]['street'], clean[0]['street_id'], clean[0]['placed_by']), ('Oak Rd', 1, 'unlocated'))
+        evidence = self.door(clean, omissions)
+        self.assertEqual((evidence['address_status'], evidence['location_precision'], evidence['decision']), ('conflicting', 'unlocated', 'review'))
+        self.assertEqual(evidence['reason_codes'], ['inferred_off_road', 'no_confirming_parcel', 'conflicting_parcel_elsewhere'])
+
+    def test_parcel_correction_is_independently_confirmed_review_with_source_placement(self):
+        clean, omissions, corrections, _ = self.repair()
+        self.assertEqual(corrections[0]['codes'], ['inferred_off_road', 'parcel_representative_point'])
+        self.assertEqual(corrections[0]['original']['placed_by'], 'nearest')
+        self.assertEqual(self.door(clean, omissions, corrections), {'version': 1, 'address_status': 'independently_confirmed',
+            'location_precision': 'parcel', 'decision': 'review', 'reason_codes': ['inferred_off_road', 'parcel_representative_point'],
+            'source_placement': 'nearest', 'original_house': None})
+        duplicate = deepcopy(self.entry)
+        duplicate['source']['object_id'] = 2
+        self.assertEqual(self.repair(entries=[self.entry, duplicate])[1][0]['codes'], ['inferred_off_road', 'no_unique_parcel_match'])
+
+    def test_reviewed_bundle_alternate_street_checks_mark_only_34_brook_conflicting(self):
+        _, missing, _ = L.load_evidence('ct-01')
+        alternates = {e['address']['house']: (e.get('alternate_street_check') or {}).get('matching_address') for e in missing}
+        self.assertEqual(alternates, {'23': None, '25': None, '34': '34 BROOKS ST', '53': None, '66': None})
+        self.names[1] = SimpleNamespace(key='BROOK RD', display='Brook Rd', city='Southington')
+        statuses = {}
+        for entry in missing:
+            house = entry['address']['house']
+            target, omission = {**self.target, 'house': house}, {**self.omission, 'street': 'Brook Rd', 'house': house}
+            clean, omissions, corrections, _ = L.repair_locations(self.store, [target], [omission], 'ct-01', 'CT', evidence=([], missing, []))
+            self.assertFalse(corrections)
+            self.assertEqual(omissions[0]['street'], 'Brook Rd')
+            statuses[house] = self.door(clean, omissions)['address_status']
+        self.assertEqual(statuses, {'23': 'unresolved', '25': 'unresolved', '34': 'conflicting', '53': 'unresolved', '66': 'unresolved'})
 
     def test_budget_refusal_is_atomic_and_preserves_all_original_rows(self):
         with mock.patch.object(L,'MAX_CHECKS',0):

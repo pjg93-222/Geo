@@ -487,7 +487,7 @@ def attach_door_locality(payload, rows, directory):
     A street's summary ZIP is never a substitute for a door's actual records.
     A mixed-ZIP union stays conservatively blank even if a client later filters it.
     """
-    people = {row['person_id']: row for row in rows}
+    people, reasons = {row['person_id']: row for row in rows}, {}
     for run in payload['runs']:
         street = directory.by_id[run['street_id']]
         city, state = N.display_city(street.city), settings.DISTRICT['state']
@@ -496,15 +496,18 @@ def attach_door_locality(payload, rows, directory):
             house, unit = members[0]['house'] or '', door['unit']
             codes = {member['zip'] for member in members if member['zip']}
             code = next(iter(codes)) if len(codes) == 1 else ''
-            warnings = []
+            warnings, reasons[door['seq']] = [], []
             if not house:
                 warnings.append('No house number recorded.')
+                reasons[door['seq']].append('no_house_number')
             if len(codes) > 1:
                 warnings.append('Multiple ZIP codes recorded for this door; left blank.')
+                reasons[door['seq']].append('mixed_zip')
             unit_label = unit if re.match(r'^(?:apt|apartment|unit|suite|ste|lot|bldg|building|floor|fl)\b|^#', unit, re.I) else '# ' + unit if unit else ''
             line = ' '.join(part for part in (house, street.display, unit_label) if part)
             address = ', '.join(part for part in (line, city, ' '.join(part for part in (state, code) if part)) if part)
             door.update(city=city, state=state, zip=code, address=address, warnings=warnings)
+    return reasons
 
 
 def import_locations(store, rows):
@@ -528,16 +531,16 @@ def import_locations(store, rows):
                   and math.isfinite(lon) and math.isfinite(lat) and -180 <= lon <= 180
                   and -90 < lat < 90 and bool(lon or lat))
         inferred = placed in ('nearest', 'interpolated')
-        reason = None
+        reason = code = None
         if not finite:
             if lon is not None or lat is not None or row['span_id'] is not None:
-                reason = 'Missing or invalid source coordinates; map placement omitted.'
+                reason, code = 'Missing or invalid source coordinates; map placement omitted.', 'missing_coordinates'
         elif inferred and not str(row['house'] or '').strip():
-            reason = 'An inferred location has no house number; map placement omitted.'
+            reason, code = 'An inferred location has no house number; map placement omitted.', 'inferred_no_house'
         elif inferred and (road is None or N.name_key(road) != directory.by_id[row['street_id']].key):
-            reason = 'The inferred source location is on a different or unknown named road; map placement omitted.'
+            reason, code = 'The inferred source location is on a different or unknown named road; map placement omitted.', 'inferred_off_road'
         elif placed not in ('geocode', 'fuzzy', 'nearest', 'interpolated'):
-            reason = 'The source location has no supported placement provenance; map placement omitted.'
+            reason, code = 'The source location has no supported placement provenance; map placement omitted.', 'unsupported_provenance'
         if reason or not finite:
             row.update(lon=None, lat=None, span_id=None, pos_m=None, placed_by='unlocated')
         if reason:
@@ -548,7 +551,7 @@ def import_locations(store, rows):
                                 'house': row['house'] or '', 'unit': row['unit'] or '', 'precinct': row['precinct'] or '',
                                 'person_ids': [], 'original': {'lon': safe(lon), 'lat': safe(lat), 'placed_by': placed,
                                                               'span_id': original['span_id'], 'road_name': road},
-                                'reason': reason}
+                                'reason': reason, 'codes': [code]}
             omitted[key]['person_ids'].append(row['person_id'])
         clean.append(row)
     return clean, list(omitted.values())
@@ -633,10 +636,38 @@ def local_import_groups(rows):
     return [groups[group] for group in sorted(groups, key=lambda group: (-len(groups[group]), group))]
 
 
-def build_import_payload(store, rows, query, omissions=(), corrections=()):
+SOURCE_PLACEMENTS = ('geocode', 'fuzzy', 'nearest', 'interpolated')
+# A vendor geocode is a source claim, not a verified address point; unknown provenance stays unlocated.
+PRECISION = {'parcel': 'parcel', 'interpolated': 'interpolated', 'geocode': 'source_point',
+             'fuzzy': 'source_point', 'nearest': 'source_point'}
+
+
+def door_evidence(door, items, proof, locality, sources):
+    """Typed per-door evidence (version 1) from codes attached where each reason was created."""
+    if proof:
+        recovery = proof.get('registration_recovery')
+        status = 'recovered_number' if recovery else 'independently_confirmed'
+        codes = proof.get('codes', [])
+    else:
+        codes = [code for item in items for code in item.get('codes', [])]
+        status = ('conflicting' if 'conflicting_parcel_elsewhere' in codes else 'unresolved') if items else 'source_exact'
+        recovery = None
+    precision = PRECISION.get(door['placed_by'], 'unlocated')
+    source = next((sources[v['person_id']] for v in door['voters'] if v['person_id'] in sources), None)
+    return {'version': 1, 'address_status': status, 'location_precision': precision,
+            'decision': 'accepted' if status == 'source_exact' and precision in ('source_point', 'interpolated') else 'review',
+            'reason_codes': list(dict.fromkeys([*codes, *locality])),
+            'source_placement': source if source in SOURCE_PLACEMENTS else None,
+            'original_house': recovery['registration']['house'] if recovery else None}
+
+
+def build_import_payload(store, rows, query, omissions=(), corrections=(), sources=None):
+    """`sources` maps person id to the store's placed_by before import/repair changes (default: `rows`)."""
     payload, keys = V.plan_payload(store, rows, query, preserve_unlocated=True)
-    attach_door_locality(payload, rows, store.directory())
+    locality = attach_door_locality(payload, rows, store.directory())
+    sources = sources if sources is not None else {row['person_id']: row['placed_by'] for row in rows}
     reasons = {person: item['reason'] for item in omissions for person in item['person_ids']}
+    omitted = {person: item for item in omissions for person in item['person_ids']}
     evidence = {person: item for item in corrections for person in item['person_ids']}
     for run in payload['runs']:
         for door in run['doors']:
@@ -648,6 +679,8 @@ def build_import_payload(store, rows, query, omissions=(), corrections=()):
                 door['warnings'].append(L.PARCEL_WARNING + ' Original coordinates retained in provenance.')
                 if proofs[0].get('registration_recovery'):
                     door['warnings'].append(R.RECOVERY_WARNING)
+            items = [omitted[v['person_id']] for v in door['voters'] if v['person_id'] in omitted]
+            door['evidence'] = door_evidence(door, items, proofs[0] if proofs else None, locality[door['seq']], sources)
     payload['fingerprint'] = V.fingerprint(payload, keys)
     if any(payload['bbox']):
         V.C.attach(payload, store.conn)
@@ -680,6 +713,7 @@ def address_list(request):
         query = {'source': 'address-import', 'snapshot': stamp, 'split_sides': '1' if split_sides else '0',
                  'streets': json.dumps([{'id': street, 'zip': code} for street, code in picks], separators=(',', ':'))}
         if local_groups:
+            sources = {row['person_id']: row['placed_by'] for row in rows}
             rows, omissions = import_locations(store, rows)
             original_rows = rows
             rows, recoveries, recovery_warnings = R.prepare(store, rows, settings.DISTRICT['id'], settings.DISTRICT['state'])
@@ -692,7 +726,7 @@ def address_list(request):
                 ids = {row['person_id'] for row in members}
                 selections_here = [{**selection, 'person_ids': [person for person in selection['person_ids'] if person in ids]}
                                    for selection in selected if ids.intersection(selection['person_ids'])]
-                payload, keys = build_import_payload(store, members, query, omissions, corrections)
+                payload, keys = build_import_payload(store, members, query, omissions, corrections, sources)
                 groups.append({'key': 'local-%d' % number, 'payload': payload, 'selections': selections_here,
                                'reason': 'Local source coordinates; unlocated rows remain printable without a map location.'})
                 histories.append((payload, keys))

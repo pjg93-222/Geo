@@ -326,6 +326,12 @@ const pdfTexts = (doc: PdfDoc, page: number): string[] => {
   const stream = ((doc as unknown as {internal: {pages: (string[] | undefined)[]}}).internal.pages[page] ?? []).join('\n');
   return [...stream.matchAll(/\(((?:[^()\\]|\\.)*)\) Tj/g)].map(m => win.decode(Buffer.from(m[1].replace(/\\([()\\])/g, '$1'), 'latin1')));
 };
+/** Each string a page shows with the y (PDF points from the bottom) it is drawn at: an "x y Td" line precedes its "(text) Tj". */
+const pdfLines = (doc: PdfDoc, page: number): [string, number][] => {
+  const win = new TextDecoder('windows-1252');
+  const stream = ((doc as unknown as {internal: {pages: (string[] | undefined)[]}}).internal.pages[page] ?? []).join('\n');
+  return [...stream.matchAll(/\S+ (\S+) Td\n\(((?:[^()\\]|\\.)*)\) Tj/g)].map(m => [win.decode(Buffer.from(m[2].replace(/\\([()\\])/g, '$1'), 'latin1')), Number(m[1])]);
+};
 const pdfPages = (doc: PdfDoc) => Array.from({length: doc.getNumberOfPages()}, (_, i) => pdfTexts(doc, i + 1));
 const manyDoors = (n: number, tag = 'a') => Array.from({length: n}, (_, i) => door(i + 1, String(100 + 2 * i), Array.from({length: 1 + (i % 5)}, (_, k) => voter({person_id: `${tag}${i}-${k}`, name: `Voter ${tag}${i}-${k}`}))));
 
@@ -1519,4 +1525,44 @@ test('walk screen wiring: Plan walk list and Doors by the precinct field, the cl
   assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut,splitSides\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
   assert.ok(/readWeights\(features\.district,defaults\)/.test(src) && /writeWeights\(features\.district,next\)/.test(src) && /weights=\{weights\} defaults=\{defaults\} onWeights=\{changeWeights\} doors=\{doorsNow\}/.test(src), 'the sliders are shared with the map through the weights helpers');
   assert.ok(/turfLines\(turf,payload\.totals,turfCfg\.jump_m\)/.test(src), 'the note uses the routed list\'s totals');
+});
+
+test('unresolved and conflicting rows print a ‡ marker and legend only when present', async () => {
+  const {rowMarker} = await import('../../src/v3/lib/walkPdf.ts');
+  const ev = (address_status: string, location_precision = 'unlocated') => ({version: 1, address_status, location_precision, decision: 'accepted', reason_codes: [], source_placement: null, original_house: null}) as unknown as WalkDoor['evidence'];
+  const plain = door(1, '2', [voter()]);
+  const parcel = {...plain, placed_by: 'parcel' as const, location_evidence: {registration_recovery: {}}};
+  assert.equal(rowMarker(plain), ''); assert.equal(rowMarker({...plain, placed_by: 'parcel'}), '*'); assert.equal(rowMarker(parcel), '*†');
+  for (const status of ['unresolved', 'conflicting']) assert.equal(rowMarker({...plain, placed_by: 'unlocated', lon: null, lat: null, evidence: ev(status)}), '‡');
+  assert.equal(rowMarker({...plain, evidence: ev('source_exact', 'source_point')}), '');
+  const flagged = {...door(2, '4', [voter({person_id: 'z'})]), placed_by: 'unlocated' as const, lon: null, lat: null, evidence: ev('conflicting')};
+  const text = async (doors: WalkDoor[]) => { const {doc} = await buildWalkPdf(payload([run({doors})]), {area: ''}); return pdfPages(doc).flat().join('\n'); };
+  assert.ok((await text([plain, flagged])).includes('‡ Address not independently located; printed without a map pin.'));
+  assert.ok(!(await text([plain])).includes('‡'));
+});
+
+test('a recovered parcel door whose pin was removed keeps its † and the legends never overprint', async () => {
+  const {rowMarker} = await import('../../src/v3/lib/walkPdf.ts');
+  const ev = (address_status: string, location_precision: string, decision: string) => ({version: 1, address_status, location_precision, decision, reason_codes: [], source_placement: null, original_house: ''}) as unknown as WalkDoor['evidence'];
+  const rejected = {...door(1, '15', [voter()]), placed_by: 'unlocated' as const, lon: null, lat: null, location_evidence: {registration_recovery: {}}, evidence: ev('recovered_number', 'unlocated', 'rejected')};
+  const flagged = {...door(2, '4', [voter({person_id: 'z'})]), placed_by: 'unlocated' as const, lon: null, lat: null, evidence: ev('conflicting', 'unlocated', 'accepted')};
+  const parcel = {...door(3, '6', [voter({person_id: 'y'})]), placed_by: 'parcel' as const};
+  assert.equal(rowMarker(rejected), '†'); assert.equal(rowMarker(flagged), '‡'); assert.equal(rowMarker(parcel), '*');
+  assert.equal(rowMarker({...parcel, location_evidence: {registration_recovery: {}}}), '*†');
+  const at = async (doors: WalkDoor[]) => {
+    const {doc} = await buildWalkPdf(payload([run({doors})]), {area: ''});
+    const ys = pdfLines(doc, 2).filter(([t]) => /House number recovered|not independently located|Municipal parcel/.test(t))
+      .map(([t, y]) => [/recovered/.test(t) ? 'recovery' : /independently/.test(t) ? 'flag' : 'parcel', y] as const);
+    return {doc, ys};
+  };
+  const only = await at([rejected]);
+  assert.deepEqual(only.ys, [['recovery', 35]], 'the recovery legend prints with no parcel door, at the first footer line');
+  assert.ok(pdfPages(only.doc).flat().includes('†'), 'the recovered number carries its dagger');
+  const both = await at([rejected, flagged]);
+  assert.deepEqual(both.ys, [['recovery', 35], ['flag', 46]], 'recovery and flag legends stack instead of overprinting');
+  const all = await at([rejected, flagged, parcel]);
+  assert.deepEqual(all.ys, [['parcel', 35], ['recovery', 46], ['flag', 57]], 'parcel, recovery, flag in fixed order');
+  assert.equal(new Set(all.ys.map(([, y]) => y)).size, 3);
+  const cover = pdfTexts(both.doc, 1);
+  assert.ok(cover.some(t => t.startsWith('† House number recovered')), 'the cover shows the recovery legend whenever a † is printed');
 });

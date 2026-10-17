@@ -47,7 +47,7 @@ class ImportedWalkListTests(WalkCase):
         self.assertEqual(set(result), {'district', 'snapshot', 'payload', 'selections'})
         self.assertEqual(result['district'], 'co-05')
         self.assertEqual(payload['schema'], 'walk-list-1')
-        base_runs = [{**{key: value for key, value in run.items() if key != 'approach_m'}, 'doors': [{key: value for key, value in door.items() if key not in LOCALITY_KEYS}
+        base_runs = [{**{key: value for key, value in run.items() if key != 'approach_m'}, 'doors': [{key: value for key, value in door.items() if key not in LOCALITY_KEYS | {'evidence'}}
                                       for door in run['doors']]} for run in payload['runs']]
         self.assertEqual(base_runs, normal['runs'])
         self.assertEqual(payload['totals'], normal['totals'])
@@ -246,9 +246,32 @@ class ImportedWalkListTests(WalkCase):
         self.assertEqual(found[0]['voters'], old['voters'])
         self.assertEqual((found[0]['lon'], found[0]['lat'], found[0]['placed_by']), (None, None, 'unlocated'))
         self.assertIn('No house number recorded.', found[0]['warnings'])
+        self.assertEqual(found[0]['evidence'], {'version': 1, 'address_status': 'unresolved', 'location_precision': 'unlocated',
+                                                'decision': 'review', 'reason_codes': ['inferred_no_house', 'no_house_number'],
+                                                'source_placement': 'interpolated', 'original_house': None})
         omission = next(item for item in result['map_placement_omissions'] if item['house'] == '')
+        self.assertEqual(omission['codes'], ['inferred_no_house'])
         self.assertEqual((omission['original']['lon'], omission['original']['lat']), (old['lon'], old['lat']))
         self.assertCountEqual(omission['person_ids'], [v['person_id'] for v in old['voters']])
+
+    def test_ordinary_source_doors_are_exact_accepted_and_keep_source_placement(self):
+        street = self.street_id('Cedar Heights Dr')
+        result = self.posted(URL, {**self.request_body(), 'local_groups': True})
+        doors = [d for group in result['groups'] for d in doors_of(group['payload'])]
+        self.assertEqual({d['placed_by'] for d in doors}, {'geocode', 'interpolated'})
+        for door in doors:
+            precision = 'interpolated' if door['placed_by'] == 'interpolated' else 'source_point'
+            self.assertEqual(door['evidence'], {'version': 1, 'address_status': 'source_exact', 'location_precision': precision,
+                                                'decision': 'accepted', 'reason_codes': [],
+                                                'source_placement': door['placed_by'], 'original_house': None})
+        # The plain import path carries the same object, including honest missing coordinates.
+        directory = self.edited_world("UPDATE stop SET lon=NULL,lat=NULL,span_id=NULL,pos_m=NULL WHERE street_id=? AND house='1132'", [street])
+        with override_settings(DATA_DIR=directory):
+            plain = doors_of(self.build()['payload'])
+        missing = next(d for d in plain if d['house'] == '1132')
+        self.assertEqual((missing['evidence']['address_status'], missing['evidence']['location_precision'], missing['evidence']['decision']),
+                         ('source_exact', 'unlocated', 'review'))
+        self.assertTrue(all(d['evidence']['decision'] == 'accepted' for d in plain if d['house'] != '1132'))
 
     def test_local_groups_overlap_keeps_strict_zip_membership_without_duplicate_people(self):
         street = self.street_id('Cedar Heights Dr')
@@ -302,6 +325,10 @@ class ImportLocationPolicyTests(unittest.TestCase):
         self.assertEqual(clean[2], original[2])
         self.assertTrue(all(row['lon'] is not None for row in original))
         self.assertEqual([item['original']['road_name'] for item in omissions], ['ELM RD', 'ELM RD'])
+        self.assertEqual([item['codes'] for item in omissions], [['inferred_off_road']] * 2)
+        self.assertEqual([item['street'] for item in omissions], ['Oak Rd'] * 2)
+        unsupported = A.import_locations(self.store, [self.row(4, placed_by=None)])[1]
+        self.assertEqual(unsupported[0]['codes'], ['unsupported_provenance'])
         self.assertEqual([item['original']['lon'] for item in omissions], [row['lon'] for row in original[:2]])
 
     def test_geocodes_are_not_discarded_for_distance_or_road_name_but_bad_coordinates_are(self):
@@ -311,6 +338,7 @@ class ImportLocationPolicyTests(unittest.TestCase):
         self.assertEqual(clean[:2], rows[:2])
         self.assertTrue(all(row['lon'] is None and row['span_id'] is None for row in clean[2:]))
         self.assertEqual(len(omissions), 2)
+        self.assertEqual([item['codes'] for item in omissions], [['missing_coordinates']] * 2)
         json.dumps(omissions, allow_nan=False)
 
     def test_inferred_same_named_road_requires_house_number(self):

@@ -122,4 +122,5 @@ def finish(original_rows, repaired_rows, corrections, proofs):
             correction['house'] = evidence[0]['residential']['house']
             correction['registration_recovery'] = evidence[0]
             correction['reason'] += ' ' + RECOVERY_WARNING
+            correction['codes'] = [*correction.get('codes', []), 'number_recovered']
     return [originals[row['person_id']] if row['person_id'] in proofs and row['person_id'] not in accepted else row for row in repaired_rows]

@@ -1,6 +1,7 @@
 import type {WalkListPayload,WalkRun} from '../api/walkTypes';
 import type {WalkHistory,WalkResults,WalkScoreMap} from './walk';
 import {buildWalkCsv,needsAddressLocality} from './walk.ts';
+import {hasEvidence} from './walkEvidence.ts';
 import {cleanLine,doorPoints,growBounds,walkRouteDistance} from './walkGeo.ts';
 
 /** Blank means no cap. Invalid values are rejected instead of silently changing the request. */
@@ -42,6 +43,7 @@ export function splitWalkSheets(payload:WalkListPayload,cap:number|null):WalkLis
 export function buildWalkSheetsCsv(sheets:WalkListPayload[],results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap):string{
   if(sheets.length===1)return buildWalkCsv(sheets[0],results,history,unsaved,scores);
   const includeLocality=sheets.some(needsAddressLocality);
-  const rows=sheets.map(p=>buildWalkCsv(p,results,history,unsaved,scores,includeLocality).replace(/^\uFEFF/,'').trimEnd().split('\r\n'));
+  const includeEvidence=sheets.some(hasEvidence);
+  const rows=sheets.map(p=>buildWalkCsv(p,results,history,unsaved,scores,includeLocality,includeEvidence).replace(/^\uFEFF/,'').trimEnd().split('\r\n'));
   return '\uFEFF'+['"List",'+rows[0][0],...rows.flatMap((lines,i)=>lines.slice(1).map(line=>`"${i+1}",${line}`))].join('\r\n')+'\r\n';
 }

@@ -231,7 +231,8 @@ def repair_locations(store, rows, omissions, district, state, *, evidence=None):
                     found.append((entry, choices[0][1], min(nearby, key=lambda a: (a['distance_m'], a['street']))))
             if len(found) == 1:
                 entry, projection, anchor = found[0]
-                audit = {**omission, 'reason': PARCEL_WARNING, 'location': entry['location'],
+                audit = {**omission, 'reason': PARCEL_WARNING, 'codes': [*omission.get('codes', []), 'parcel_representative_point'],
+                         'location': entry['location'],
                          'route_projection': projection, 'source': entry['source'], 'address_match': entry['address'],
                          'context': {**entry['context'], 'anchor': anchor}, 'bundle_sha256': entry.get('bundle_sha256', '')}
                 corrections.append(audit)
@@ -244,8 +245,13 @@ def repair_locations(store, rows, omissions, district, state, *, evidence=None):
                 if notices:
                     item['reason'] += ' ' + ' '.join(dict.fromkeys(e['reason'] for e in notices))
                     item['reviewed_evidence'] = notices
+                    # A same-number parcel on another named street is recorded, never used to rename the source address.
+                    elsewhere = any(isinstance(e.get('alternate_street_check'), dict) and e['alternate_street_check'].get('matching_address')
+                                    for e in notices)
+                    item['codes'] = [*omission.get('codes', []), 'no_confirming_parcel', *(['conflicting_parcel_elsewhere'] if elsewhere else [])]
                 elif candidates:
                     item['reason'] += ' Reviewed parcel evidence lacks a unique supported match with an included reliable neighboring street and nearby same-named road.'
+                    item['codes'] = [*omission.get('codes', []), 'no_unique_parcel_match']
                 remaining.append(item)
     except (ValueError, TypeError, KeyError):
         return rows, omissions, [], [*warnings, 'Reviewed location evidence reached its geometry validation limit; no corrections applied.']

@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
+from . import walk_address_views as A
 from . import walk_record_evidence as R
 
 
@@ -98,6 +99,24 @@ class RecordEvidenceTests(unittest.TestCase):
         self.assertEqual(correction['house'],'15')
         self.assertEqual(correction['registration_recovery']['registration']['house'],'')
         self.assertIn('Registration house number was blank',correction['reason'])
+
+    def test_door_evidence_reports_recovered_number_only_when_parcel_repair_succeeds(self):
+        self.save()
+        prepared,proofs,_=self.prepare()
+        door={'placed_by':'parcel','voters':[{'person_id':self.person}]}
+        correction={'person_ids':[self.person],'house':'','reason':'Parcel representative point.',
+                    'codes':['inferred_no_house','parcel_representative_point']}
+        R.finish([self.row],[{**prepared[0],'placed_by':'parcel'}],[correction],proofs)
+        self.assertEqual(A.door_evidence(door,[],correction,[],{self.person:'interpolated'}),
+                         {'version':1,'address_status':'recovered_number','location_precision':'parcel','decision':'review',
+                          'reason_codes':['inferred_no_house','parcel_representative_point','number_recovered'],
+                          'source_placement':'interpolated','original_house':''})
+        # Rolled back: no correction, the blank-number omission stays unresolved and claims no recovery.
+        self.assertEqual(R.finish([self.row],prepared,[],proofs),[self.row])
+        omission={'person_ids':[self.person],'codes':['inferred_no_house']}
+        evidence=A.door_evidence({**door,'placed_by':'unlocated'},[omission],None,['no_house_number'],{self.person:'interpolated'})
+        self.assertEqual((evidence['address_status'],evidence['original_house'],evidence['reason_codes']),
+                         ('unresolved',None,['inferred_no_house','no_house_number']))
 
     def test_duplicate_or_malformed_private_evidence_never_applies_partially(self):
         bundle=deepcopy(self.bundle)

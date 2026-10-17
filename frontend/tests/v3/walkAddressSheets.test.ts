@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {buildImportedWalkList} from '../../src/v3/lib/walkAddressSheets.ts';
-import {splitWalkSheets} from '../../src/v3/lib/walkSheets.ts';
+import {addressReviewEntries,applyEvidenceDecisions,buildImportedWalkList,evidenceReviewRows} from '../../src/v3/lib/walkAddressSheets.ts';
+import {buildWalkSheetsCsv,splitWalkSheets} from '../../src/v3/lib/walkSheets.ts';
 import type {ImportedWalkSelection} from '../../src/v3/lib/walkAddressSheets.ts';
-import type {WalkListPayload,WalkVoter} from '../../src/v3/api/walkTypes.ts';
+import type {WalkEvidence,WalkListPayload,WalkVoter} from '../../src/v3/api/walkTypes.ts';
 import {importSections,prepareImportedGroups} from '../../src/v3/lib/walkImportGroups.ts';
 import type {ImportedWalkImage} from '../../src/v3/lib/walkImageImport.ts';
 const voter=(person_id:string):WalkVoter=>({person_id,name:`Resident ${person_id}`,phone:'5550100',pri:{voted:2,eligible:3},gen:{voted:4,eligible:5},abs:{voted:1,eligible:5},party:'',age:null,gender:'',reg_date:'',last:null});
@@ -156,4 +156,137 @@ test('primary source sections precede additional geographic groups with stable r
  assert.deepEqual(prepared.addresses.map(row=>row.sourceRow),[4,30,4]);
  assert.deepEqual(prepared.payloads.flatMap(p=>p.runs.flatMap(r=>r.doors.map(d=>d.seq))),[1,2,3]);
  assert.equal(prepared.voters,3);
+});
+
+// --- per-address evidence review -------------------------------------------------------------------------------------
+const evidence=(over:Partial<WalkEvidence>={}):WalkEvidence=>({version:1,address_status:'independently_confirmed',location_precision:'parcel',decision:'review',reason_codes:['parcel_representative_point'],source_placement:'geocode',original_house:null,...over});
+/** Review doors on Brook Rd: parcel, recovered blank number, conflicting (no pin); plus one clean source-exact door. */
+const evidencePayload=():WalkListPayload=>{
+ const door=(seq:number,house:string,over:Partial<WalkListPayload['runs'][0]['doors'][0]>)=>({seq,house,unit:'',placed_by:'geocode' as const,lon:-104.5,lat:38.5,voters:[voter(`p${seq}`)],...over});
+ const doors=[
+  door(1,'2',{placed_by:'parcel',lon:-104.6,lat:38.6,evidence:evidence()}),
+  door(2,'4',{placed_by:'parcel',lon:-104.7,lat:38.7,evidence:evidence({address_status:'recovered_number',original_house:'',reason_codes:['number_recovered','parcel_representative_point']})}),
+  door(3,'6',{placed_by:'unlocated',lon:null,lat:null,evidence:evidence({address_status:'conflicting',location_precision:'unlocated',reason_codes:['conflicting_parcel_elsewhere']})}),
+  door(4,'8',{evidence:evidence({address_status:'source_exact',location_precision:'source_point',decision:'accepted',reason_codes:[]})}),
+ ];
+ return {...payload,query:{split_sides:'1'},bbox:[-105,38,-104,39],context:undefined,runs:[{...payload.runs[0],street:'Brook Rd',from_house:'2',to_house:'8',path:[],doors}],totals:{...payload.totals,streets:1,stops:1,doors:4,voters:4}};
+};
+const evidenceGroup=(source:ImportedWalkSelection['source'],evidenced:WalkListPayload,splitSides:boolean)=>prepareImportedGroups(
+ [{key:'section',label:'Local',sources:[source],exact:[]}],
+ [{key:'local',sectionKey:'section',label:'Local',reason:'Nearby',selections:[{source,payload:evidenced,personIds:['p1','p2','p3','p4'],streetId:10,city:'Example',state:'CO',zip:''}]}],
+ {sourceName:'input.xlsx',splitSides});
+
+test('evidence survives local groups, parity and door caps with exact door and voter conservation',()=>{
+ for(const splitSides of [true,false])for(const cap of [null,1,3]){
+  const prepared=evidenceGroup(selection().source,evidencePayload(),splitSides);
+  const sheets=prepared.payloads.flatMap(sheet=>splitWalkSheets(sheet,cap));
+  const doors=sheets.flatMap(sheet=>sheet.runs.flatMap(run=>run.doors));
+  assert.deepEqual(doors.map(d=>d.house).sort(),['2','4','6','8']);
+  assert.equal(sheets.reduce((n,sheet)=>n+sheet.totals.doors,0),4);assert.equal(sheets.reduce((n,sheet)=>n+sheet.totals.voters,0),4);
+  assert.deepEqual(doors.map(d=>d.voters.length),doors.map(()=>1));
+  assert.deepEqual(doors.find(d=>d.house==='4')!.evidence,evidencePayload().runs[0].doors[1].evidence);
+  assert.equal(doors.find(d=>d.house==='6')!.evidence!.address_status,'conflicting');
+  assert.ok(sheets.every(sheet=>sheet.runs.every(run=>run.street==='Brook Rd')),'source street text stays exact, never renamed');
+ }
+});
+
+test('review rows list only doors the service marked for review, with labelled choices and original/sheet addresses',()=>{
+ const rows=evidenceReviewRows(evidenceGroup(selection().source,evidencePayload(),false).payloads);
+ assert.equal(rows.length,3);
+ assert.deepEqual(rows.map(row=>row.sheet),['2 Brook Rd','4 Brook Rd','6 Brook Rd']);
+ assert.equal(rows[1].original,'(blank) Brook Rd');assert.equal(rows[0].original,'2 Brook Rd');
+ assert.deepEqual(rows[0].options.map(o=>o.label),['Accept parcel location','Remove map pin']);
+ assert.deepEqual(rows[1].options.map(o=>o.label),['Accept parcel location and recovered number','Remove map pin']);
+ assert.deepEqual(rows[2].options,[{decision:'accepted',label:'Keep printable without map pin'}]);
+ assert.equal(rows[2].status,'Conflicting records');assert.equal(rows[2].location,'No map pin');assert.deepEqual(rows[2].reasons,['A parcel with this number is elsewhere']);
+ assert.equal(rows[0].location,'Parcel point – entrance not confirmed');
+ assert.equal(evidenceReviewRows([{...evidencePayload(),runs:[]}]).length,0);
+});
+
+test('a rejected parcel door becomes unlocated without map bounds, keeps its house and people, and reverts when unchosen',()=>{
+ const built=evidenceGroup(selection().source,evidencePayload(),false).payloads;
+ const [parcel,recovered,conflict]=evidenceReviewRows(built);
+ const before=JSON.stringify(built);
+ const rejected=applyEvidenceDecisions(built,{[parcel.key]:'rejected',[recovered.key]:'rejected'});
+ assert.equal(JSON.stringify(built),before,'input payloads are never mutated');
+ const doors=rejected[0].runs.flatMap(run=>run.doors);
+ for(const house of ['2','4']){
+  const door=doors.find(d=>d.house===house)!;
+  assert.equal(door.lon,null);assert.equal(door.lat,null);assert.equal(door.placed_by,'unlocated');
+  assert.equal(door.evidence!.location_precision,'unlocated');assert.equal(door.evidence!.decision,'rejected');assert.equal(door.voters.length,1);
+ }
+ assert.equal(doors.find(d=>d.house==='4')!.evidence!.original_house,'');
+ assert.equal(doors.length,4);assert.equal(rejected[0].totals.voters,4);
+ assert.deepEqual(rejected[0].bbox,[-104.5,38.5,-104.5,38.5],'only the remaining pin bounds the map; removed parcel points do not');
+ const every=applyEvidenceDecisions(built,{[parcel.key]:'rejected',[recovered.key]:'rejected'}).map(p=>p.runs[0].doors.filter(d=>d.lon!==null).length);assert.deepEqual(every,[1]);
+ assert.equal(rejected[0].runs[0].doors.find(d=>d.house==='6')!.evidence!.decision,'review','undecided rows are untouched');
+ assert.deepEqual(applyEvidenceDecisions(built,{}),built);
+ assert.ok(conflict.key!==parcel.key);
+});
+
+test('an accepted door keeps its placement and only changes its decision',()=>{
+ const built=evidenceGroup(selection().source,evidencePayload(),true).payloads;
+ const [parcel,,conflict]=evidenceReviewRows(built);
+ const accepted=applyEvidenceDecisions(built,{[parcel.key]:'accepted',[conflict.key]:'accepted'});
+ const all=accepted.flatMap(p=>p.runs.flatMap(r=>r.doors)),was=built.flatMap(p=>p.runs.flatMap(r=>r.doors));
+ for(const house of ['2','6']){
+  const now=all.find(d=>d.house===house)!,old=was.find(d=>d.house===house)!;
+  assert.equal(now.evidence!.decision,'accepted');assert.equal(now.lon,old.lon);assert.equal(now.lat,old.lat);assert.equal(now.placed_by,old.placed_by);
+  assert.equal(now.evidence!.location_precision,old.evidence!.location_precision);
+ }
+ assert.deepEqual(accepted.map(p=>p.bbox),built.map(p=>p.bbox));
+});
+
+test('a conflicting row keeps the source street text exactly and never offers a rename',()=>{
+ const built=evidenceGroup(selection().source,evidencePayload(),false);
+ const [,,row]=evidenceReviewRows(built.payloads);
+ assert.equal(row.sheet,'6 Brook Rd');assert.ok(!/Brooks/.test(JSON.stringify([row,built.payloads])));
+ assert.deepEqual(row.options.map(option=>option.label),['Keep printable without map pin']);
+});
+
+test('address CSV adds the four evidence columns only when a door carries evidence',()=>{
+ const built=evidenceGroup(selection().source,evidencePayload(),false).payloads[0];
+ const lines=(csv:string)=>csv.replace(/^﻿/,'').trimEnd().split('\r\n');
+ const csv=lines(buildWalkSheetsCsv([built]));
+ assert.match(csv[0],/,"Address status","Location precision","Review decision","Evidence reasons"$/);
+ assert.ok(csv.some(line=>line.endsWith('"recovered_number","parcel","review","number_recovered; parcel_representative_point"')));
+ assert.ok(csv.some(line=>line.endsWith('"source_exact","source_point","accepted",""')));
+ const multi=lines(buildWalkSheetsCsv([...splitWalkSheets(built,1),payload]));
+ assert.ok(multi.every(line=>line.split('","').length===multi[0].split('","').length),'multi-sheet CSV keeps one column set');
+ assert.ok(!/Address status|Evidence reasons/.test(lines(buildWalkSheetsCsv([payload]))[0]));
+});
+
+test('a rejected recovered-number door keeps its recovered number in the CSV with an unlocated, rejected pin',()=>{
+ const built=evidenceGroup(selection().source,evidencePayload(),false).payloads;
+ const [,recovered]=evidenceReviewRows(built);
+ const decided=applyEvidenceDecisions(built,{[recovered.key]:'rejected'});
+ const line=buildWalkSheetsCsv(decided).replace(/^﻿/,'').trimEnd().split('\r\n').find(l=>l.includes('"recovered_number"'))!;
+ assert.ok(line.endsWith('"recovered_number","unlocated","rejected","number_recovered; parcel_representative_point"'));
+ assert.ok(line.includes('"4 Brook Rd"')||line.includes('"4"'),'the recovered house number is still printed');
+ assert.equal(decided[0].runs[0].doors.find(d=>d.house==='4')!.placed_by,'unlocated');
+});
+
+test('rejecting the only pins keeps the original bbox and context instead of zeroing them',()=>{
+ const full=evidenceGroup(selection().source,{...evidencePayload(),context:payload.context},false).payloads;
+ const built=full.map(p=>({...p,runs:p.runs.map(r=>({...r,doors:r.doors.filter(d=>d.evidence?.location_precision==='parcel')}))}));
+ const keys=evidenceReviewRows(built).map(r=>r.key);
+ const out=applyEvidenceDecisions(built,Object.fromEntries(keys.map(k=>[k,'rejected' as const])));
+ assert.deepEqual(out[0].bbox,built[0].bbox);assert.deepEqual(out[0].context,built[0].context);
+ assert.ok(out[0].runs[0].doors.every(d=>d.lon===null));
+});
+
+test('manifest address reviews carry the decision, reason codes and review time',()=>{
+ const built=evidenceGroup(selection().source,evidencePayload(),false).payloads;
+ const [parcel,,conflict]=evidenceReviewRows(built);
+ const at='2026-10-16T12:00:00.000Z';
+ const decided=applyEvidenceDecisions(built,{[parcel.key]:'rejected',[conflict.key]:'accepted'});
+ const entries=addressReviewEntries(decided,{[parcel.key]:at,[conflict.key]:at});
+ assert.deepEqual(entries.map(e=>[e.list,e.door,e.original_house,e.address_status,e.location_precision,e.decision,e.reviewed_at]),[
+  [1,1,null,'independently_confirmed','unlocated','rejected',at],
+  [1,2,'','recovered_number','parcel','review',null],
+  [1,3,null,'conflicting','unlocated','accepted',at],
+ ]);
+ assert.deepEqual(entries[1].reason_codes,['number_recovered','parcel_representative_point']);
+ assert.ok(entries[0].address.includes('Brook Rd'));
+ assert.deepEqual(addressReviewEntries([payload]),[]);
 });

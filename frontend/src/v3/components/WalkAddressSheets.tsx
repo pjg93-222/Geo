@@ -2,7 +2,9 @@ import {useMemo,useRef,useState} from 'react';
 import {Upload} from 'lucide-react';
 import {readAddressFile} from '../lib/walkAddressImport';
 import type {AddressImportResult,ImportedWalkAddress,ImportedWalkStreet,ImportSource} from '../lib/walkAddressImport';
+import {addressReviewEntries,applyEvidenceDecisions,evidenceReviewRows} from '../lib/walkAddressSheets';
 import type {ImportedWalkSelection} from '../lib/walkAddressSheets';
+import type {EvidenceChoice} from '../lib/walkEvidence';
 import {importSections,prepareImportedGroups} from '../lib/walkImportGroups';
 import type {ImportedLocalGroup} from '../lib/walkImportGroups';
 import type {WalkListPayload} from '../api/walkTypes';
@@ -36,6 +38,7 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
   const [mapOmissions,setMapOmissions]=useState<unknown[]>([]);
   const [mapCorrections,setMapCorrections]=useState<MapPlacementCorrection[]>([]);
   const [warnings,setWarnings]=useState<string[]>([]),[warningsAccepted,setWarningsAccepted]=useState(false);
+  const [decisions,setDecisions]=useState<Record<string,{decision:EvidenceChoice;at:string}>>({});
   const [excludedAddresses,setExcludedAddresses]=useState<Set<number>>(new Set()),[excludedIssues,setExcludedIssues]=useState<Set<number>>(new Set());
   const [bulkTown,setBulkTown]=useState(''),[bulkState,setBulkState]=useState(''),[bulkZip,setBulkZip]=useState('');
   const [error,setError]=useState('');const [busy,setBusy]=useState(false);const [part,setPart]=useState(0);
@@ -50,14 +53,19 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
   const streetCount=streets.filter(row=>row.choice!==excluded).length;
   const unread=loaded?(loaded.result.issues.length-excludedIssues.size):0;
   const sections=useMemo(()=>loaded?importSections(streets.filter(row=>row.choice!==excluded).map(row=>row.source),loaded.result.addresses.filter((_,i)=>!excludedAddresses.has(i)),loaded.result.images):[],[loaded,streets,excludedAddresses]);
-  const ready=!!loaded&&!unread&&!pendingStreets&&(!streetCount||expanded!==null&&expandedSplit===splitSides)&&(!warnings.length||warningsAccepted);
-  const prepared=useMemo(()=>ready&&loaded?prepareImportedGroups(sections,streetCount?expanded??[]:[],{sourceName:loaded.name,splitSides,date:localToday()}):null,[ready,loaded,sections,expanded,streetCount,splitSides]);
+  const structural=!!loaded&&!unread&&!pendingStreets&&(!streetCount||expanded!==null&&expandedSplit===splitSides);
+  const ready=structural&&(!warnings.length||warningsAccepted);
+  // Built before the warning acknowledgement so the per-address review rows are visible; one acknowledgement never sets a per-address decision.
+  const built=useMemo(()=>structural&&loaded?prepareImportedGroups(sections,streetCount?expanded??[]:[],{sourceName:loaded.name,splitSides,date:localToday()}):null,[structural,loaded,sections,expanded,streetCount,splitSides]);
+  const reviewRows=useMemo(()=>built?evidenceReviewRows(built.payloads):[],[built]);
+  const undecided=reviewRows.filter(row=>!decisions[row.key]).length;
+  const prepared=useMemo(()=>ready&&built?{...built,payloads:applyEvidenceDecisions(built.payloads,Object.fromEntries(Object.entries(decisions).map(([key,value])=>[key,value.decision])))}:null,[ready,built,decisions]);
   const addresses=prepared?.addresses??[];
   const sheets=useMemo(()=>prepared&&!capError?prepared.payloads.flatMap(payload=>splitWalkSheets(payload,cap)):[],[prepared,cap,capError]);
   const index=Math.min(part,Math.max(0,sheets.length-1)),sheet=sheets[index];
   const leftOut=excludedAddresses.size+excludedIssues.size+streets.filter(row=>row.choice===excluded).length;
   const recoveredNumbers=mapCorrections.filter(correction=>correction.registration_recovery!==undefined).length;
-  function resetOutput(){setExpanded(null);setMapOmissions([]);setMapCorrections([]);setWarnings([]);setWarningsAccepted(false);setPart(0);}
+  function resetOutput(){setExpanded(null);setDecisions({});setMapOmissions([]);setMapCorrections([]);setWarnings([]);setWarningsAccepted(false);setPart(0);}
   function beginImageWork(id:string){if(workingImageRef.current&&workingImageRef.current!==id)return false;workingImageRef.current=id;setWorkingImage(id);return true;}
   function endImageWork(id:string){if(workingImageRef.current===id){workingImageRef.current=null;setWorkingImage(null);}}
   function invalidateImageContext(){imageContextRef.current++;setImageContextVersion(imageContextRef.current);imageEvidenceRef.current={};setImageEvidence({});setStreets(rows=>rows.map(row=>row.choiceOrigin==='image-layout'?{...row,choice:'',choiceOrigin:undefined}:row));resetOutput();}
@@ -242,7 +250,7 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
           streetId:candidate.id,street:candidate.label,city:candidate.city,state:candidate.state,zip:candidate.zip_filter||candidate.zip,method:row.choiceOrigin??'exact',
           ...(row.choiceOrigin==='proximity'&&row.match?.proximity?{distanceMeters:row.match.proximity.distance_m??undefined,anchorCount:row.match.proximity.anchor_count}:{})}];
       });
-      const provenance={source:loaded.name,district:matchedDistrict?.district,snapshot:matchedDistrict?.snapshot,sourceRows:addresses,excludedSources,streetMatches,imageEvidence:Object.values(imageEvidence),mapPlacementOmissions:mapOmissions,mapPlacementCorrections:mapCorrections,localGroups:expanded?.map(group=>({key:group.key,sectionKey:group.sectionKey,label:group.label,reason:group.reason,sourceRows:group.selections.map(selection=>selection.source)}))};
+      const provenance={source:loaded.name,district:matchedDistrict?.district,snapshot:matchedDistrict?.snapshot,sourceRows:addresses,excludedSources,streetMatches,imageEvidence:Object.values(imageEvidence),mapPlacementOmissions:mapOmissions,mapPlacementCorrections:mapCorrections,addressReviews:addressReviewEntries(sheets,Object.fromEntries(Object.entries(decisions).map(([key,value])=>[key,value.at]))),localGroups:expanded?.map(group=>({key:group.key,sectionKey:group.sectionKey,label:group.label,reason:group.reason,sourceRows:group.selections.map(selection=>selection.source)}))};
       const notes=[...(loaded.result.notes??[]).map(note=>`${sourceLabel(note)}: ${note.text}`),...warnings];
       if(loaded.result.addresses.some((_,i)=>!excludedAddresses.has(i)))notes.push('Supplied exact addresses are retained with blank voter fields and no assumed coordinates.');
       const watermark=session.hosted&&session.email?watermarkText(session.email):'';
@@ -298,11 +306,24 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
             (row.match?.proximity?.reason||row.match?.reason)&&<div className="walk-hint">{row.match?.proximity?.reason||row.match?.reason}</div>}
           {row.match?.truncated&&<div className="walk-hint">More matches exist. Add the town or a more complete street name.</div>}</td></tr>)}
         </tbody></table></div>
-        <div className="walk-actions"><button className="walk-button" type="button" disabled={blocked} onClick={()=>void checkMatches()}>Recheck street matches</button><button className="walk-button walk-primary" type="button" disabled={blocked||!!pendingStreets||!streetCount||!!unread} onClick={()=>void makeSheets()}>Create sheets from selected streets</button><span>{pendingStreets?`${countText(pendingStreets,'street')} ${pendingStreets===1?'needs':'need'} a choice`:`${countText(streetCount,'street')} selected`}</span></div>
+        <div className="walk-actions"><button className="walk-button" type="button" disabled={blocked} onClick={()=>void checkMatches()}>Recheck street matches</button><button className="walk-button walk-primary" type="button" disabled={blocked||!!pendingStreets||!streetCount||!!unread||!!undecided} onClick={()=>void makeSheets()}>Create sheets from selected streets</button><span>{pendingStreets?`${countText(pendingStreets,'street')} ${pendingStreets===1?'needs':'need'} a choice`:`${countText(streetCount,'street')} selected`}</span></div>
       </section>}
       {expanded!==null&&expandedSplit!==splitSides&&<p className="walk-note">The even/odd setting changed. Create sheets again to calculate the new routes.</p>}
       {expanded!==null&&expandedSplit===splitSides&&!!mapCorrections.length&&<p className="walk-note" role="status">{countText(mapCorrections.length,'map location')} {mapCorrections.length===1?'uses':'use'} municipal parcel evidence. These locations identify properties; entrances are not confirmed. {mapOmissions.length?`${countText(mapOmissions.length,'record')} ${mapOmissions.length===1?'remains':'remain'} without confirmed map locations. `:''}Original locations and supporting evidence are retained in the ZIP manifest.</p>}
       {expanded!==null&&expandedSplit===splitSides&&!!recoveredNumbers&&<p className="walk-note" role="status">{countText(recoveredNumbers,'missing house number')} {recoveredNumbers===1?'was':'were'} recovered from matching source address fields and municipal parcel evidence. Original blank values are retained in the ZIP audit.</p>}
+      {expanded!==null&&expandedSplit===splitSides&&!!reviewRows.length&&<details open>
+        <summary>Review address evidence ({reviewRows.length})</summary>
+        <p className="walk-hint">Each address below could not be fully confirmed. Your choice changes only the map pin and this review record; the printed street name, house number and the people at the door stay as recorded. Removing a pin from a row with a recovered house number keeps the recovered number.</p>
+        <p className="walk-note" role="status">{undecided?`${undecided} ${undecided===1?'address needs':'addresses need'} a review decision`:'Every address has a review decision.'}</p>
+        <div className="walk-address-table-wrap"><table className="walk-address-table"><thead><tr><th>Original address</th><th>Sheet address</th><th>Address status</th><th>Location</th><th>Reasons</th><th>Decision</th></tr></thead><tbody>
+          {reviewRows.map(row=><tr key={row.key}><td>{row.original}</td><td>{row.sheet}</td><td>{row.status}</td><td>{row.location}</td>
+            <td>{row.reasons.length?(row.evidence.address_status==='conflicting'?<strong>{row.reasons.join('; ')}</strong>:row.reasons.join('; ')):'—'}</td>
+            <td><select aria-label={`Decision for ${row.sheet}`} value={decisions[row.key]?.decision??''} disabled={blocked} onChange={e=>{const value=e.target.value as ''|EvidenceChoice;setDecisions(current=>{const next={...current};if(value)next[row.key]={decision:value,at:new Date().toISOString()};else delete next[row.key];return next;});}}>
+              <option value="">Needs review</option>
+              {row.options.map(option=><option key={option.decision} value={option.decision}>{option.label}</option>)}
+            </select></td></tr>)}
+        </tbody></table></div>
+      </details>}
       {!!warnings.length&&<div className="walk-note" role="alert"><p>The district records have {countText(warnings.length,'address warning')}. These entries stay on the sheets with the information recorded.</p><ul>{warnings.map((warning,i)=><li key={i}>{warning}</li>)}</ul><label><input type="checkbox" checked={warningsAccepted} disabled={blocked} onChange={e=>setWarningsAccepted(e.target.checked)}/> I reviewed these warnings and want to keep these recorded entries.</label></div>}
       {!!leftOut&&<details className="walk-note"><summary>{countText(leftOut,'source entry')} explicitly left out</summary><ul>
         {[...excludedAddresses].map(i=><li key={`a${i}`}>{sourceLabel(loaded.result.addresses[i])}: {loaded.result.addresses[i].address}</li>)}
@@ -312,10 +333,11 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
     </>}
     {sheets.length>0&&<>
       <p className="walk-summary">{countText(addresses.length,'door row')} and {countText(prepared?.voters??0,'recorded person','recorded people')} covered across {countText(sheets.length,'list')}{cap?` · Maximum ${cap} doors per list`:''}{leftOut?` · ${leftOut} source entries left out by your choice`:''}.</p>
+      {!!undecided&&<p className="walk-note" role="status">{undecided} {undecided===1?'address needs':'addresses need'} a review decision before export.</p>}
       <div className="walk-actions">
-        <button className="walk-button walk-primary" type="button" disabled={blocked} onClick={()=>void exportSheets('zip')}>Download all lists ZIP</button>
-        <button className="walk-button" type="button" disabled={blocked} onClick={()=>void exportSheets('pdf')}>Export all lists PDF</button>
-        {!hosted&&<button className="walk-button" type="button" disabled={blocked} onClick={()=>void exportSheets('csv')}>Download all lists CSV</button>}
+        <button className="walk-button walk-primary" type="button" disabled={blocked||!!undecided} onClick={()=>void exportSheets('zip')}>Download all lists ZIP</button>
+        <button className="walk-button" type="button" disabled={blocked||!!undecided} onClick={()=>void exportSheets('pdf')}>Export all lists PDF</button>
+        {!hosted&&<button className="walk-button" type="button" disabled={blocked||!!undecided} onClick={()=>void exportSheets('csv')}>Download all lists CSV</button>}
         <label>Preview list <select aria-label="Address list preview" value={index} onChange={e=>setPart(Number(e.target.value))}>{sheets.map((s,i)=><option key={i} value={i}>List {i+1} of {sheets.length} · {s.query.import_group_label} · {s.totals.doors} doors</option>)}</select></label>
       </div>
       <div className="walk-address-table-wrap"><table className="walk-address-table">
