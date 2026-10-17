@@ -73,11 +73,13 @@ def signin(request):
     try:data=body(request)
     except ValueError:return JsonResponse({'error':'Invalid sign-in request'},status=400)
     username=str(data.get('username',''))[:150];address=client_address(request)
+    principal=None
     if getattr(settings, 'DESKTOP_BOUNDARY', False) and not settings.HOSTED:
         from .desktop_access import request_principal
         principal = request_principal(request)
         if not principal or username != principal.local_username:
             return JsonResponse({'error':'The username or password is incorrect.'},status=401)
+    owner=bool(principal and principal.mode=='existing-owner')
     # Hosted, sign-in is for the Access identity and no one else: before any LoginAttempt row is touched, so one staff member's
     # failed attempts can never lock another out.
     if settings.HOSTED and username.casefold()!=(getattr(request,'access_email',None) or '').casefold():return JsonResponse({'error':'Sign in with the account that matches your Access identity.'},status=403)
@@ -91,22 +93,42 @@ def signin(request):
         if attempt.window_start<limit:attempt.failures=0;attempt.window_start=timezone.now();attempt.save()
         attempts.append(attempt)
     if any(a.failures>=8 for a in attempts):return JsonResponse({'error':'Too many attempts. Try again in 15 minutes.'},status=429)
-    user=authenticate(request,username=username,password=data.get('password',''))
+    if owner:   # the one desktop owner password, for every district (desktop_owner.py); never this district's hash
+        from . import desktop_owner
+        from .desktop_principal import binding_for
+        binding=binding_for(principal)
+        user=binding.user if binding and binding.user and desktop_owner.check(principal,data.get('password','')) else None
+    else:user=authenticate(request,username=username,password=data.get('password',''))
     if not user:
         from django.db.models import F
         LoginAttempt.objects.filter(pk__in=[a.pk for a in attempts]).update(failures=F('failures')+1)
         return JsonResponse({'error':'The username or password is incorrect.'},status=401)
     if getattr(settings, 'DESKTOP_BOUNDARY', False) and not settings.HOSTED:
         from .desktop_access import account_authorized
-        if not account_authorized(request, user):
+        if not account_authorized(request, user, owner_password_checked=owner):
             return JsonResponse({'error':'This account is not available for the approved workspace.'},status=403)
     LoginAttempt.objects.filter(pk__in=[a.pk for a in attempts]).update(failures=0)
+    if owner:return owner_signed_in(request,principal,user)
     login(request,user)
     return who(request)
 
+def owner_signed_in(request,principal,user):
+    """Start the one desktop owner sign-in that every district of this app session accepts."""
+    from . import desktop_owner
+    token=desktop_owner.start_session(principal)
+    request.COOKIES[desktop_owner.COOKIE]=token;request.user=user
+    response=who(request);desktop_owner.set_cookie(response,token);return response
+
 @require_http_methods(['POST'])
 def signout(request):
-    logout(request);return JsonResponse({'ok':True})
+    logout(request);response=JsonResponse({'ok':True})
+    if getattr(settings, 'DESKTOP_BOUNDARY', False) and not settings.HOSTED:
+        from .desktop_access import request_principal
+        principal=request_principal(request)
+        if principal and principal.mode=='existing-owner':   # ends the owner's sign-in in every district
+            from . import desktop_owner
+            desktop_owner.end_session(principal,response)
+    return response
 
 @require_http_methods(['POST'])
 def accept_invitation(request):
@@ -119,24 +141,38 @@ def accept_invitation(request):
             # Hosted, an invitation is for the Access identity it names; anyone else holding the link cannot spend it.
             if settings.HOSTED and (getattr(request,'access_email',None) or '').casefold()!=invite.username.casefold():return JsonResponse({'error':'This invitation was made for a different sign-in.'},status=403)
             user=User.objects.filter(username=invite.username).first()
-            desktop_binding = None
+            desktop_binding = None;principal=None
             if getattr(settings, 'DESKTOP_BOUNDARY', False) and not settings.HOSTED:
                 from .desktop_access import request_principal
                 from .desktop_principal import accept_bound_invitation
-                desktop_binding = accept_bound_invitation(request_principal(request), invite, user)
+                principal=request_principal(request)
+                desktop_binding = accept_bound_invitation(principal, invite, user)
                 if not desktop_binding:
                     return JsonResponse({'error':'This invitation is not available for the approved workspace.'},status=403)
+            owner=bool(desktop_binding and principal.mode=='existing-owner')
+            if owner:
+                from . import desktop_owner
+                if desktop_owner.credential(principal) is not None:   # set once; a stale setup link cannot replace it
+                    return JsonResponse({'error':'The owner password is already set. Sign in with it.'},status=400)
             if user and not invite.reset:return JsonResponse({'error':'An account with that name already exists.'},status=400)
             if not user:user=User(username=invite.username,is_staff=invite.administrator)
             validate_password(data.get('password',''),user)
-            user.set_password(data['password']);user.is_active=True;user.save()
-            if desktop_binding:
-                from .desktop_principal import bind_accepted_user
-                bind_accepted_user(desktop_binding, user)
+            if owner:
+                # The one-time owner setup: one desktop password for every district. This district's account is unchanged.
+                desktop_binding.invitation_hash='';desktop_binding.save(update_fields=['invitation_hash'])
+            else:
+                user.set_password(data['password']);user.is_active=True;user.save()
+                if desktop_binding:
+                    from .desktop_principal import bind_accepted_user
+                    bind_accepted_user(desktop_binding, user)
             if invite.field_staff:field_access.grant(user)
             if invite.field_manager:field_access.grant(user,field_access.MANAGER)
             invite.used_at=timezone.now();invite.save()
-            AuditEvent.objects.create(actor=user.username,action='account.reset' if invite.reset else 'account.activate')
+            AuditEvent.objects.create(actor=user.username,action='account.desktop_owner_password' if owner else 'account.reset' if invite.reset else 'account.activate')
+            if owner:   # last: a failed write rolls the invitation back
+                from django.contrib.auth.hashers import make_password
+                desktop_owner.set_credential(principal,make_password(data['password']))
+        if owner:return owner_signed_in(request,principal,user)
         login(request,user);return who(request)
     except ValidationError as e:return JsonResponse({'error':' '.join(e.messages)},status=400)
     except (ValueError,KeyError,TypeError):return JsonResponse({'error':'Invalid invitation request'},status=400)

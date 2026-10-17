@@ -68,13 +68,18 @@ def prepare_principal(principal, state_root):
 
     This runs only after verified schema backup/migration. A new binding/invitation
     gets its own verified backup; no account, password or role is created here.
+    The existing owner has one desktop password for every district (desktop_owner.py):
+    it is invited to choose it only while none is set, the one-time setup.
     """
     from django.contrib.auth.models import User
     from .models import DesktopPrincipalBinding, Invitation, AuditEvent
     from .views import create_invitation
+    from . import desktop_owner
     from desktop_migrations import migrate_sqlite
     if not isinstance(principal, Principal) or settings.HOSTED or not settings.DESKTOP_BOUNDARY or principal.district_id != settings.DISTRICT['id']:
         raise ValueError('Approved desktop principal is required')
+    if principal.mode == 'existing-owner' and desktop_owner.root(principal) is None:
+        raise ValueError('The desktop owner password store is required')
     connection = connections['default']
     if connection.vendor != 'sqlite' or connection.in_atomic_block:
         raise ValueError('Desktop principal setup requires its independent local database')
@@ -95,14 +100,23 @@ def prepare_principal(principal, state_root):
         if principal.mode == 'existing-owner':
             if not user or str(user.pk) != principal.local_user_id or not user.is_active or not user.is_staff:
                 raise ValueError('The approved existing owner is unavailable')
-            if not user.has_usable_password() and (User.objects.count() != 1 or not user.is_superuser):
+            if (desktop_owner.credential(principal) is None and not user.has_usable_password()
+                    and (User.objects.count() != 1 or not user.is_superuser)):
                 raise ValueError('First-password setup refuses ambiguous existing accounts')
         if user and (not user.is_active or not user.is_staff):
             raise ValueError('The approved account is disabled or lacks its existing role')
         return binding, user
 
+    def needs_password(user):
+        if principal.mode == 'existing-owner':
+            return desktop_owner.credential(principal) is None
+        return not user or not user.has_usable_password()
+
     existing, user = inspect()
-    if existing and user and user.has_usable_password():
+    if principal.mode == 'existing-owner' and desktop_owner.credential(principal) is None and user.has_usable_password():
+        # An owner who already has a password here keeps it, as the one password for every district.
+        desktop_owner.set_credential(principal, user.password)
+    if existing and user and not needs_password(user):
         return None
     result = {'launchPath': None}
 
@@ -117,7 +131,7 @@ def prepare_principal(principal, state_root):
                         principal_id=principal.principal_id, account_identity=principal.account_identity,
                         local_username=principal.local_username, district_id=principal.district_id,
                         mode=principal.mode, user=user)
-                if not user or not user.has_usable_password():
+                if needs_password(user):
                     path = create_invitation(principal.local_username, administrator=True, reset=user is not None)
                     token = path.partition('=')[2]
                     digest = hashlib.sha256(token.encode()).hexdigest()

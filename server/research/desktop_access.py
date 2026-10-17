@@ -1,7 +1,9 @@
 """The native launcher boundary authorizes an existing signed-in administrator.
 
-This never creates an account, changes roles, or authenticates a user. The marker
-is an in-process object, not an HTTP header, and is issued only by the token gate.
+This never creates an account or changes roles. The marker is an in-process
+object, not an HTTP header, and is issued only by the token gate. The existing
+owner signs in with its one desktop password (desktop_owner.py); a recipient
+signs in with its district account's own password.
 """
 from ipaddress import ip_address
 from django.conf import settings
@@ -57,12 +59,18 @@ def request_principal(request):
     return marker[3]
 
 
-def account_authorized(request, user):
+def account_authorized(request, user, *, owner_password_checked=False):
+    """The bound account, signed in: the owner by its desktop sign-in (or a password just checked), a recipient by password."""
     principal = request_principal(request)
     binding = binding_for(principal) if principal else None
-    return bool(binding and binding.user_id is not None and user and user.is_authenticated
-                and user.pk == binding.user_id and user.username == binding.local_username
-                and user.is_active and user.is_staff and user.has_usable_password())
+    if not (binding and binding.user_id is not None and user and user.is_authenticated
+            and user.pk == binding.user_id and user.username == binding.local_username
+            and user.is_active and user.is_staff):
+        return False
+    if principal.mode == 'existing-owner':
+        from . import desktop_owner
+        return str(user.pk) == principal.local_user_id and (owner_password_checked or desktop_owner.session_valid(request, principal))
+    return user.has_usable_password()
 
 
 def administrator_authorized(request):
@@ -93,8 +101,14 @@ class DesktopPrincipalMiddleware:
         if settings.HOSTED or not getattr(settings, 'DESKTOP_BOUNDARY', False):
             return self.get_response(request)
         principal = request_principal(request)
-        if not principal or not binding_for(principal):
+        binding = binding_for(principal) if principal else None
+        if not binding:
             return JsonResponse({'error': 'Desktop approval is required.'}, status=403)
+        if principal.mode == 'existing-owner':
+            # The owner is signed in only by this app session's desktop sign-in, never by a district session cookie.
+            from django.contrib.auth.models import AnonymousUser
+            from . import desktop_owner
+            request.user = binding.user if binding.user and desktop_owner.session_valid(request, principal) else AnonymousUser()
         if request.path == '/api/health' and request.method in ('GET', 'HEAD'):
             return JsonResponse({'status': 'ok'})
         auth = {'/api/auth/session': {'GET', 'HEAD'}, '/api/auth/login': {'POST'},

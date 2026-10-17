@@ -54,6 +54,11 @@ X_FRAME_OPTIONS = 'DENY'
 HOSTED = os.environ.get('CU_DEPLOYMENT') == 'hosted'
 DESKTOP_BOUNDARY = os.environ.get('CU_DEPLOYMENT') == 'desktop'
 LOCAL_ADMIN_ACCESS = not HOSTED and os.environ.get('CU_LOCAL_ADMIN', '1') == '1'
+# Desktop only: the existing owner's one password and one sign-in for every district (server/research/desktop_owner.py).
+# The native launcher names the desktop-level directory and passes a fresh per-app-session key, removed from the environment.
+DESKTOP_OWNER_ROOT = (Path(os.environ['CU_DESKTOP_OWNER_ROOT']).resolve()
+                      if DESKTOP_BOUNDARY and not HOSTED and os.environ.get('CU_DESKTOP_OWNER_ROOT') else None)
+DESKTOP_OWNER_SESSION_KEY = os.environ.pop('CU_DESKTOP_OWNER_SESSION', '') if DESKTOP_BOUNDARY and not HOSTED else ''
 SESSION_COOKIE_SECURE = HOSTED
 CSRF_COOKIE_SECURE = HOSTED
 SECURE_SSL_REDIRECT = HOSTED and os.environ.get('CU_HTTPS_REDIRECT','1') == '1'
