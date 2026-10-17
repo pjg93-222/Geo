@@ -7,18 +7,24 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test:e2e": "playwright test",
-    "test:unit": "node --test tests/v3/authSession.test.ts tests/v3/format.test.ts tests/v3/copy.test.ts tests/v3/opinions.test.ts tests/v3/savedViews.test.ts tests/v3/liveClient.test.ts tests/v3/walk.test.ts tests/v3/walkRefused.test.ts tests/v3/csv.test.ts tests/v3/overlay.test.ts tests/v3/plan.test.ts tests/v3/support-ui.test.ts tests/v3/areas.test.ts tests/v3/untapped.test.ts"
+    "test:unit": "node --test tests/v3/authSession.test.ts tests/v3/format.test.ts tests/v3/copy.test.ts tests/v3/opinions.test.ts tests/v3/savedViews.test.ts tests/v3/liveClient.test.ts tests/v3/walk.test.ts tests/v3/walkRefused.test.ts tests/v3/csv.test.ts tests/v3/overlay.test.ts tests/v3/plan.test.ts tests/v3/support-ui.test.ts tests/v3/areas.test.ts tests/v3/untapped.test.ts tests/v3/walkAddressImport.test.ts tests/v3/walkSheets.test.ts tests/v3/walkZip.test.ts tests/v3/walkImageOcr.test.ts tests/v3/walkImageAlignment.test.ts tests/v3/walkAddressSheets.test.ts",
+    "prebuild": "node scripts/copy-ocr-assets.mjs"
   },
   "dependencies": {
+    "fflate": "0.8.3",
     "jspdf": "4.2.1",
     "jspdf-autotable": "5.0.8",
     "lucide-react": "^0.468.0",
     "maplibre-gl": "^6.11.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "read-excel-file": "9.3.12",
+    "tesseract.js": "6.0.1",
+    "tesseract.js-core": "6.1.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "@types/geojson": "^7946.0.16",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",

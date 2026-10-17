@@ -64,6 +64,9 @@ class StaticFileTests(SimpleTestCase):
         self.assertTrue(shell['ETag'])
         self.assertEqual(self.fetch('/some/spa/route')['Cache-Control'], 'no-cache')    # falls back to the shell
         self.assertIn("default-src 'self'", shell['Content-Security-Policy'])
+        self.assertIn("script-src 'self' 'wasm-unsafe-eval'", shell['Content-Security-Policy'])
+        self.assertNotIn("'unsafe-eval'", shell['Content-Security-Policy'])
+        self.assertIn("connect-src 'self'", shell['Content-Security-Policy'])
         self.assertEqual(shell['X-Content-Type-Options'], 'nosniff')
 
     def test_loading_video_byte_ranges(self):

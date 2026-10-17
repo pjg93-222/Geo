@@ -5,7 +5,7 @@ export type WalkLevel = 'ss' | 'sh' | 'precinct';
 export type WalkSide = 'even' | 'odd';
 export type WalkSidePick = WalkSide | 'both';
 export type WalkCode = 'S' | 'U' | 'O' | 'NH' | 'MV';
-export type WalkPlacement = 'geocode' | 'fuzzy' | 'nearest' | 'interpolated';
+export type WalkPlacement = 'geocode' | 'fuzzy' | 'nearest' | 'interpolated' | 'parcel' | 'unlocated';
 export type WalkListKind = 'standard' | 'reknock';
 
 export interface WalkArea { ss?: string; sh?: string; precinct?: string }
@@ -37,10 +37,10 @@ export interface WalkVoter {
   party: string; age: number | null; gender: string; reg_date: string;
   last: WalkLast | null;
 }
-export interface WalkDoor { seq: number; house: string; unit: string; placed_by: WalkPlacement; lon: number; lat: number; voters: WalkVoter[] }
+export interface WalkDoor { seq: number; house: string; unit: string; placed_by: WalkPlacement; lon: number | null; lat: number | null; voters: WalkVoter[]; city?: string; state?: string; zip?: string; address?: string; warnings?: string[]; location_evidence?: unknown }
 export interface WalkRun {
-  stop: number; street_id: number; street: string; side: WalkSide; precinct: string;
-  from_house: string; to_house: string; walk_m: number;
+  stop: number; street_id: number; street: string; side: WalkSidePick; precinct: string; locality?: string;
+  from_house: string; to_house: string; walk_m: number; approach_m?: number;
   lr: 1 | -1 | 0;                // walked side relative to path direction: 1 left, -1 right, 0 unknown
   path: [number, number][];      // street centreline along this run, in walk direction
   approach: [number, number][];  // shortest path from the previous run's end ([] for stop 1)

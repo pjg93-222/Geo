@@ -6,11 +6,13 @@ import {int} from '../lib/format';
 import type {Meta} from '../types';
 import {contactAddress,contactQuery,contactUrl,exportContacts,getContacts,type AddressBasis,type ContactChannel,type ContactPage,type ContactQuery,type Contact} from '../api/contacts';
 import '../styles/contacts.css';
+import {useStartupReady} from './StartupFrame';
 
 export function ContactsScreen({meta,route}:{meta:Meta|null;route:Route}){
   const query=useMemo(()=>contactQuery(route.search),[route]);
   const [draft,setDraft]=useState(query.text);const [data,setData]=useState<ContactPage|null>(null);
   const [error,setError]=useState('');const [retry,setRetry]=useState(0);const [exporting,setExporting]=useState(false);const [exportNote,setExportNote]=useState('');
+  useStartupReady(!!data||!!error);
   const [selected,setSelected]=useState<Contact|null>(null);const dialog=useRef<HTMLDialogElement>(null);const table=useRef<HTMLDivElement>(null);
   useEffect(()=>{setDraft(query.text);setSelected(null);setExportNote('');table.current?.scrollTo({top:0});},[query]);
   useEffect(()=>{

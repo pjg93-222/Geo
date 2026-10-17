@@ -396,10 +396,39 @@ def knocked():
 
 # ---- area sums ---------------------------------------------------------------------------------------------------
 
+def _stored_precinct_codes(stamp, n):
+    """Reuse the score store's verified person-list column instead of rescanning its wide person table.
+
+    Older stores without list columns keep the SQL path. Only the same file version as the turnout terms may supply
+    codes. The writer's factorize contract is sorted nonempty IDs, integer codes, and -1 for no area. A malformed or
+    incomplete derived column falls back to the authoritative person rows.
+    """
+    try:
+        info = DB.info()
+    except DB.StoreError:
+        return None
+    if (str(info.path), *info.stamp) != stamp[0] or info.n != n:
+        return None
+    ids, codes = info.dicts.get('a_reg_precinct'), info.columns.get('a_reg_precinct')
+    if (not isinstance(ids, list) or not all(isinstance(ident, str) and ident for ident in ids)
+            or ids != sorted(set(ids)) or not isinstance(codes, np.ndarray) or codes.shape != (n,)
+            or codes.dtype.kind not in 'iu'):
+        return None
+    used = np.unique(codes)
+    present = used[used >= 0]
+    if ((len(used) and used[0] < -1) or not np.array_equal(present, np.arange(len(ids)))):
+        return None
+    return list(ids), codes.astype(np.int32, copy=False)
+
+
 @lru_cache(maxsize=12)
 def _area_codes(level, stamp):
     """(sorted area ids, int32[n] index of each person's area in them, -1 for none) of one level."""
     n = terms().n
+    if level == 'precinct':
+        stored = _stored_precinct_codes(stamp, n)
+        if stored is not None:
+            return stored
     values = [''] * n
     if level in STATE_LEVELS:
         fips = settings.DISTRICT['state_fips']

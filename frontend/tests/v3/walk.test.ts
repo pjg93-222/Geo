@@ -317,7 +317,7 @@ import {registerHooks} from 'node:module';
 import {readdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 registerHooks({resolve: (spec, ctx, next) => ctx.parentURL?.includes('/src/v3/') && /^\.{1,2}\//.test(spec) && !/\.[cm]?[jt]sx?$/.test(spec) ? next(spec + '.ts', ctx) : next(spec, ctx)});
-const {buildWalkPdf} = await import('../../src/v3/lib/walkPdf.ts');
+const {buildWalkPdf,buildWalkSheetsPdf} = await import('../../src/v3/lib/walkPdf.ts');
 type PdfDoc = Awaited<ReturnType<typeof buildWalkPdf>>['doc'];
 
 /** The strings a page shows, read back from its content stream and decoded as Windows-1252 (what the standard fonts use). */
@@ -328,6 +328,20 @@ const pdfTexts = (doc: PdfDoc, page: number): string[] => {
 };
 const pdfPages = (doc: PdfDoc) => Array.from({length: doc.getNumberOfPages()}, (_, i) => pdfTexts(doc, i + 1));
 const manyDoors = (n: number, tag = 'a') => Array.from({length: n}, (_, i) => door(i + 1, String(100 + 2 * i), Array.from({length: 1 + (i % 5)}, (_, k) => voter({person_id: `${tag}${i}-${k}`, name: `Voter ${tag}${i}-${k}`}))));
+
+test('imported combined PDF preserves each individual original cover, table and local page numbering',async()=>{
+  const sheets=[payload([run({doors:manyDoors(5)})]),payload([run({street:'Second Street',doors:manyDoors(12,'b')})])].map((sheet,index)=>({...sheet,list:{...sheet.list,title:'Walk list'},query:{...sheet.query,imported:'1',import_group:`group-${index}`,import_group_label:`Area ${index+1}`}}));
+  const individual=await Promise.all(sheets.map(sheet=>buildWalkPdf(sheet,{area:''})));
+  const combined=await buildWalkSheetsPdf(sheets,{area:'Uploaded workbook.xlsx'});
+  assert.deepEqual(pdfPages(combined.doc),individual.flatMap(part=>pdfPages(part.doc)));
+  assert.deepEqual(combined.maps,individual.map(part=>part.map));
+  assert.equal(combined.doc.getNumberOfPages(),individual.reduce((n,part)=>n+part.doc.getNumberOfPages(),0));
+  assert.equal(pdfPages(combined.doc).filter(page=>page.includes('Door script')).length,2);
+  assert.ok(!pdfPages(combined.doc).flat().some(text=>text.includes('Full route')||text.includes('Uploaded workbook')));
+  assert.match(combined.doc.output(),/\/Title \(A - Area 1 - Even\)/);
+  assert.match(combined.doc.output(),/\/Title \(B - Area 2 - Even\)/);
+  await assert.rejects(()=>buildWalkSheetsPdf([]),/No walk lists/);
+});
 
 test('PDF watermark: who printed it and when is on every page, in the margin and faintly across the page; without one the pages carry nothing extra', async () => {
   const mark = watermarkText('field@example.test', new Date('2026-10-12T14:03:00Z'));
@@ -402,11 +416,13 @@ test('PDF: empty lists, runs without a path, doors without voters, odd coordinat
   ];
   const {doc} = await buildWalkPdf({...payload(odd), list: {key: null, title: 'A very long title '.repeat(10), kind: 'reknock', created_at: null}, generated_on: ''});
   const pages = pdfPages(doc);
-  assert.equal(pages.length, 3, 'cover, the first run and the long one; no page for a door without voters or a run without doors');
-  assert.ok(pages[2].some(t => t.startsWith('Alexandria') && t.endsWith('...') && t.length < long.length), 'a long name is cut with an ellipsis');
-  assert.ok(pages[2].some(t => t.startsWith('4102 Building') && t.endsWith('...')), 'a long unit is cut with an ellipsis');
-  assert.ok(pages[2].some(t => t.startsWith('Street: North Extraordinarily') && t.endsWith('...')), 'a long street label is cut with an ellipsis');
-  assert.ok(pages[2].some(t => t.startsWith('Precinct: PRECINCT-OF') && t.endsWith('...')), 'a long precinct label is cut with an ellipsis');
+  assert.equal(pages.length, 4, 'cover and every run with doors, including a door without recorded voters');
+  assert.ok(pages[2].includes('12'), 'the address without recorded voters stays on its own canvassing page');
+  assert.ok(pages[2].includes('NH')&&pages[2].includes('MV'), 'blank voter rows retain the sample result marks');
+  assert.ok(pages[3].some(t => t.startsWith('Alexandria') && t.endsWith('...') && t.length < long.length), 'a long name is cut with an ellipsis');
+  assert.ok(pages[3].some(t => t.startsWith('4102 Building') && t.endsWith('...')), 'a long unit is cut with an ellipsis');
+  assert.ok(pages[3].some(t => t.startsWith('Street: North Extraordinarily') && t.endsWith('...')), 'a long street label is cut with an ellipsis');
+  assert.ok(pages[3].some(t => t.startsWith('Precinct: PRECINCT-OF') && t.endsWith('...')), 'a long precinct label is cut with an ellipsis');
 });
 
 test('PDF: 1,500 voters all print, in walking order', async () => {
@@ -1114,7 +1130,7 @@ test('walk screen wiring (refusals): narrow classification, marks kept and flagg
   assert.ok(!/takeBack|refusedStatus\(e\.status\)/.test(src), 'nothing takes a mark off the screen');
   assert.ok(/refuse:\(refused,why\)=>refuse\(entry,refused,why\)/.test(src) && /setUnsaved\(u=>new Set\(\[\.\.\.u,\.\.\.refused\.keys\(\)\]\)\)/.test(src), 'a refused mark on screen is flagged, not removed');
   assert.ok(/marksWithRefused\(p,refusals\.marks,listIdentity\(p\.list\?\.key,p\.query\?\?\{\}\)\)/.test(src), 'a list opened again shows its refused marks, flagged');
-  assert.ok(/buildWalkCsv\(p,resultsRef\.current,historyRef\.current,unsavedRef\.current,scores\)/.test(src), 'the CSV carries the flag, read when the file is made (scores may have been asked for first)');
+  assert.ok(/buildWalkSheetsCsv\(splitWalkSheets\(p,cap\),resultsRef\.current,historyRef\.current,unsavedRef\.current,scores\)/.test(src), 'every CSV sheet carries the flag, read when the file is made (scores may have been asked for first)');
   assert.ok(/refusals\.clear\(identities\(entry\),batch\.keys\(\)\)/.test(src), 'marked again and saved: the flag goes');
   assert.ok(/^const refusals=refusedStore\(\);/m.test(src) && /useState<RefusalNote\|null>\(\(\)=>refusals\.note\)/.test(src), 'marks and note outlive the screen, and a reload (restored when the module loads)');
   assert.ok(/onClick=\{\(\)=>\{refusals\.dismiss\(\);showRefusal\(null\);\}\}>Dismiss</.test(src) && /return refusals\.hold\(identities\(entry\)\[0\],/.test(src), 'dismissing and refusing go through the store, which writes them through');
@@ -1369,12 +1385,12 @@ test('page address: planned streets ride along, are enough to rebuild a list, an
 test('walk screen wiring: the street plan shows only with features.roi, builds with spans, and the print toggle asks for scores only while on', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/features\?\.roi&&<StreetPlan /.test(src), 'no street plan without features.roi (Colorado)');
-  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets, and the click is not passed in as the streets');
+  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut,splitSides\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets with the side toggle, and the click is not passed in as the streets');
   assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
   assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
-  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores,watermark\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
+  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores,watermark,sheets:splitWalkSheets\(p,cap\)\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
   assert.ok(/const watermark=session\.hosted&&session\.email\?watermarkText\(session\.email\):undefined;/.test(src) && /if\(session\.hosted&&!session\.email\)throw/.test(src), 'a hosted server watermarks the PDF with the verified identity, and prints nothing without one');
-  assert.ok(/\{!hosted&&<button type="button" className="walk-button" onClick=\{\(\)=>void exportCsv\(\)\}>Download CSV/.test(src) && /p\|\|hosted\)return;/.test(src), 'a hosted server offers no CSV download');
+  assert.ok(/\{!hosted&&<button type="button" className="walk-button" disabled=\{!!busy\|\|!!capError\} onClick=\{\(\)=>void exportCsv\(\)\}/.test(src) && /p\|\|hosted\)return;/.test(src), 'a hosted server offers no CSV download, and overlapping exports are disabled');
   assert.ok(/for\(const chunk of idChunks\(ids\)\)/.test(src), 'a list longer than one request is asked for in pieces');
 });
 
@@ -1494,13 +1510,13 @@ test('walk screen wiring: Plan walk list and Doors by the precinct field, the cl
   assert.ok(/min=\{DOORS_MIN\} max=\{DOORS_MAX\} step=\{1\}/.test(src) && /\{DOORS_MIN\} to \{DOORS_MAX\.toLocaleString\('en-US'\)\}/.test(src), 'doors from 1 to 1,000 on the input and in the hint');
   assert.ok(/clampDoors\(doorsText\?\?savedDoors,turfCfg\.doors\)/.test(src) && /writeDoors\(features\.district,doorsNow\)/.test(src), 'doors from the district\'s default, kept per viewer');
   assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
-  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
+  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined,splitSides\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
   assert.ok(/putSpans\(got\.turf\?\.spans\?\?\[\],true,got\.cut\?\?null\);show\(p,false\);setTurf\(got\.turf\?\?null\)/.test(src), 'the blocks and the cut go in the address with fresh, and the note is kept for this list');
-  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey\]/.test(src), 'the address says spans, fresh=1, doors, wp and wi and drops plan, so a reload does not plan again');
+  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),split_sides:splitSides\?'1':'0',max_doors:capText\|\|null,plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey,splitSides,capText\]/.test(src), 'the address preserves plan options, side toggle and sheet cap, and drops plan so a reload does not plan again');
   assert.ok(/startPlan\(init\)==='turf'/.test(src) && /if\(!turfWaits\.current\|\|!features\)return;/.test(src) && /if\(features\.roi\)planTurf\(\);else generate\(\);/.test(src), 'plan=1 runs once the settings are here, and a district with no plan builds the precinct as it did');
   assert.ok(/putSpans\(ids,true\);generate\(ids\)/.test(src) && /putSpans\(parseSpansParam\(from\.spans\),!!from\.fresh,from\.trim\?\?null\)/.test(src) && /const putSpans=\(next:number\[\],left=false,cut:WalkListTrim\|null=null\)/.test(src), 'fresh goes with planned blocks: checked blocks (whole, no doors) and a saved list (with its doors) bring it, clearing them takes it away');
   assert.ok(/const kept=next\.length>0&&left\?cut:null;trimRef\.current=kept;setTrim\(kept\)/.test(src), 'doors ride only with planned blocks that are fresh, as the server wants');
-  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
+  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut,splitSides\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
   assert.ok(/readWeights\(features\.district,defaults\)/.test(src) && /writeWeights\(features\.district,next\)/.test(src) && /weights=\{weights\} defaults=\{defaults\} onWeights=\{changeWeights\} doors=\{doorsNow\}/.test(src), 'the sliders are shared with the map through the weights helpers');
   assert.ok(/turfLines\(turf,payload\.totals,turfCfg\.jump_m\)/.test(src), 'the note uses the routed list\'s totals');
 });

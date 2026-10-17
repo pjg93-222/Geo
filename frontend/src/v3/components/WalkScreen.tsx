@@ -5,6 +5,8 @@ import type {ReactNode} from 'react';
 import {Check,ChevronDown,Route as RouteIcon,Search,Upload,X} from 'lucide-react';
 import {PageHeader,useFeatures} from './Header';
 import {StreetPlan} from './StreetPlan';
+import {WalkAddressSheets} from './WalkAddressSheets';
+import {useStartupReady} from './StartupFrame';
 import {Segmented,cx} from './ui';
 import type {WalkShade} from './WalkMap';
 import {replaceQuery,type Route} from '../lib/router';
@@ -14,7 +16,7 @@ import {ApiError,getSession} from '../api/client';
 import {getWalkList,getWalkLists,getWalkOptions,getWalkPlan,getWalkSavedList,getWalkScores,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,searchWalkStreets} from '../api/walk';
 import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkTurf,WalkVoter} from '../api/walkTypes';
 import {
-  CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,buildWalkCsv,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
+  CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
   lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
   doorsByPerson,flaggedOnList,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,watermarkText,
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,turfLines,
@@ -25,6 +27,7 @@ import {readWeights,weightsQuery,writeWeights} from '../lib/untapped';
 import type {UntappedWeights} from '../lib/untapped';
 import {DOOR_SCRIPT,choiceText,fillScript} from '../lib/walkScript';
 import {exportWalkPdf} from '../lib/walkPdf';
+import {buildWalkSheetsCsv,doorCap,splitWalkSheets} from '../lib/walkSheets';
 import {refusedStore} from '../lib/walkRefused';
 import {onRefusedReset} from '../lib/walkRefusedReset';
 import '../styles/walk.css';
@@ -324,6 +327,11 @@ class MapGuard extends Component<{children:ReactNode},{failed:boolean}>{
 // --- screen ---------------------------------------------------------------------------------------------------------------------------
 export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [init]=useState(()=>readWalkAddress(route.search));
+  const [source,setSource]=useState<'streets'|'addresses'>('streets');
+  const [splitSides,setSplitSides]=useState(()=>new URLSearchParams(route.search).get('split_sides')!=='0');
+  const [capText,setCapText]=useState(()=>new URLSearchParams(route.search).get('max_doors')??'');
+  const [sheetIndex,setSheetIndex]=useState(0);
+  let cap:number|null=null,capError='';try{cap=doorCap(capText);}catch(e){capError=(e as Error).message;}
   const [area,setArea]=useState<Area>(init.area);
   const [picks,setPicks]=useState<WalkPick[]>(init.picks);const picksRef=useRef(picks);picksRef.current=picks;
   const [spans,setSpans]=useState<number[]>(init.spans??[]);const spansRef=useRef(spans);   // planned blocks (road spans from the block plan)
@@ -353,12 +361,13 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [listKey,setListKey]=useState(init.list);
   const [loading,setLoading]=useState(false);const [loadError,setLoadError]=useState<{message:string;retry:()=>void}|null>(null);
   const [note,setNote]=useState('');const [actionNote,setActionNote]=useState<{text:string;alert:boolean}|null>(null);const [announce,setAnnounce]=useState('');
+  useStartupReady(startPlan(init)==='none'||!!payload||!!loadError||!!note);
   const [shade,setShade]=useState<WalkShade>('doors');
   const [results,setResults]=useState<WalkResults>({});const resultsRef=useRef(results);resultsRef.current=results;
   const [history,setHistory]=useState<WalkHistory>({});   // the marks on this list, and the results on file that a later look at the list changed
   const historyRef=useRef(history);historyRef.current=history;
   const [saveState,setSaveState]=useState<SaveState>('idle');const [saveError,setSaveError]=useState('');
-  const [saveOpen,setSaveOpen]=useState(false);const [saveTitle,setSaveTitle]=useState('');const [busy,setBusy]=useState<''|'save'|'pdf'>('');
+  const [saveOpen,setSaveOpen]=useState(false);const [saveTitle,setSaveTitle]=useState('');const [busy,setBusy]=useState<''|'save'|'pdf'|'zip'>('');
   const [lists,setLists]=useState<WalkSavedList[]>([]);const [listsError,setListsError]=useState(false);
   const [earlier,setEarlier]=useState<{message:string}|null>(null);   // results from before the screen was left that could not be saved
   const [refusal,showRefusal]=useState<RefusalNote|null>(()=>refusals.note);   // results the server refused: told until dismissed, whichever list comes on screen meanwhile
@@ -470,7 +479,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const show=useCallback((p:WalkListPayload,adopt:boolean)=>{
     // results recorded on this list come back selected, and so do the walker's marks the server refused (flagged); the rest is history
     const marks=marksWithRefused(p,refusals.marks,listIdentity(p.list?.key,p.query??{}));
-    payloadRef.current=p;setPayload(p);setTurf(null);setResults(marks.results);setUnsaved(marks.unsaved);setHistory({});setReplaced(false);clearTimeout(timer.current);
+    payloadRef.current=p;setPayload(p);setSheetIndex(0);setSource('streets');setTurf(null);setResults(marks.results);setUnsaved(marks.unsaved);setHistory({});setReplaced(false);clearTimeout(timer.current);
+    if(adopt)setSplitSides(p.query?.split_sides!=='0');
     entryRef.current=outbox.open({meta:p.list?.key?p.list:null,title:defaultListTitle(p),query:p.query??{},where:doorsByPerson(p),seen:seenBy(p),fingerprint:p.fingerprint});
     setSaveState('idle');setSaveError('');setSaveOpen(false);setActionNote(null);setListKey(p.list?.key??'');
     const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
@@ -513,6 +523,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   };
 
   function generate(planned:number[]=spansRef.current){
+    if(capError){setNote(capError);return;}
     const waiting=(upload?.rows??[]).filter(r=>rowState(r,picks)==='pick');
     if(waiting.length){
       const names=waiting.slice(0,2).map(rowName).join(' and ')+(waiting.length>2?` and ${waiting.length-2} more`:'');
@@ -520,7 +531,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }
     if(!picks.length&&!planned.length&&noArea(area)){setNote('Pick an area or add a street first.');return;}
     const streets=streetsParam(picks),where={...area},left=freshRef.current,cut=trimRef.current??undefined;
-    void load(sig=>getWalkList(streets,where,sig,planned,left,cut),p=>show(p,false));
+    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides),p=>show(p,false));
   }
   function walkPlanned(ids:number[]){putSpans(ids,true);generate(ids);}   // the checked blocks of the block plan, whole (no doors); their counts leave out doors with a recorded result
   const commitDoors=():number=>{setDoorsText(String(doorsNow));if(features)writeDoors(features.district,doorsNow);return doorsNow;};
@@ -535,7 +546,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       if(!plan.turf)throw new ApiError(NO_TURF,400,true);
       if(!plan.turf.spans.length)throw new ApiError(NO_DOORS,400,true);
       got.cut=trimFor(plan.turf,asked,q);   // the list is cut to the doors asked for, with the weights the blocks were picked by (a server that cannot cut sends no trim)
-      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined);
+      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides);
     },p=>{
       picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);   // the list is the planned blocks alone
       putSpans(got.turf?.spans??[],true,got.cut??null);show(p,false);setTurf(got.turf??null);
@@ -581,20 +592,36 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   }
   async function exportPdf(){
     const p=payloadRef.current;if(!p)return;
+    if(capError){setActionNote({text:capError,alert:true});return;}
     setBusy('pdf');setActionNote(null);
     try{
       const scores=await printedScores(p);if(scores===null)return;
       const session=await getSession();   // hosted: every page says who printed the list and when; no identity, no PDF
       if(session.hosted&&!session.email)throw new Error('no identity');
       const watermark=session.hosted&&session.email?watermarkText(session.email):undefined;
-      await exportWalkPdf(p,{area:listLabel(p),scores,watermark});
+      await exportWalkPdf(p,{area:listLabel(p),scores,watermark,sheets:splitWalkSheets(p,cap)});
     }catch{setActionNote({text:'The PDF could not be created. Try again.',alert:true});}
     finally{setBusy('');}
   }
   async function exportCsv(){
     const p=payloadRef.current;if(!p||hosted)return;
+    if(capError){setActionNote({text:capError,alert:true});return;}
     const scores=await printedScores(p);if(scores===null)return;
-    downloadFile(walkFileName(listLabel(p),p.generated_on,'csv'),'text/csv;charset=utf-8',buildWalkCsv(p,resultsRef.current,historyRef.current,unsavedRef.current,scores));   // marks made while the scores came in are in the file
+    downloadFile(walkFileName(listLabel(p),p.generated_on,'csv'),'text/csv;charset=utf-8',buildWalkSheetsCsv(splitWalkSheets(p,cap),resultsRef.current,historyRef.current,unsavedRef.current,scores));   // marks made while the scores came in are in the file
+  }
+  async function exportZip(){
+    const p=payloadRef.current;if(!p||busy)return;
+    if(capError){setActionNote({text:capError,alert:true});return;}
+    const parts=splitWalkSheets(p,cap);setBusy('zip');setActionNote(null);
+    try{
+      const scores=await printedScores(p);if(scores===null)return;
+      const session=await getSession();
+      if(session.hosted&&!session.email)throw new Error('Sign in again before exporting.');
+      const {exportWalkZip}=await import('../lib/walkRouteExport');
+      await exportWalkZip(parts,{area:listLabel(p),scores,watermark:session.hosted&&session.email?watermarkText(session.email):undefined,includeCsv:!session.hosted,
+        results:{...resultsRef.current},history:{...historyRef.current},unsaved:new Set(unsavedRef.current)});
+    }catch(e){setActionNote({text:e instanceof Error?e.message:'The ZIP could not be created. Try again.',alert:true});}
+    finally{setBusy('');}
   }
 
   // ---- streets: chips and upload -------------------------------------------------------------------------------------------------
@@ -667,8 +694,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
   const setLevel=(level:WalkLevel,v:string)=>{setNote('');putSpans([]);setArea(a=>level==='ss'?{ss:v,sh:'',precinct:''}:level==='sh'?{...a,sh:v,precinct:''}:{...a,precinct:v});};
   useEffect(()=>{
-    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),plan:null,list:listKey||null});
-  },[area,picks,spans,fresh,trim,listKey]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
+    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,plan:null,list:listKey||null});
+  },[area,picks,spans,fresh,trim,listKey,splitSides,capText]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
   const started=useRef(false);
   useEffect(()=>{
     if(started.current)return;started.current=true;
@@ -711,14 +738,25 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
 
   const saved=!!payload?.list.key;
   const leftOut=leftOutNote(skipped);
-  const total=payload?.totals?.stops||payload?.runs.length||0;
+  const sheets=useMemo(()=>payload?splitWalkSheets(payload,capError?null:cap):[],[payload,cap,capError]);
+  const selectedSheet=Math.min(sheetIndex,Math.max(0,sheets.length-1));
+  const shownSheet=sheets[selectedSheet]??payload;
+  const total=shownSheet?.totals?.stops||shownSheet?.runs.length||0;
   return <div className={cx('screen walk-screen',refusal&&'has-refusal')}>
     <PageHeader meta={meta} active="walk"/>
     <main className="walk-body">
       <aside className="walk-rail" aria-label="Walk list builder">
         <p className="walk-eyebrow">Walk list</p>
         <h1 className="walk-title">Build a walk list</h1>
-        <p className="walk-sub">Pick an area, add streets, generate.</p>
+        <p className="walk-sub">Build from streets or import an address or street file.</p>
+
+        <div className="walk-source"><Segmented variant="index" label="Walk list source" items={[{id:'streets',label:'Streets'},{id:'addresses',label:'Address file'}]} value={source} onChange={setSource}/></div>
+        <label className="walk-check"><input type="checkbox" checked={splitSides} onChange={e=>setSplitSides(e.target.checked)}/> Split even and odd</label>
+        <label className="walk-doors"><span>Maximum doors per list</span><input type="number" min={1} max={10000} step={1} inputMode="numeric" placeholder="No cap" value={capText} onChange={e=>{setCapText(e.target.value);setSheetIndex(0);}} aria-describedby="walk-cap-hint"/></label>
+        <p id="walk-cap-hint" className="walk-hint">Creates as many lists as needed to cover every door. Blank means no cap. Even and odd stay on separate lists when enabled. Downloads include all lists.</p>
+        {capError&&<p className="walk-note" role="alert">{capError}</p>}
+        {source==='streets'&&<>
+        <p className="walk-hint">Generate again after changing even/odd grouping. The cap updates the sheets immediately.</p>
 
         <h2 className="walk-lab">Area</h2>
         {LEVELS.map(l=><AreaField key={l.level} level={l.level} label={l.label} aria={l.aria} area={area} value={area[l.level]} onChange={v=>setLevel(l.level,v)}/>)}
@@ -735,7 +773,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         <Chips picks={picks} planned={spans.length} onSide={cycleSide} onRemove={removePick} onUnplan={()=>{setNote('');putSpans([]);setAnnounce('Planned blocks removed.');}}/>
         <div className="walk-upload">
           <input ref={fileInput} type="file" accept=".csv,text/csv" hidden aria-label="Upload a CSV of streets" onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void onFile(f);}}/>
-          <button type="button" className="walk-button" onClick={()=>fileInput.current?.click()} disabled={matching}><Upload size={15} strokeWidth={1.75} aria-hidden="true"/>{matching?'Matching…':'Upload CSV'}</button>
+          <button type="button" className="walk-button" onClick={()=>fileInput.current?.click()} disabled={matching}><Upload size={15} strokeWidth={1.75} aria-hidden="true"/>{matching?'Matching…':'Upload street CSV'}</button>
           {upload&&<span className="walk-file">{upload.name} · {countText(upload.count,'row')} <button type="button" className="walk-link" onClick={()=>{putUpload(null);setSkipped([]);}}>Clear</button></span>}
         </div>
         {uploadError&&<p className="walk-note" role="alert">{uploadError}</p>}
@@ -763,11 +801,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
               {lists.map(l=><option key={l.key} value={l.key}>{`${l.title} · ${countText(l.doors,'door')}${l.kind==='reknock'?' · re-knock':''}${fullDate(l.created_at)?` · ${fullDate(l.created_at)}`:''}`}</option>)}
             </select></label>
           :<p className="walk-hint" role={listsError?'alert':undefined}>{listsError?'Saved lists could not be loaded.':'No saved lists yet.'} {listsError&&<button type="button" className="walk-link" onClick={()=>void refreshLists()}>Retry</button>}</p>}
+        </>}
       </aside>
 
       <section className="walk-main" ref={main} aria-label="Walk list" aria-busy={loading}>
         <p className="walk-sr" role="status">{announce}</p>
-        {loading?<div className="walk-wait" aria-hidden="true">
+        {source==='addresses'?<WalkAddressSheets capText={capText} splitSides={splitSides} hosted={hosted}/>:loading?<div className="walk-wait" aria-hidden="true">
             <span className="sk walk-sk" style={{width:'62%',height:16}}/>
             <span className="sk walk-sk" style={{width:'46%',height:36,marginTop:14}}/>
             <span className="sk walk-sk" style={{width:'100%',height:260,marginTop:14}}/>
@@ -776,6 +815,10 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         :loadError?<div className="walk-empty is-error" role="alert"><h2>The walk list could not be built</h2><p>{loadError.message}</p><button type="button" className="walk-button" onClick={loadError.retry}>Retry</button></div>
         :payload?<>
           {saved&&<p className="walk-saved-line">{savedLine(payload,lists)}</p>}
+          {sheets.length>1&&<div className="walk-sheet-picker">
+            <label>Preview list <select aria-label="Walk list preview" value={selectedSheet} onChange={e=>setSheetIndex(Number(e.target.value))}>{sheets.map((s,i)=><option key={i} value={i}>List {i+1} of {sheets.length} · {s.totals.doors} doors</option>)}</select></label>
+            <p className="walk-hint">All {payload.totals.doors} doors are covered across {sheets.length} lists{cap?`, at most ${cap} doors each`:''}. The preview and map show the chosen list; map paths show full street sections. The saved record and PDF cover map show the full route. PDF, CSV and ZIP downloads include every list.</p>
+          </div>}
           {replaced&&<p className="walk-note" role="status">{LIST_REPLACED}</p>}
           <div className="walk-summary-row">
             <p className="walk-summary">{totalsLine(payload.totals)}</p>
@@ -783,8 +826,9 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           </div>
           {turf&&<div className="walk-turf" role="status">{turfLines(turf,payload.totals,turfCfg.jump_m).map(t=><p key={t}>{t}</p>)}</div>}
           {payload.runs.length>0&&<div className="walk-actions">
-            <button type="button" className="walk-button walk-primary" onClick={()=>void exportPdf()} disabled={busy==='pdf'} aria-busy={busy==='pdf'}>{busy==='pdf'?'Preparing PDF…':'Export PDF'}</button>
-            {!hosted&&<button type="button" className="walk-button" onClick={()=>void exportCsv()}>Download CSV</button>}
+            <button type="button" className="walk-button walk-primary" onClick={()=>void exportPdf()} disabled={!!busy||!!capError} aria-busy={busy==='pdf'}>{busy==='pdf'?'Preparing PDF…':sheets.length>1?'Export all lists PDF':'Export PDF'}</button>
+            {!hosted&&<button type="button" className="walk-button" disabled={!!busy||!!capError} onClick={()=>void exportCsv()}>{sheets.length>1?'Download all lists CSV':'Download CSV'}</button>}
+            <button type="button" className="walk-button" disabled={!!busy||!!capError} aria-busy={busy==='zip'} onClick={()=>void exportZip()}>{busy==='zip'?'Preparing ZIP…':'Download ZIP'}</button>
             {!hosted&&<label className="walk-check"><input type="checkbox" checked={printScores} onChange={e=>setPrintScores(e.target.checked)} aria-describedby="walk-scores-hint"/> Print scores</label>}
             {!hosted&&<span id="walk-scores-hint" className="walk-check-hint">{features?.candidate?'Adds overall, candidate support and participation (0 to 100) to the PDF and the CSV.':'Adds overall and participation (0 to 100) to the PDF and the CSV.'}</span>}
             <button type="button" ref={saveButton} className={cx('walk-button',saved&&'is-off')} aria-disabled={saved||undefined} onClick={()=>{if(saved)return;setSaveTitle(defaultListTitle(payload));setSaveOpen(o=>!o);}} disabled={busy==='save'} aria-expanded={saved?undefined:saveOpen} title={saved?'This list is saved':undefined}>Save</button>
@@ -803,18 +847,18 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           {actionNote&&<p className="walk-note" role={actionNote.alert?'alert':'status'}>{actionNote.text}</p>}
           {payload.runs.length>0?<>
             <div className="walk-map-slot">
-              <MapGuard><Suspense fallback={<div className="walk-map-wait sk" role="status" aria-label="Loading the map"/>}><WalkMap payload={payload} shade={shade} onStop={goToStop}/></Suspense></MapGuard>
+              <MapGuard><Suspense fallback={<div className="walk-map-wait sk" role="status" aria-label="Loading the map"/>}><WalkMap payload={shownSheet??payload} shade={shade} onStop={goToStop}/></Suspense></MapGuard>
             </div>
             <DoorScript/>
             <p className="walk-key">{historyKey(payload.window)} {codeLegend()}. Last shows the latest result on file with its date; choosing a result records a new visit.</p>
-            {payload.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} unsaved={unsaved} history={history} onMark={mark}/>)}
+            {shownSheet?.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} unsaved={unsaved} history={history} onMark={mark}/>)}
           </>:<div className="walk-empty"><h2>No doors found</h2><p>These streets have no voters on file. Try another street or a wider area.</p></div>}
         </>
         :<div className="walk-empty">
           <RouteIcon size={26} strokeWidth={1.5} aria-hidden="true"/>
           <h2>Your walk list will appear here</h2>
           <p>Pick an area and add the streets you plan to walk, then choose Generate walk list. You get the route on a map and the voters at each door in walking order, with a place to record every result.</p>
-          <p>To add many streets at once, upload a CSV with a column named street.</p>
+          <p>For your own addresses, choose Address file and upload CSV, TSV, TXT, JSON or XLSX.</p>
         </div>}
       </section>
     </main>

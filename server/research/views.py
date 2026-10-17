@@ -49,11 +49,12 @@ def protected(admin=False):
 def who(request):
     session={'authenticated':request.user.is_authenticated,'username':request.user.username if request.user.is_authenticated else None,'administrator':request.user.is_staff if request.user.is_authenticated else False,'local_admin_access':getattr(request,'local_admin_access',False),'csrf':get_token(request)}
     if getattr(settings, 'DESKTOP_BOUNDARY', False) and not settings.HOSTED:
-        from .desktop_access import administrator_authorized, request_principal
+        from .desktop_access import administrator_authorized, password_lock_disabled, request_principal
         principal = request_principal(request)
         allowed = administrator_authorized(request)
         session.update(authenticated=allowed, username=request.user.username if allowed else None,
                        administrator=allowed, local_admin_access=allowed,
+                       password_lock_disabled=allowed and password_lock_disabled(principal),
                        account_identity=principal.local_username if principal else None)
     if settings.HOSTED:   # the page marks and watermarks what it prints with the Access identity; a local session has neither key
         session['hosted']=True;session['email']=getattr(request,'access_email',None)

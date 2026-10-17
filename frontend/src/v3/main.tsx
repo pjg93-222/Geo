@@ -1,4 +1,4 @@
-import {Component,Suspense,lazy,useCallback,useEffect,useState,type ReactNode} from 'react';
+import {Component,Suspense,lazy,useEffect,useState,type ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import './styles/tokens.css';
 import './styles/base.css';
@@ -8,26 +8,33 @@ import './styles/pages.css';
 import {parseRoute,useRoute} from './lib/router';
 import {getMeta,sources} from './api/client';
 import type {Meta} from './types';
-import {PageHeader} from './components/Header';
+import {PageHeader,preloadFeatures} from './components/Header';
 import {LoadingTerrier} from './components/TerrierMark';
 import {AuthGate} from './components/AuthGate';
+import {StartupFrame,useStartup,useStartupReady} from './components/StartupFrame';
 const loadMap=()=>import('./components/MapScreen');
 const MapScreen=lazy(()=>loadMap().then(m=>({default:m.MapScreen})));
-if(parseRoute().name==='map')void loadMap().catch(()=>{}); // React.lazy/AppBoundary handles a failed chunk.
 // People, Profile and Method are code-split: opening the list never downloads MapLibre (IMPLEMENTATION_PLAN 6.3 item 8)
-const PeopleScreen=lazy(()=>import('./components/PeopleScreen').then(m=>({default:m.PeopleScreen})));
-const ProfileScreen=lazy(()=>import('./components/ProfileScreen').then(m=>({default:m.ProfileScreen})));
-const MethodScreen=lazy(()=>import('./components/MethodScreen').then(m=>({default:m.MethodScreen})));
-const ContactsScreen=lazy(()=>import('./components/ContactsScreen').then(m=>({default:m.ContactsScreen})));
-const WorkspaceScreen=lazy(()=>import('./components/WorkspaceScreen').then(m=>({default:m.WorkspaceScreen})));
-const WalkScreen=lazy(()=>import('./components/WalkScreen').then(m=>({default:m.WalkScreen})));
+const loadPeople=()=>import('./components/PeopleScreen'),loadProfile=()=>import('./components/ProfileScreen'),loadMethod=()=>import('./components/MethodScreen');
+const loadContacts=()=>import('./components/ContactsScreen'),loadWorkspace=()=>import('./components/WorkspaceScreen'),loadWalk=()=>import('./components/WalkScreen');
+const PeopleScreen=lazy(()=>loadPeople().then(m=>({default:m.PeopleScreen})));
+const ProfileScreen=lazy(()=>loadProfile().then(m=>({default:m.ProfileScreen})));
+const MethodScreen=lazy(()=>loadMethod().then(m=>({default:m.MethodScreen})));
+const ContactsScreen=lazy(()=>loadContacts().then(m=>({default:m.ContactsScreen})));
+const WorkspaceScreen=lazy(()=>loadWorkspace().then(m=>({default:m.WorkspaceScreen})));
+const WalkScreen=lazy(()=>loadWalk().then(m=>({default:m.WalkScreen})));
+const firstRoute=parseRoute().name;
+const preload=firstRoute==='map'?loadMap:firstRoute==='people'?loadPeople:firstRoute==='profile'?loadProfile:firstRoute==='method'?loadMethod:firstRoute==='contacts'?loadContacts:firstRoute==='walk'?loadWalk:loadWorkspace;
+void preload().catch(()=>{}); // Fetch only the requested view's code while the session and metadata load.
 
 function V3App(){
   const route=useRoute();
   const [meta,setMeta]=useState<Meta|null>(null);
   const [error,setError]=useState('');const [attempt,setAttempt]=useState(0);
-  const [introDone,setIntroDone]=useState(()=>matchMedia('(prefers-reduced-motion:reduce)').matches);
-  const finishIntro=useCallback(()=>setIntroDone(true),[]);
+  const startup=useStartup();
+  useEffect(()=>{void preloadFeatures();},[]);
+  useStartupReady(!!error);
+  useEffect(()=>{if(meta)startup.phase(`Opening ${meta.district_label}…`);},[meta,startup]);
   useEffect(()=>{let current=true;setError('');getMeta().then(m=>{if(current)setMeta(m);}).catch(e=>{if(current)setError(e instanceof Error?e.message:'The local data could not be loaded.');});return ()=>{current=false;};},[attempt]);
   useEffect(()=>{
     // Data provenance is reported by the connected local service.
@@ -38,8 +45,7 @@ function V3App(){
     document.title='Terrier';
     (window as unknown as {__cuV3?:unknown}).__cuV3={meta,sources};
   },[meta,route]);
-  const shell=()=>introDone?<LoadingTerrier/>:null;
-  if(error)return <div className="screen"><PageHeader meta={null} active="map"/><main className="app-error" role="alert"><h1>{error}</h1><p>Check that the local Terrier data service is running, then retry.</p><button type="button" onClick={()=>setAttempt(n=>n+1)}>Retry</button></main></div>;
+  if(error)return <div className="screen"><PageHeader meta={null} active="map"/><main className="app-error" role="alert"><h1>{error}</h1><p>Check that the local Terrier data service is running, then retry.</p><button type="button" onClick={()=>{startup.restart('Retrying your workspace…');setAttempt(n=>n+1);}}>Retry</button></main></div>;
   let screen:ReactNode=null;
   if(meta)switch(route.name){
     case 'people':screen=<PeopleScreen meta={meta} route={route}/>;break;
@@ -50,22 +56,19 @@ function V3App(){
     case 'walk':screen=<WalkScreen meta={meta} route={route}/>;break;
     default:screen=<MapScreen meta={meta} route={route}/>;
   }
-  const booting=!introDone||!meta;
-  return <>
-    <div className="app-stage" inert={booting} aria-hidden={booting||undefined}><Suspense fallback={shell()}>{screen}</Suspense></div>
-    {booting&&<LoadingTerrier startup onComplete={finishIntro}/>}
-  </>;
+  return <Suspense fallback={<LoadingTerrier/>}>{screen}</Suspense>;
 }
+
+function ViewFailure(){useStartupReady(true);return <main className="app-error" role="alert"><h1>This view could not open.</h1><p>Reload Terrier to try again.</p><button type="button" onClick={()=>location.reload()}>Reload</button></main>;}
+function SignedIn(){useStartupReady(true);return <main className="terrier-auth"><section><h1>Signed in</h1><p role="status">Returning to your open workspace…</p></section></main>;}
 
 class AppBoundary extends Component<{children:ReactNode},{failed:boolean}>{
   state={failed:false};
   static getDerivedStateFromError(){return {failed:true};}
-  render(){return this.state.failed?<main className="app-error" role="alert"><h1>This view could not open.</h1><p>Reload Terrier to try again.</p><button type="button" onClick={()=>location.reload()}>Reload</button></main>:this.props.children;}
+  render(){return this.state.failed?<ViewFailure/>:this.props.children;}
 }
 const signInOnly=location.pathname==='/desktop-signin';
-createRoot(document.getElementById('root')!).render(<AppBoundary><AuthGate>{signInOnly
-  ?<main className="terrier-auth"><section><h1>Signed in</h1><p role="status">Returning to your open workspace…</p></section></main>
-  :<V3App/>}</AuthGate></AppBoundary>);
+createRoot(document.getElementById('root')!).render(<StartupFrame><AppBoundary><AuthGate>{signInOnly?<SignedIn/>:<V3App/>}</AuthGate></AppBoundary></StartupFrame>);
 
 import './styles/completion.css';
 import './styles/workspace-shell.css';

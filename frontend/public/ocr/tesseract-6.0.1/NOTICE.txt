@@ -1,0 +1,3 @@
+Local OCR: Tesseract.js 6.0.1 and tesseract.js-core 6.1.2 (Apache-2.0). English 4.0.0_best_int model from naptha/tessdata (Apache-2.0), packaged as @tesseract.js-data/eng 1.0.0 (package metadata declares MIT).
+Sources: https://github.com/naptha/tesseract.js ; https://github.com/naptha/tesseract.js-core ; https://github.com/naptha/tessdata
+Terrier adapts only the worker webpack global-detection fallback to globalThis, supported by its target browsers, so the distributed worker contains no dynamic JavaScript evaluation.

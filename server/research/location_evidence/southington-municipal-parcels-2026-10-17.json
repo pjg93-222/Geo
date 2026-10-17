@@ -1,0 +1,771 @@
+{
+  "schema": 1,
+  "district": "ct-01",
+  "entries": [
+    {
+      "address": {
+        "house": "1",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [],
+      "location": {
+        "lon": -72.88351827989962,
+        "lat": 41.63944565633494,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88349513533927,
+              41.63940900644729
+            ],
+            [
+              -72.88350070399572,
+              41.63940058505653
+            ],
+            [
+              -72.8835075967689,
+              41.639390160361486
+            ],
+            [
+              -72.88353697437364,
+              41.63940109192437
+            ],
+            [
+              -72.88356879449763,
+              41.639352970342145
+            ],
+            [
+              -72.88361546646821,
+              41.63937033678676
+            ],
+            [
+              -72.8835087142731,
+              41.63953177508071
+            ],
+            [
+              -72.88345979741263,
+              41.639513572852564
+            ],
+            [
+              -72.8834621402189,
+              41.639510030154455
+            ],
+            [
+              -72.88341435254073,
+              41.63949224818353
+            ],
+            [
+              -72.88344770249564,
+              41.639441813205096
+            ],
+            [
+              -72.88346835745897,
+              41.639449499464796
+            ],
+            [
+              -72.88349513533927,
+              41.63940900644729
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=OBJECTID+IN+%287101%2C7102%2C7103%2C7105%2C7106%2C8296%29&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CMap%2CBlock%2CLot%2CUnit%2CCardLink%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "object_id": 7101,
+        "retrieved_at": "2026-10-17T00:04:58.477127+00:00",
+        "sha256": "a0100294a39208115152662624574c71150a067509d9eeee2f77e4ad584caf25",
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0101",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=16264",
+        "assessor_sha256": "03e708c1c37577f4ecb90bcbc8363c9fcdc02f49278fa64df16c6ae1d58a896e",
+        "assessor_location": "1 BROOK RD (TP)",
+        "assessor_mblu": "180/  /  008/  0101/"
+      },
+      "context": {
+        "street_names": [
+          "Overlook Ln",
+          "Riverside Dr",
+          "Hemlock Rd"
+        ],
+        "reason": "Municipal parcel address and cadastral MBLU identity confirmed. Parcel lies on the workbook road in the neighborhood of the named surrounding streets; the representative point is not an entrance.",
+        "review": {
+          "workbook_sha256": "8a8b30b0299b7ff8c9e57397c31bfe352da29a24629be2878aa2b247af1552b4",
+          "image_member": "xl/media/image3.png",
+          "image_sha256": "96da4b16a549b2ae94978a9364df1d86d69d7e74a5a3ed3199ff4fd5df4dbcfb",
+          "basis": "Image confirms street and neighboring roads only; municipal parcel and assessor records establish the numbered parcel identity."
+        }
+      }
+    },
+    {
+      "address": {
+        "house": "3",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [],
+      "location": {
+        "lon": -72.88369568062024,
+        "lat": 41.639451656835426,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88366400334132,
+              41.63942626210442
+            ],
+            [
+              -72.88367707562536,
+              41.639406590265494
+            ],
+            [
+              -72.88368681695628,
+              41.639391932720876
+            ],
+            [
+              -72.88371597806706,
+              41.63940283742953
+            ],
+            [
+              -72.88374598179755,
+              41.63935768992297
+            ],
+            [
+              -72.88379459682407,
+              41.63937587071204
+            ],
+            [
+              -72.88369260929323,
+              41.6395293407772
+            ],
+            [
+              -72.8836424132318,
+              41.63951056924608
+            ],
+            [
+              -72.88365783281365,
+              41.639487365475105
+            ],
+            [
+              -72.88363025183948,
+              41.63947705156643
+            ],
+            [
+              -72.88366400334132,
+              41.63942626210442
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=OBJECTID+IN+%287101%2C7102%2C7103%2C7105%2C7106%2C8296%29&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CMap%2CBlock%2CLot%2CUnit%2CCardLink%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "object_id": 7102,
+        "retrieved_at": "2026-10-17T00:04:58.477127+00:00",
+        "sha256": "a0100294a39208115152662624574c71150a067509d9eeee2f77e4ad584caf25",
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0103",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=16265",
+        "assessor_sha256": "cf5852a424bf31be577756ddc9415ebb1f3f2d8ef1e44a26fa52bbf40a7dd103",
+        "assessor_location": "3 BROOK RD (TP)",
+        "assessor_mblu": "180/  /  008/  0103/"
+      },
+      "context": {
+        "street_names": [
+          "Overlook Ln",
+          "Riverside Dr",
+          "Hemlock Rd"
+        ],
+        "reason": "Municipal parcel address and cadastral MBLU identity confirmed. Parcel lies on the workbook road in the neighborhood of the named surrounding streets; the representative point is not an entrance.",
+        "review": {
+          "workbook_sha256": "8a8b30b0299b7ff8c9e57397c31bfe352da29a24629be2878aa2b247af1552b4",
+          "image_member": "xl/media/image3.png",
+          "image_sha256": "96da4b16a549b2ae94978a9364df1d86d69d7e74a5a3ed3199ff4fd5df4dbcfb",
+          "basis": "Image confirms street and neighboring roads only; municipal parcel and assessor records establish the numbered parcel identity."
+        }
+      }
+    },
+    {
+      "address": {
+        "house": "5",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [],
+      "location": {
+        "lon": -72.8838732926853,
+        "lat": 41.63943515678643,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88381010983072,
+              41.63946197041749
+            ],
+            [
+              -72.88384377958587,
+              41.63939892682655
+            ],
+            [
+              -72.88387511102636,
+              41.63940834315537
+            ],
+            [
+              -72.88389847890186,
+              41.63936458870091
+            ],
+            [
+              -72.88395135643441,
+              41.63938047951873
+            ],
+            [
+              -72.88386965106606,
+              41.63953346687458
+            ],
+            [
+              -72.8838165687176,
+              41.639517514330564
+            ],
+            [
+              -72.883841235557,
+              41.63947132430183
+            ],
+            [
+              -72.88383284619054,
+              41.63946880272084
+            ],
+            [
+              -72.88381010983072,
+              41.63946197041749
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=OBJECTID+IN+%287101%2C7102%2C7103%2C7105%2C7106%2C8296%29&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CMap%2CBlock%2CLot%2CUnit%2CCardLink%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "object_id": 7103,
+        "retrieved_at": "2026-10-17T00:04:58.477127+00:00",
+        "sha256": "a0100294a39208115152662624574c71150a067509d9eeee2f77e4ad584caf25",
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0105",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=16266",
+        "assessor_sha256": "52f8b12f185b93b785a8d47a97ce71c4fc16fe7c452073072f168236864d4892",
+        "assessor_location": "5 BROOK RD (TP)",
+        "assessor_mblu": "180/  /  008/  0105/"
+      },
+      "context": {
+        "street_names": [
+          "Overlook Ln",
+          "Riverside Dr",
+          "Hemlock Rd"
+        ],
+        "reason": "Municipal parcel address and cadastral MBLU identity confirmed. Parcel lies on the workbook road in the neighborhood of the named surrounding streets; the representative point is not an entrance.",
+        "review": {
+          "workbook_sha256": "8a8b30b0299b7ff8c9e57397c31bfe352da29a24629be2878aa2b247af1552b4",
+          "image_member": "xl/media/image3.png",
+          "image_sha256": "96da4b16a549b2ae94978a9364df1d86d69d7e74a5a3ed3199ff4fd5df4dbcfb",
+          "basis": "Image confirms street and neighboring roads only; municipal parcel and assessor records establish the numbered parcel identity."
+        }
+      }
+    },
+    {
+      "address": {
+        "house": "9",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [],
+      "location": {
+        "lon": -72.88423832077845,
+        "lat": 41.63946434194422,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88421135852204,
+              41.639408357925014
+            ],
+            [
+              -72.88422545398717,
+              41.639357867159006
+            ],
+            [
+              -72.88430646046622,
+              41.639370593241914
+            ],
+            [
+              -72.88429675147465,
+              41.63940622035273
+            ],
+            [
+              -72.88428985780315,
+              41.63943151674417
+            ],
+            [
+              -72.88426845993308,
+              41.639510032168474
+            ],
+            [
+              -72.88418656591851,
+              41.63949716714428
+            ],
+            [
+              -72.88421135852204,
+              41.639408357925014
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=OBJECTID+IN+%287101%2C7102%2C7103%2C7105%2C7106%2C8296%29&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CMap%2CBlock%2CLot%2CUnit%2CCardLink%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "object_id": 7105,
+        "retrieved_at": "2026-10-17T00:04:58.477127+00:00",
+        "sha256": "a0100294a39208115152662624574c71150a067509d9eeee2f77e4ad584caf25",
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0109",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=16268",
+        "assessor_sha256": "f87d3c8f50fe0780a626539bc73a0dd95c1a6c8c1d57b7284099412686faf790",
+        "assessor_location": "9 BROOK RD (TP)",
+        "assessor_mblu": "180/  /  008/  0109/"
+      },
+      "context": {
+        "street_names": [
+          "Overlook Ln",
+          "Riverside Dr",
+          "Hemlock Rd"
+        ],
+        "reason": "Municipal parcel address and cadastral MBLU identity confirmed. Parcel lies on the workbook road in the neighborhood of the named surrounding streets; the representative point is not an entrance.",
+        "review": {
+          "workbook_sha256": "8a8b30b0299b7ff8c9e57397c31bfe352da29a24629be2878aa2b247af1552b4",
+          "image_member": "xl/media/image3.png",
+          "image_sha256": "96da4b16a549b2ae94978a9364df1d86d69d7e74a5a3ed3199ff4fd5df4dbcfb",
+          "basis": "Image confirms street and neighboring roads only; municipal parcel and assessor records establish the numbered parcel identity."
+        }
+      }
+    },
+    {
+      "address": {
+        "house": "11",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [],
+      "location": {
+        "lon": -72.88443619525276,
+        "lat": 41.639407200175825,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88437376763721,
+              41.63944207570204
+            ],
+            [
+              -72.88439278317513,
+              41.63935873521278
+            ],
+            [
+              -72.88449862268192,
+              41.6393723246496
+            ],
+            [
+              -72.88446629770473,
+              41.639514000500576
+            ],
+            [
+              -72.88439552573172,
+              41.6395049138186
+            ],
+            [
+              -72.88439693429007,
+              41.63949873742528
+            ],
+            [
+              -72.88436186765465,
+              41.63949423469984
+            ],
+            [
+              -72.88437376763721,
+              41.63944207570204
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=OBJECTID+IN+%287101%2C7102%2C7103%2C7105%2C7106%2C8296%29&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CMap%2CBlock%2CLot%2CUnit%2CCardLink%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "object_id": 7106,
+        "retrieved_at": "2026-10-17T00:04:58.477127+00:00",
+        "sha256": "a0100294a39208115152662624574c71150a067509d9eeee2f77e4ad584caf25",
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0111",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=16269",
+        "assessor_sha256": "e617c85f8280da0500588684005105030246468acfbc4481756d1e402fe53165",
+        "assessor_location": "11 BROOK RD (TP)",
+        "assessor_mblu": "180/  /  008/  0111/"
+      },
+      "context": {
+        "street_names": [
+          "Overlook Ln",
+          "Riverside Dr",
+          "Hemlock Rd"
+        ],
+        "reason": "Municipal parcel address and cadastral MBLU identity confirmed. Parcel lies on the workbook road in the neighborhood of the named surrounding streets; the representative point is not an entrance.",
+        "review": {
+          "workbook_sha256": "8a8b30b0299b7ff8c9e57397c31bfe352da29a24629be2878aa2b247af1552b4",
+          "image_member": "xl/media/image3.png",
+          "image_sha256": "96da4b16a549b2ae94978a9364df1d86d69d7e74a5a3ed3199ff4fd5df4dbcfb",
+          "basis": "Image confirms street and neighboring roads only; municipal parcel and assessor records establish the numbered parcel identity."
+        }
+      }
+    },
+    {
+      "address": {
+        "house": "10",
+        "street": "Mountain View Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [
+        "Mountainview Rd"
+      ],
+      "location": {
+        "lon": -72.88480368573133,
+        "lat": 41.645841183459595,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88475001801082,
+              41.64584960199504
+            ],
+            [
+              -72.88474972875328,
+              41.64583513924492
+            ],
+            [
+              -72.88472046792954,
+              41.64583546683011
+            ],
+            [
+              -72.88471970705649,
+              41.64579733335225
+            ],
+            [
+              -72.88474940715642,
+              41.645797000396634
+            ],
+            [
+              -72.88474932720636,
+              41.64579298009151
+            ],
+            [
+              -72.88483948572153,
+              41.64579196712757
+            ],
+            [
+              -72.8848402070687,
+              41.64582814046753
+            ],
+            [
+              -72.8848572570928,
+              41.645827949823676
+            ],
+            [
+              -72.88485763618185,
+              41.64584690008909
+            ],
+            [
+              -72.88484234865234,
+              41.64584707260833
+            ],
+            [
+              -72.88484337183344,
+              41.645898285286584
+            ],
+            [
+              -72.88475101154752,
+              41.6458993224149
+            ],
+            [
+              -72.88475001801082,
+              41.64584960199504
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=OBJECTID+IN+%287101%2C7102%2C7103%2C7105%2C7106%2C8296%29&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CMap%2CBlock%2CLot%2CUnit%2CCardLink%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "object_id": 8296,
+        "retrieved_at": "2026-10-17T00:04:58.477127+00:00",
+        "sha256": "a0100294a39208115152662624574c71150a067509d9eeee2f77e4ad584caf25",
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0610",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=17406",
+        "assessor_sha256": "9fcd0a157b3debc4b689bdebcd026081696a7646003179f347318880c1152b4a",
+        "assessor_location": "10 MOUNTAIN VIEW RD (TP)",
+        "assessor_mblu": "204/  /  001/  0610/"
+      },
+      "context": {
+        "street_names": [
+          "Sunrise Terrace",
+          "Cedar Grove Rd",
+          "Brookside Dr"
+        ],
+        "reason": "Municipal parcel address and cadastral MBLU identity confirmed. Parcel lies on the workbook road in the neighborhood of the named surrounding streets; the representative point is not an entrance.",
+        "review": {
+          "workbook_sha256": "8a8b30b0299b7ff8c9e57397c31bfe352da29a24629be2878aa2b247af1552b4",
+          "image_member": "xl/media/image2.png",
+          "image_sha256": "840347e77068e904ea3af2caf3a85aff3b34cfff03f813277f1ff660040c7a46",
+          "basis": "Image confirms street and neighboring roads only; municipal parcel and assessor records establish the numbered parcel identity."
+        }
+      }
+    },
+    {
+      "address": {
+        "house": "15",
+        "street": "Sunrise Terrace",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "aliases": [],
+      "location": {
+        "lon": -72.88277786137918,
+        "lat": 41.64802182288053,
+        "kind": "municipal_parcel"
+      },
+      "polygon": {
+        "rings": [
+          [
+            [
+              -72.88267353348547,
+              41.6480007940325
+            ],
+            [
+              -72.88267415152639,
+              41.647995754894275
+            ],
+            [
+              -72.88277464605723,
+              41.64800269168038
+            ],
+            [
+              -72.88288617189976,
+              41.648010389001605
+            ],
+            [
+              -72.88288135962478,
+              41.648049623375286
+            ],
+            [
+              -72.88282964271556,
+              41.64804605362492
+            ],
+            [
+              -72.88282715797548,
+              41.6480663054782
+            ],
+            [
+              -72.88279380263066,
+              41.64806400306363
+            ],
+            [
+              -72.88279649937314,
+              41.648042020034936
+            ],
+            [
+              -72.88266955035552,
+              41.648033256759454
+            ],
+            [
+              -72.88267353348547,
+              41.6480007940325
+            ]
+          ]
+        ]
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25SUNRISE%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CCardLink%2CMailAddr%2CMailCity%2CMailState%2CMailZip%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "retrieved_at": "2026-10-17T00:25:50.367560+00:00",
+        "sha256": "cf8217815749340e78121b1dbc1d5e4f56369ce2b32d48ea15b570441ff680f3",
+        "object_id": 8351,
+        "last_updated": "2026-05-07",
+        "parcel_unit": "0915",
+        "assessor_url": "https://gis.vgsi.com/southingtonct/Parcel.aspx?Pid=17459",
+        "assessor_sha256": "9756701ca732db1df7882f3458bc253915722eee8baa24f4457ecb6632258409",
+        "assessor_location": "15 SUNRISE TERR (TP)",
+        "assessor_mblu": "204/  /  001/  0915/"
+      },
+      "context": {
+        "street_names": [
+          "Eastview Rd",
+          "Maple Rock Rd",
+          "Cedar Grove Rd",
+          "Brookside Dr"
+        ],
+        "reason": "The unique exact-number Sunrise municipal parcel lies on the workbook image 2 street between official 11 and 17 Sunrise parcels. Cadastral Unit 0915 is an assessor MBLU component, not a supplied postal apartment. This evidence establishes the location of 15 Sunrise Terrace; recovery of a missing registration number requires separately validated same-record residential and mailing address provenance.",
+        "workbook_image": {
+          "name": "image2.png",
+          "sha256": "840347e77068e904ea3af2caf3a85aff3b34cfff03f813277f1ff660040c7a46",
+          "review": "Street layout confirmed against the image and municipal streets; no house number appears in the image. Exact number15 is established by the municipal parcel address and separately audited same-record residential/mail fields."
+        }
+      }
+    }
+  ],
+  "unconfirmed": [
+    {
+      "address": {
+        "house": "23",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25MOUNTAINVIEW%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25+BROOK+RD%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25SUNRISE%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "retrieved_at": "2026-10-17T00:02:33.128480+00:00",
+        "sha256": "2701db4fbbc8a2c78e14d6a5047760ed6a1322cc9c9f848fe09d8fd9b462af61"
+      },
+      "reason": "No confirming municipal parcel for this exact address; nearby street evidence does not locate the house.",
+      "alternate_street_check": {
+        "source": {
+          "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25+BROOKS+ST%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+          "retrieved_at": "2026-10-17T00:05:28.014869+00:00",
+          "sha256": "69bd8e12039ee35a1909384573fe2dcb87cd8d4ad491a9f7bf1c95017d88498c"
+        },
+        "matching_address": null,
+        "note": "A missing parcel match is not proof that an address does not exist."
+      }
+    },
+    {
+      "address": {
+        "house": "25",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25MOUNTAINVIEW%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25+BROOK+RD%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25SUNRISE%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "retrieved_at": "2026-10-17T00:02:33.128480+00:00",
+        "sha256": "2701db4fbbc8a2c78e14d6a5047760ed6a1322cc9c9f848fe09d8fd9b462af61"
+      },
+      "reason": "No confirming municipal parcel for this exact address; nearby street evidence does not locate the house.",
+      "alternate_street_check": {
+        "source": {
+          "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25+BROOKS+ST%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+          "retrieved_at": "2026-10-17T00:05:28.014869+00:00",
+          "sha256": "69bd8e12039ee35a1909384573fe2dcb87cd8d4ad491a9f7bf1c95017d88498c"
+        },
+        "matching_address": null,
+        "note": "A missing parcel match is not proof that an address does not exist."
+      }
+    },
+    {
+      "address": {
+        "house": "34",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25MOUNTAINVIEW%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25+BROOK+RD%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25SUNRISE%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "retrieved_at": "2026-10-17T00:02:33.128480+00:00",
+        "sha256": "2701db4fbbc8a2c78e14d6a5047760ed6a1322cc9c9f848fe09d8fd9b462af61"
+      },
+      "reason": "No confirming municipal parcel for this exact address; nearby street evidence does not locate the house. A distinct 34 BROOKS ST parcel exists elsewhere; it is not evidence for 34 BROOK RD and does not authorize renaming the source address.",
+      "alternate_street_check": {
+        "source": {
+          "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25+BROOKS+ST%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+          "retrieved_at": "2026-10-17T00:05:28.014869+00:00",
+          "sha256": "69bd8e12039ee35a1909384573fe2dcb87cd8d4ad491a9f7bf1c95017d88498c"
+        },
+        "matching_address": "34 BROOKS ST",
+        "note": "A missing parcel match is not proof that an address does not exist."
+      }
+    },
+    {
+      "address": {
+        "house": "53",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25MOUNTAINVIEW%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25+BROOK+RD%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25SUNRISE%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "retrieved_at": "2026-10-17T00:02:33.128480+00:00",
+        "sha256": "2701db4fbbc8a2c78e14d6a5047760ed6a1322cc9c9f848fe09d8fd9b462af61"
+      },
+      "reason": "No confirming municipal parcel for this exact address; nearby street evidence does not locate the house.",
+      "alternate_street_check": {
+        "source": {
+          "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25+BROOKS+ST%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+          "retrieved_at": "2026-10-17T00:05:28.014869+00:00",
+          "sha256": "69bd8e12039ee35a1909384573fe2dcb87cd8d4ad491a9f7bf1c95017d88498c"
+        },
+        "matching_address": null,
+        "note": "A missing parcel match is not proof that an address does not exist."
+      }
+    },
+    {
+      "address": {
+        "house": "66",
+        "street": "Brook Rd",
+        "unit": "",
+        "city": "Southington",
+        "state": "CT",
+        "zip": null
+      },
+      "source": {
+        "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25MOUNTAINVIEW%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25+BROOK+RD%25%27+OR+UPPER%28StreetAddress%29+LIKE+%27%25SUNRISE%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+        "retrieved_at": "2026-10-17T00:02:33.128480+00:00",
+        "sha256": "2701db4fbbc8a2c78e14d6a5047760ed6a1322cc9c9f848fe09d8fd9b462af61"
+      },
+      "reason": "No confirming municipal parcel for this exact address; nearby street evidence does not locate the house.",
+      "alternate_street_check": {
+        "source": {
+          "url": "https://hostingdata2.tighebond.com/arcgis/rest/services/SouthingtonCT/SouthingtonDynamicPro/MapServer/103/query?where=UPPER%28StreetAddress%29+LIKE+%27%25+BROOKS+ST%25%27&outFields=OBJECTID%2CCAMA_ID%2CStreetAddress%2CUnit%2CLastUpdated&returnGeometry=true&outSR=4326&resultRecordCount=500&f=pjson",
+          "retrieved_at": "2026-10-17T00:05:28.014869+00:00",
+          "sha256": "69bd8e12039ee35a1909384573fe2dcb87cd8d4ad491a9f7bf1c95017d88498c"
+        },
+        "matching_address": null,
+        "note": "A missing parcel match is not proof that an address does not exist."
+      }
+    }
+  ]
+}

@@ -41,6 +41,7 @@ export interface MapCanvasProps{
   onView:(v:MapView)=>void;
   onMove:()=>void;
   onIdle:()=>void;
+  onError?:(message:string)=>void;
 }
 
 function colorExpr(arr:number[],palette:string[]):maplibregl.ExpressionSpecification{
@@ -150,6 +151,7 @@ export const MapCanvas=forwardRef<MapHandle,MapCanvasProps>(function MapCanvas(p
     m.on('move',()=>{if(moveFrame)return;moveFrame=requestAnimationFrame(()=>{moveFrame=0;cur.current.onMove();});});
     m.on('moveend',()=>cur.current.onView(viewOf(m)));
     m.on('idle',()=>{if(armed.current){armed.current=false;cur.current.onIdle();}});
+    m.on('error',()=>cur.current.onError?.('The map could not finish drawing. Reload the map to try again.'));
     const ro=new ResizeObserver(()=>m.resize());ro.observe(holder.current);
     return ()=>{ro.disconnect();if(fadeTimer.current)clearTimeout(fadeTimer.current);m.remove();mapRef.current=null;};
   },[]);

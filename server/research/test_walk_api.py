@@ -602,6 +602,30 @@ class ListHelperTests(SimpleTestCase):
 
 # ---- the list itself -----------------------------------------------------------------------------------------------
 
+class WalkSideGroupingTests(WalkCase):
+    def test_toggle_keeps_all_voters_and_persists_on_save_and_reknock(self):
+        query = {'streets': self.cedar_juniper()}
+        split = self.json('/api/v3/walk/list?' + urlencode(query))
+        query['split_sides'] = '0'
+        combined = self.json('/api/v3/walk/list?' + urlencode(query))
+        self.assertEqual({r['side'] for r in combined['runs']}, {'both'})
+        self.assertEqual(combined['totals']['doors'], split['totals']['doors'])
+        self.assertCountEqual([v['person_id'] for v in voters_of(combined)],
+                              [v['person_id'] for v in voters_of(split)])
+        saved = self.make_list(query)
+        self.assertEqual(saved['query']['split_sides'], '0')
+        key = saved['list']['key']
+        self.posted('/api/v3/walk/dispositions', {'list': key, 'on': '2026-10-16',
+                    'entries': [{'person_id': v['person_id'], 'code': 'NH'} for v in voters_of(saved)]})
+        again = self.posted('/api/v3/walk/lists', {'title': 'Again', 'from': key, 'reknock': True}, 201)
+        self.assertEqual(again['query']['split_sides'], '0')
+        self.assertEqual({r['side'] for r in again['runs']}, {'both'})
+
+    def test_split_option_is_strict(self):
+        for value in ('', 'true', '2'):
+            self.json('/api/v3/walk/list?' + urlencode({'streets': self.cedar_juniper(), 'split_sides': value}), 400)
+
+
 class WalkListTests(WalkCase):
     def list(self, streets='', **area):
         query = '&'.join(['streets=' + streets] if streets else []) + ''.join('&%s=%s' % kv for kv in area.items())

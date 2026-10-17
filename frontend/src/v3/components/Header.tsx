@@ -1,10 +1,11 @@
 // Shared identity/search and persistent section navigation. The map adds its index and geography controls.
 import {useEffect,useMemo,useRef,useState} from 'react';
+import {createPortal,flushSync} from 'react-dom';
 import {Search} from 'lucide-react';
-import {TerrierMark} from './TerrierMark';
+import {LoadingTerrier,TerrierMark} from './TerrierMark';
 import {Segmented,cx} from './ui';
 import {navigate,withKept,LOCATION_EVENT,type RouteName} from '../lib/router';
-import {int,countLabel,areaLabel,districtHref,districtOptions,LEVELS,LEVEL_LABEL,type DistrictList,type Level} from '../lib/format';
+import {int,countLabel,areaLabel,districtHref,districtOptions,LEVELS,LEVEL_LABEL,type DistrictEntry,type DistrictList,type Level} from '../lib/format';
 import {getAreas,getFeatures,localJson,searchPeople} from '../api/client';
 import {ALL_LAYERS,LAYER_NAME,industryChoices,raceBadge} from '../lib/overlay';
 import type {Features,Group,Meta,OverlayLayer} from '../types';
@@ -31,13 +32,20 @@ function Brand({busy=false}:{busy?:boolean}){
   </Link>;
 }
 
-declare global {interface Window {desktop?:{districts:()=>Promise<DistrictList>;switchDistrict:(id:string)=>Promise<boolean>}}}
+declare global {interface Window {desktop?:{districts:()=>Promise<DistrictList>;switchDistrict:(id:string)=>Promise<boolean>;rendererReady?:()=>Promise<void>}}}
 // Desktop uses its verified native district mapping. Browser deployments retain their separate server addresses.
 // It stays hidden when the call fails or only one district exists.
 let districtList:Promise<DistrictList|null>|null=null;
 function DistrictSelect(){
   const [list,setList]=useState<DistrictList|null>(null);
   const [error,setError]=useState('');
+  const [pending,setPending]=useState<DistrictEntry|null>(null);const changing=useRef(false);
+  useEffect(()=>{
+    if(!pending)return;
+    const root=document.getElementById('root');if(root){root.inert=true;root.setAttribute('aria-hidden','true');}
+    const frame=requestAnimationFrame(()=>performance.mark('terrier:district-overlay-painted'));
+    return()=>{cancelAnimationFrame(frame);if(root){root.inert=false;root.removeAttribute('aria-hidden');}};
+  },[pending]);
   useEffect(()=>{
     let live=true;
     districtList??=(window.desktop?.districts?window.desktop.districts():localJson<DistrictList>('/api/v3/districts')).catch(()=>null);
@@ -45,20 +53,33 @@ function DistrictSelect(){
     return ()=>{live=false;};
   },[]);
   if(!list||list.districts.length<2)return null;
-  return <><select className="district-select" aria-label="District" value={list.current} onChange={e=>{
+  async function change(d:DistrictEntry){
+    if(changing.current||d.id===list!.current)return;
+    if(!window.desktop?.switchDistrict){location.assign(districtHref(d,location));return;}
+    changing.current=true;performance.mark('terrier:district-switch-click');
+    flushSync(()=>{setError('');setPending(d);});
+    try{
+      const opened=await window.desktop.switchDistrict(d.id);
+      if(opened)return; // The native host navigates this same window; keep the cover until that navigation.
+      setError('District change cancelled. Your current district remains open.');
+    }catch{setError('The district could not be opened. Your current district remains open. Try again.');}
+    changing.current=false;setPending(null);performance.mark('terrier:district-switch-reset');
+  }
+  return <><select className="district-select" aria-label="District" disabled={!!pending} aria-busy={!!pending} value={pending?.id??list.current} onChange={e=>{
     const d=list.districts.find(x=>x.id===e.target.value);
-    if(d&&d.id!==list.current){setError('');if(window.desktop?.switchDistrict)window.desktop.switchDistrict(d.id).catch(()=>setError('The district could not be opened. Your current data is unchanged.'));else location.assign(districtHref(d,location));}
-  }}>{districtOptions(list.districts,list.current).map(o=><option key={o.id} value={o.id} disabled={o.disabled}>{o.label}</option>)}</select>{error&&<span role="alert">{error}</span>}</>;
+    if(d)void change(d);
+  }}>{districtOptions(list.districts,list.current).map(o=><option key={o.id} value={o.id} disabled={o.disabled}>{o.label}</option>)}</select>{error&&<span className="terrier-district-error" role="alert">{error}</span>}
+    {pending&&createPortal(<LoadingTerrier startup label={`Opening ${pending.label}…`}/>,document.body)}</>;
 }
 
 // This district's settings, read once per page load; a failed read leaves the Colorado-style defaults.
 let featuresCall:Promise<Features|null>|null=null;
+export function preloadFeatures(){return featuresCall??=getFeatures().catch(()=>null);}
 export function useFeatures():Features|null{
   const [f,setF]=useState<Features|null>(null);
   useEffect(()=>{
     let live=true;
-    featuresCall??=getFeatures().catch(()=>null);
-    featuresCall.then(x=>{if(live)setF(x);});
+    preloadFeatures().then(x=>{if(live)setF(x);});
     return ()=>{live=false;};
   },[]);
   return f;

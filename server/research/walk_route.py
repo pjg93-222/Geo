@@ -152,7 +152,7 @@ class Graph:
 class Run:
     street_id: int
     street: str
-    side: str                 # 'even' | 'odd'
+    side: str                 # 'even' | 'odd' | 'both'
     precinct: str
     stop_ids: list            # walk order
     walk_m: float             # along the run, first stop to last stop
@@ -518,12 +518,14 @@ def _lay(graph, chain, on, cycle):
     return laid
 
 
-def _tasks(graph, stops):
+def _tasks(graph, stops, split_sides=True):
     groups = defaultdict(list)
     for s in stops:
-        groups[(s.street_id, s.parity)].append(s)
+        # Opposite sides can belong to different precincts. In combined mode,
+        # partition those first so alternating doors do not become tiny runs.
+        groups[(s.street_id, s.parity if split_sides else -1, '' if split_sides else s.precinct)].append(s)
     tasks = []
-    for key in sorted(groups, key=lambda k: (k[0] is None, k[0] or 0, k[1])):
+    for key in sorted(groups, key=lambda k: (k[0] is None, k[0] or 0, k[1], k[2])):
         on = defaultdict(list)
         for s in groups[key]:
             on[s.span].append(s)
@@ -537,6 +539,9 @@ def _tasks(graph, stops):
                 run.append(s)
             if run:
                 tasks.append(_Task(run, laid, cycle))
+    if not split_sides:
+        for task in tasks:
+            task.parity = -1
     return tasks
 
 
@@ -1044,6 +1049,8 @@ def _path(t, rev):
 
 
 def _lr(t, rev):
+    if t.parity == -1:
+        return 0
     laid, total = {sp.id: (sp, fwd) for sp, fwd, _ in t.chain}, 0
     for s in t.stops:
         sp, fwd = laid[s.span]
@@ -1056,7 +1063,7 @@ def _lr(t, rev):
 
 
 def _side(parity):
-    return 'odd' if parity else 'even'
+    return 'both' if parity == -1 else 'odd' if parity else 'even'
 
 
 def _walk_order(t, rev):
@@ -1073,17 +1080,18 @@ def _walk_order(t, rev):
     return seq
 
 
-def _loose_runs(stops):
+def _loose_runs(stops, split_sides=True):
     """Stops without a span: one run per street side and precinct, in house order, without geometry."""
     groups = defaultdict(list)
     for s in stops:
-        groups[(s.street, s.street_id or 0, s.parity)].append(s)
+        groups[(s.street, s.street_id or 0, s.parity if split_sides else -1,
+                '' if split_sides else s.precinct)].append(s)
     runs = []
     for key in sorted(groups):
         run = []
         for s in sorted(groups[key], key=_house_key) + [None]:
             if run and (s is None or s.precinct != run[-1].precinct):
-                runs.append(Run(run[0].street_id, run[0].street, _side(run[0].parity), run[0].precinct,
+                runs.append(Run(run[0].street_id, run[0].street, _side(run[0].parity if split_sides else -1), run[0].precinct,
                                 [r.id for r in run], 0.0, 0, [], [], 0.0, run[0].house, run[-1].house))
                 run = []
             if s is not None:
@@ -1091,7 +1099,7 @@ def _loose_runs(stops):
     return runs
 
 
-def _prepare(conn, stops):
+def _prepare(conn, stops, split_sides=True):
     """(graph, tasks, stops without a usable span). The network is loaded around the stops' blocks with PAD_M of
     margin, grown PAD_GROWTH-fold until every block of a stop is connected to the others (or the whole network is
     in), so no step falls back to a straight line where the network has a path."""
@@ -1119,14 +1127,15 @@ def _prepare(conn, stops):
     for s in placed:
         s.x = min(max(float(s.x), 0.0), graph.spans[s.span].len_m)
     loose = [s for s in stops if s.span not in graph.spans or s.x is None]
-    return graph, _tasks(graph, placed), loose
+    return graph, _tasks(graph, placed, split_sides), loose
 
 
-def plan_route(conn, stops, *, budget_ms=300, max_runs=None):
+def plan_route(conn, stops, *, budget_ms=300, max_runs=None, split_sides=True):
     """Order `stops` (mappings: id, street_id, street, parity, precinct, span_id, pos_m, house_int, house, side_lr,
     lon, lat) into runs with the shortest walk. Stops without a span follow as runs in house order. With max_runs,
-    a group of nearby runs larger than that raises RouteTooLarge before any ordering work."""
-    graph, tasks, loose = _prepare(conn, stops)
+    a group of nearby runs larger than that raises RouteTooLarge before any ordering work.
+    With split_sides=False, even and odd doors share each street run."""
+    graph, tasks, loose = _prepare(conn, stops, split_sides)
     plan = RoutePlan()
     if tasks:
         route = _Route(conn, graph, tasks, max_runs)
@@ -1152,7 +1161,7 @@ def plan_route(conn, stops, *, budget_ms=300, max_runs=None):
             prev = s
         plan.cost = route.totals(tour)[1]
         plan.baseline_m, plan.baseline_cost = route.totals(base)
-    plan.runs.extend(_loose_runs(loose))
+    plan.runs.extend(_loose_runs(loose, split_sides))
     plan.total_m = round(sum((r.walk_m + r.approach_m for r in plan.runs), 0.0), 1)
     return plan
 
