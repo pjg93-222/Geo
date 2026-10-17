@@ -2,8 +2,10 @@ import {PageHeader,useFeatures} from './Header';
 import type {Meta} from '../types';
 import {indicesText,int,supportMethodText} from '../lib/format';
 import {SMALL_AREA} from '../lib/areas';
+import {useStartupReady} from './StartupFrame';
 
 export function MethodScreen({meta}:{meta:Meta|null}){
+  useStartupReady(!!meta);
   const w=meta?.weights;
   const candidate=useFeatures()?.candidate;
   return <div className="screen method-screen">

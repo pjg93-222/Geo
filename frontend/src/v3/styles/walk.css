@@ -47,6 +47,21 @@
 .walk-button.walk-primary:hover:not(:disabled){background:var(--plum)}
 .walk-upload{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin-top:10px}
 .walk-file{font-size:12px;color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.walk-source{margin:16px 0 8px}
+.walk-sheet-picker{margin-bottom:12px}
+.walk-sheet-picker select,.walk-address-sheets select{font:inherit;padding:5px;border:1px solid var(--control-line);border-radius:5px;background:var(--surface);color:var(--ink)}
+.walk-address-sheets h2{font-size:22px;font-weight:600}
+.walk-address-sheets h3{font-size:18px;font-weight:600;margin:18px 0 8px}
+.walk-address-sheets input:not([type=checkbox]){font:inherit;padding:6px 8px;border:1px solid var(--control-line);border-radius:5px;background:var(--surface);color:var(--ink);max-width:100%;box-sizing:border-box}
+.walk-address-sheets .walk-actions>label{display:flex;flex-direction:column;gap:4px}
+.walk-address-sheets section[aria-label="Review street matches"] .walk-address-table-wrap{max-height:55vh;margin-bottom:12px}
+.walk-address-sheets section[aria-label="Review street matches"] th{position:sticky;top:0;z-index:1}
+.walk-address-sheets>.walk-summary{margin:20px 0 12px}
+.walk-address-table-wrap{overflow:auto;max-width:100%}
+.walk-address-table{width:100%;border-collapse:collapse;margin-top:10px;min-width:620px}
+.walk-address-table th,.walk-address-table td{text-align:left;padding:10px;border:1px solid var(--line);vertical-align:top}
+.walk-address-table th{background:var(--paper);font-size:12px;font-weight:600}
+.walk-address-table td:nth-last-child(-n+2){min-width:90px}
 
 .walk-matches{border:1px solid var(--line);border-radius:8px;margin-top:10px;font-size:12px;max-height:300px;overflow:auto}
 .walk-match{padding:8px 10px;border-bottom:1px solid var(--line-soft)}
@@ -269,6 +284,21 @@
 /* ---- phones: while results are not saved, a bar at the bottom of the screen points at the note, which sits far above in the rail ------
    Not a live region (the note announces itself); the page keeps room under the last card for it. */
 .walk-refused-bar{display:none}
+.walk-image-review{margin:18px 0;padding:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel,#fff)}
+.walk-image-card{margin:12px 0;border-top:1px solid var(--line);padding-top:12px}
+.walk-image-card>summary{cursor:pointer;font-weight:600;padding:8px 0}
+.walk-image-panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;margin:12px 0}
+.walk-image-panels h4{margin:4px 0}
+.walk-image-source{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:6px;line-height:0;background:#e9e5ee}
+.walk-image-source img{display:block;width:100%;height:auto}
+.walk-image-source>svg{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+.walk-image-geography{display:block;width:100%;max-height:460px;background:#f3f0f7;border:1px solid var(--line);border-radius:6px}
+.walk-image-geography circle[role=button]{cursor:crosshair}
+.walk-image-card select{max-width:100%}
+.walk-image-text{display:block;font-weight:600}
+.walk-image-text textarea{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:10px;resize:vertical;font:inherit;font-weight:400;border:1px solid var(--line);border-radius:6px;background:var(--panel,#fff);color:inherit}
+.walk-image-card pre{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px}
+.walk-image-confirm{display:block;margin:10px 0}
 .walk-refused:focus{outline:2px solid var(--accent);outline-offset:2px}
 @media(max-width:640px){
   .walk-refused{scroll-margin-top:8px}

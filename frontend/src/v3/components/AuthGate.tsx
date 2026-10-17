@@ -1,6 +1,7 @@
 import {useEffect,useState,type FormEvent,type ReactNode} from 'react';
 import {AUTHENTICATION_REQUIRED,getSession,postJson,type Session} from '../api/client';
 import '../styles/auth.css';
+import {useStartup,useStartupReady} from './StartupFrame';
 
 /** The server remains the authority for passwords, invitations, roles and sessions. */
 export function AuthGate({children}:{children:ReactNode}){
@@ -11,6 +12,9 @@ export function AuthGate({children}:{children:ReactNode}){
   const [invitation,setInvitation]=useState(()=>new URLSearchParams(location.hash.slice(1)).get('invite')??new URLSearchParams(location.search).get('invite'));
   const [error,setError]=useState('');
   const [busy,setBusy]=useState(false);
+  const startup=useStartup();
+  useEffect(()=>{if(loading)startup.restart('Opening your workspace…');},[loading,startup]);
+  useStartupReady(!loading&&(!!loadError||session?.authenticated!==true||invitation!==null));
   useEffect(()=>{
     if(session?.authenticated!==true)return;
     const expired=()=>{setSession(null);setLoading(true);setError('');setAttempt(value=>value+1);};
@@ -44,7 +48,7 @@ export function AuthGate({children}:{children:ReactNode}){
     }catch(failure){setError(failure instanceof Error?failure.message:'Sign-in could not be completed.');}
     finally{setBusy(false);}
   }
-  if(loading)return <main className="terrier-auth"><section aria-busy="true"><h1>Terrier</h1><p role="status">Checking your session…</p></section></main>;
+  if(loading)return null;
   if(loadError)return <main className="terrier-auth"><section><h1>Sign-in service unavailable</h1><p role="alert">{loadError}</p><button type="button" onClick={()=>setAttempt(value=>value+1)}>Retry</button></section></main>;
   if(session?.authenticated===true&&invitation===null)return <>{children}</>;
   const setup=invitation!==null;

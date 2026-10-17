@@ -1,7 +1,8 @@
 // Map screen: renders 01 (Block overview), 04 (Precinct / Tract / ZIP detail) and 05 (street-level households).
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {MapHeader,useFeatures} from './Header';
+import {MapHeader,preloadFeatures,useFeatures} from './Header';
 import {LoadingTerrier} from './TerrierMark';
+import {useStartupReady} from './StartupFrame';
 import {MapCanvas,STREET_ZOOM,type HouseholdSel,type MapHandle,type MapView} from './MapCanvas';
 import {AreaRail,type Neighbour} from './AreaRail';
 import {UntappedPanel,useUntapped,type PanelLevel} from './UntappedPanel';
@@ -35,6 +36,9 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const mapRef=useRef<MapHandle>(null);
   const paneRef=useRef<HTMLDivElement>(null);
   const dataReady=useRef(false);
+  const [firstPaint,setFirstPaint]=useState(false);
+  const [featuresReady,setFeaturesReady]=useState(false),[renderError,setRenderError]=useState('');
+  useEffect(()=>{let live=true;preloadFeatures().then(()=>{if(live)setFeaturesReady(true);});return()=>{live=false;};},[]);
   const householdRequest=useRef(0);
   const pendingFocus=useRef<{id:string;nonce:number}|null>(null);
 
@@ -43,7 +47,6 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const geo=state?.geo??null;
   const loadedLevel=state?.level??level;
   const parties=useParties(meta,loadedLevel);
-  dataReady.current=!!areas&&!loadingLevel;
 
   // ---- this district's layers (GET /api/v3/features, density once it is listed) -----------------------------------------------
   const features=useFeatures();
@@ -96,6 +99,9 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const sumsMap=useUntapped(untappedOn?loadedLevel:null);
   const sumsOther=useUntapped(untappedOn&&panelLevel!==loadedLevel?panelLevel:null);
   const sumsPanel=panelLevel===loadedLevel?sumsMap:sumsOther;
+  const sumsError=untappedOn?(sumsMap.error||sumsPanel.error):'';
+  dataReady.current=!!areas&&!loadingLevel&&featuresReady&&(!followDefault.current||o.layer===dflt)&&(!untappedOn||!!sumsMap.data);
+  useStartupReady((firstPaint&&(!untappedOn||!!sumsPanel.data))||!!error||!!renderError||!!sumsError);
   const untappedIn=useMemo<UntappedInput|null>(()=>sumsMap.data?{u:sumsMap.data,w:weights}:null,[sumsMap.data,weights]);
   // State House and State Senate are drawn from their own outlines while the panel ranks them
   const polyLevel=untappedOn&&panelLevel!=='precinct'?panelLevel:null;
@@ -195,7 +201,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
   const onGroup=(g:OverlayLayer)=>{if(single&&g===ov.layer)return;begin('map');followDefault.current=false;setO({...o,mode:'single',layer:g});};
   const onLevel=(l:Level)=>{if(l===level)return;begin('map');setLevel(l);setSelected(null);setSelHousehold(null);setPop(null);};
   const onSelectArea=useCallback((id:string|null)=>{begin('map');setSelected(id);setSelHousehold(null);setPop(null);},[]);
-  const onIdle=useCallback(()=>{if(dataReady.current)end('map');},[]);
+  const onIdle=useCallback(()=>{if(dataReady.current){end('map');setFirstPaint(true);}},[]);
   const onView=useCallback((v:MapView)=>setView(v),[]);
   const onMove=useCallback(()=>setMoveTick(t=>t+1),[]);
 
@@ -218,7 +224,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
           selectedId={selected} focus={focus} initialBounds={firstBounds.current} district={district} roadBounds={roadBounds}
           overlayGeometry={polyFc} overlayBins={polyResult?.bins??null} overlayPalette={polyResult?.palette??SHARE_RAMP}
           households={street?.points??null} selectedHousehold={selHousehold}
-          onSelectArea={onSelectArea} onSelectHousehold={onSelectHousehold} onView={onView} onMove={onMove} onIdle={onIdle}/>
+          onSelectArea={onSelectArea} onSelectHousehold={onSelectHousehold} onView={onView} onMove={onMove} onIdle={onIdle} onError={setRenderError}/>
         {labels.length>0&&pane&&!streetActive&&<AreaLabels items={labels} palette={palette} selectedId={selected} project={(lo,la)=>mapRef.current?.project(lo,la)??null}
           zoom={mapRef.current?.view()?.zoom??0} width={pane.clientWidth} height={pane.clientHeight}/>}
         <ZoomControl onZoom={d=>mapRef.current?.zoomBy(d)}/>
@@ -228,6 +234,7 @@ export function MapScreen({meta,route}:{meta:Meta|null;route:Route}){
         {selHousehold&&popPos&&pane&&<Popover data={pop} x={popPos.x} y={popPos.y} paneW={pane.clientWidth} paneH={pane.clientHeight}
           onClose={()=>{setSelHousehold(null);setPop(null);}}/>}
         {error&&<div className="map-error" role="alert"><span>{error}</span> <button type="button" onClick={retry}>Retry</button></div>}
+        {(renderError||sumsError)&&<div className="map-error" role="alert"><span>{renderError||sumsError}</span> <button type="button" onClick={()=>location.reload()}>Reload map</button></div>}
       </div>
       {streetActive
         ?<StreetRail stats={street?.stats??null} truncated={street?.truncated}/>

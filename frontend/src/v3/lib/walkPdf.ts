@@ -6,13 +6,15 @@ import type {WalkListPayload,WalkRun} from '../api/walkTypes';
 import {codeLegend,countText,doorAddress,fullDate,houseSpan,phoneText,regDate,scoreCell,scoreColumns,sideLabel,tallyText,totalsLine,walkFileName,areaText} from './walk';
 import type {ScoreKey,WalkScoreMap} from './walk';
 import {DOOR_SCRIPT,choiceText} from './walkScript';
+import {walkExportNames} from './walkExportNames';
+import {unlocatedFlag} from './walkEvidence';
 import {box4,boxesHit,cleanLine,clipLine,doorPoints,fitFrame,growBounds,inArea,isListed,labelPoint,lineLength,listedPrecincts,offsetLine,pointAlong,
   ringsInBox,runLine,spotAlong,streetKey,thin,viewBounds} from './walkGeo';
 import type {Fit,Frame,XY} from './walkGeo';
 
 /** `scores`: the Print scores toggle (off by default, which leaves the pages as they were): adds a SCORES group of Ovr, Sup (candidate districts) and Part columns. */
 /** `watermark`: who printed the list and when (hosted servers; walk.ts watermarkText), written on every page and faintly across it. Without it the pages are exactly as before. */
-export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap;watermark?:string}
+export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap;watermark?:string;sheets?:WalkListPayload[]}
 
 type RGB=[number,number,number];
 type Box=Frame;
@@ -23,6 +25,14 @@ const TABLE_TOP=66;      // first head row of a list page
 const TABLE_BOTTOM=48;   // clear space under the last row, above the footer
 const CHUNK=10;          // most voters printed in one household row
 const ABS_LABEL='Abs = mail ballots';
+const PARCEL_LABEL='* Municipal parcel location; entrance not confirmed.';
+const RECOVERY_LABEL='† House number recovered from matching source fields and municipal parcel; original value retained in ZIP audit.';
+const FLAG_LABEL='‡ Address not independently located; printed without a map pin.';
+const recoveredNumber=(door:WalkRun['doors'][number]):boolean=>!!(door.location_evidence&&typeof door.location_evidence==='object'&&'registration_recovery' in door.location_evidence);
+const hasRecovery=(payload:WalkListPayload):boolean=>payload.runs.some(run=>run.doors.some(recoveredNumber));
+const hasFlag=(payload:WalkListPayload):boolean=>payload.runs.some(run=>run.doors.some(unlocatedFlag));
+/** Footer legends stacked upward from `y`, only the ones present, in the order given, so none overprint. */
+const footerLegends=(doc:jsPDF,y:number,legends:Array<[boolean,string]>):void=>{for(const [on,label] of legends)if(on){doc.text(label,MARGIN,y);y-=11;}};
 
 // --- text safety ---------------------------------------------------------------------------------------------------
 // The standard PDF fonts cover Latin-1 plus the Windows punctuation block; anything else would print as garbage.
@@ -417,6 +427,22 @@ function drawCover(doc:jsPDF,payload:WalkListPayload,area:string,scores?:WalkSco
   doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...MUTED);
   doc.text('Solid line: street side walked, arrowhead shows direction  ·  Numbered circle: route stop, in walking order',MARGIN,map.y+map.h+26);
   drawScript(doc,MARGIN+map.w+24,map.y+10,pageW-MARGIN-(MARGIN+map.w+24));
+  let legendY=map.y+map.h-8;   // baseline of the next legend line, working upward
+  if(payload.runs.some(run=>run.doors.some(door=>door.placed_by==='parcel'))){
+    doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...MUTED);
+    doc.text(PARCEL_LABEL,MARGIN+map.w+24,legendY);legendY-=12;
+  }
+  if(hasRecovery(payload)){
+    doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...MUTED);
+    const lines=doc.splitTextToSize(RECOVERY_LABEL,pageW-MARGIN-(MARGIN+map.w+24)) as string[];
+    lines.forEach((line,i)=>doc.text(line,MARGIN+map.w+24,legendY-(lines.length-1-i)*10));
+    legendY-=lines.length*10;
+  }
+  if(hasFlag(payload)){
+    doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...MUTED);
+    const lines=doc.splitTextToSize(FLAG_LABEL,pageW-MARGIN-(MARGIN+map.w+24)) as string[];
+    lines.forEach((line,i)=>doc.text(line,MARGIN+map.w+24,legendY-(lines.length-1-i)*10));
+  }
   return stats;
 }
 
@@ -426,7 +452,9 @@ const KEYS=['address','name','phone','pri','gen','abs','party','age','gender','r
 const SCORE_AT=10,SCORE_WIDTH=24;   // the score columns (when printed) sit after Reg. Date, before the result boxes
 const SCORE_HEAD:Record<ScoreKey,string>={ovr:'Ovr',sup:'Sup',part:'Part',push:'Push'};
 const SCORE_WORDS:Record<ScoreKey,string>={ovr:'Ovr overall',sup:'Sup candidate support',part:'Part participation',push:'Push needs a push'};
-interface RowMeta{approx:boolean;cont:boolean}
+interface RowMeta{approx:boolean;mark:string;cont:boolean}
+/** The marks printed after a door's address: ≈ is drawn separately; * parcel, † recovered number, ‡ not independently located. */
+export const rowMarker=(door:WalkRun['doors'][number]):string=>`${door.placed_by==='parcel'?'*':''}${recoveredNumber(door)?'†':''}${unlocatedFlag(door)?'‡':''}`;
 
 function drawRunTitle(doc:jsPDF,run:WalkRun,total:number,cont:boolean):void {
   const pageW=doc.internal.pageSize.getWidth(),y=52;
@@ -435,7 +463,7 @@ function drawRunTitle(doc:jsPDF,run:WalkRun,total:number,cont:boolean):void {
   const rightW=rich(doc,[`Route stop ${run.stop} of ${total}`,span&&`walk ${span}`,countText(run.doors.length,'door')].filter(Boolean).join(' · '),pageW-MARGIN,y,'right');
   doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...INK);
   let x=MARGIN;
-  if(run.precinct){doc.text(fit(doc,`Precinct: ${run.precinct}`,140),x,y);x+=150;}
+  if(run.precinct||run.locality){doc.text(fit(doc,run.precinct?`Precinct: ${run.precinct}`:`Location: ${run.locality}`,140),x,y);x+=150;}
   const room=pageW-MARGIN-rightW-16-x,label=fit(doc,`Street: ${run.street} (${sideLabel(run.side)})`,Math.max(room-(cont?42:0),60));
   doc.text(label,x,y);
   const after=x+doc.getTextWidth(label)+5;
@@ -445,6 +473,11 @@ function drawRunTitle(doc:jsPDF,run:WalkRun,total:number,cont:boolean):void {
 function runRows(run:WalkRun,scores?:WalkScoreMap):{rows:string[][];meta:RowMeta[]} {
   const rows:string[][]=[],meta:RowMeta[]=[],cols=scoreColumns(scores);
   for(const door of run.doors){
+    if(!door.voters.length){
+      rows.push([safe(doorAddress(door)),'','','','','','','','','',...cols.map(()=>''),'S','U','O','','NH','MV']);
+      meta.push({approx:door.placed_by==='interpolated',mark:rowMarker(door),cont:false});
+      continue;
+    }
     for(let at=0;at<door.voters.length;at+=CHUNK){
       const vs=door.voters.slice(at,at+CHUNK),lines=(f:(i:number)=>string):string=>vs.map((_,i)=>safe(f(i))).join('\n');
       rows.push([
@@ -454,13 +487,13 @@ function runRows(run:WalkRun,scores?:WalkScoreMap):{rows:string[][];meta:RowMeta
         ...cols.map(k=>lines(i=>scoreCell(scores,vs[i].person_id,k))),
         lines(()=>'S'),lines(()=>'U'),lines(()=>'O'),lines(()=>''),lines(()=>'NH'),lines(()=>'MV'),
       ]);
-      meta.push({approx:door.placed_by==='interpolated'&&at===0,cont:at>0});
+      meta.push({approx:door.placed_by==='interpolated'&&at===0,mark:at===0?rowMarker(door):'',cont:at>0});
     }
   }
   return {rows,meta};
 }
 
-function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,total:number,scores?:WalkScoreMap):void {
+function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,total:number,scores?:WalkScoreMap,recoveryNote=false,flagNote=false):void {
   const {rows,meta}=runRows(run,scores);
   if(!rows.length)return;
   const cols=scoreColumns(scores),keys:string[]=[...KEYS.slice(0,SCORE_AT),...cols,...KEYS.slice(SCORE_AT)];
@@ -471,7 +504,7 @@ function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,t
   const label=(content:string)=>({content,styles:{cellPadding:{top:0,right:3,bottom:3,left:0}}});
   doc.addPage();
   autoTable(doc,{
-    startY:TABLE_TOP,margin:{top:TABLE_TOP,right:MARGIN,bottom:TABLE_BOTTOM,left:MARGIN},tableWidth:tableW,
+    startY:TABLE_TOP,margin:{top:TABLE_TOP,right:MARGIN,bottom:recoveryNote?(flagNote?72:60):flagNote?60:TABLE_BOTTOM,left:MARGIN},tableWidth:tableW,
     theme:'plain',showHead:'everyPage',rowPageBreak:'avoid',
     styles:{font:'helvetica',fontSize:9,textColor:INK,cellPadding:{top:3,right:5,bottom:9,left:0},lineWidth:0,overflow:'ellipsize',valign:'top',halign:'left'},
     headStyles:{fontStyle:'normal',fontSize:8.5,textColor:INK,cellPadding:{top:1,right:3,bottom:4,left:0}},
@@ -494,6 +527,8 @@ function drawRun(doc:jsPDF,autoTable:(d:jsPDF,o:UserOptions)=>void,run:WalkRun,t
         doc.setDrawColor(...INK);doc.setLineWidth(0.5);doc.line(c.x,base+1.8,c.x+doc.getTextWidth(c.text[0]),base+1.8);
       }else if(d.section==='body'&&d.column.index===0&&meta[d.row.index]?.approx){
         doc.setDrawColor(...INK);approx(doc,c.x+c.padding('left')+doc.getTextWidth(c.text[0]??'')+fs*0.3,base,fs);
+      }else if(d.section==='body'&&d.column.index===0&&meta[d.row.index]?.mark){
+        doc.text(meta[d.row.index].mark,c.x+c.padding('left')+doc.getTextWidth(c.text[0]??'')+fs*0.3,base);
       }
     },
   });
@@ -522,22 +557,65 @@ export async function buildWalkPdf(payload:WalkListPayload,opts:WalkPdfOptions={
   const [{jsPDF},{default:autoTable}]=await Promise.all([import('jspdf'),import('jspdf-autotable')]);
   const doc=new jsPDF({orientation:'landscape',unit:'pt',format:'letter',compress:true,floatPrecision:3});   // the map has thousands of points
   const area=(opts.area??areaText(payload.query)).trim();
-  const runs=(payload.runs??[]).filter(r=>r.doors.length);
   doc.setLineHeightFactor(1.34);
   doc.setProperties({title:safe(`${payload.list?.title||'Walk list'}${area?` - ${area}`:''}`),subject:'Walk list',creator:'Terrier'});
-  const map=drawCover(doc,payload,area,opts.scores);
-  for(const run of runs)drawRun(doc,autoTable,run,payload.totals?.stops||runs.length,opts.scores);
+  const sheets=opts.sheets?.length?opts.sheets:[payload];
+  const recovered=sheets.some(hasRecovery),flagged=sheets.some(hasFlag);
+  const map=drawCover(doc,payload,sheets.length>1?[area,'Full route map and distance'].filter(Boolean).join(' · '):area,opts.scores);
+  const pageSheets:number[]=[0,0];
+  for(const [i,sheet] of sheets.entries()){
+    const first=doc.getNumberOfPages()+1;
+    const runs=(sheet.runs??[]).filter(r=>r.doors.length);
+    for(const run of runs)drawRun(doc,autoTable,run,sheet.totals?.stops||runs.length,opts.scores,recovered,flagged);
+    for(let page=first;page<=doc.getNumberOfPages();page++)pageSheets[page]=i+1;
+  }
   // date top left and footer on every page
   const pageW=doc.internal.pageSize.getWidth(),pageH=doc.internal.pageSize.getHeight(),pages=doc.getNumberOfPages();
   const footer=`${codeLegend()} · ${payload.window?.abs_rule||ABS_LABEL}`;
+  const hasParcel=sheets.some(sheet=>sheet.runs.some(run=>run.doors.some(door=>door.placed_by==='parcel')));
   for(let p=1;p<=pages;p++){
     doc.setPage(p);doc.setFont('helvetica','normal');doc.setTextColor(...MUTED);
-    doc.setFontSize(8.5);doc.text(fullDate(payload.generated_on),MARGIN,30);
+    doc.setFontSize(8.5);doc.text(fullDate(payload.generated_on)+(sheets.length>1?(pageSheets[p]?` · List ${pageSheets[p]} of ${sheets.length}`:` · Full route · ${sheets.length} lists`):''),MARGIN,30);
     doc.setFontSize(7.5);doc.text(fit(doc,footer,pageW-2*MARGIN-90),MARGIN,pageH-24);
+    if(p!==1)footerLegends(doc,pageH-35,[[hasParcel,PARCEL_LABEL],[recovered,RECOVERY_LABEL],[flagged,FLAG_LABEL]]);
     doc.text(`Page ${p} of ${pages}`,pageW-MARGIN,pageH-24,{align:'right'});
   }
   if(opts.watermark)stamp(doc,opts.watermark);
   return {doc,fileName:opts.fileName||walkFileName(area,payload.generated_on,'pdf'),map};
+}
+
+/** Imported local lists keep their own cover and pagination, just like their individual PDFs. */
+export async function buildWalkSheetsPdf(sheets:WalkListPayload[],opts:Omit<WalkPdfOptions,'sheets'>={}):Promise<{doc:jsPDF;fileName:string;maps:WalkMapStats[]}> {
+  if(!sheets.length)throw new Error('No walk lists to export.');
+  const [{jsPDF},{default:autoTable}]=await Promise.all([import('jspdf'),import('jspdf-autotable')]);
+  const doc=new jsPDF({orientation:'landscape',unit:'pt',format:'letter',compress:true,floatPrecision:3});
+  const area=opts.area?.trim()??'',names=walkExportNames(sheets),maps:WalkMapStats[]=[];
+  doc.setLineHeightFactor(1.34);
+  doc.setProperties({title:safe(`Walk lists${area?` - ${area}`:''}`),subject:'Walk lists',creator:'Terrier'});
+  for(const [i,sheet] of sheets.entries()){
+    await new Promise<void>(resolve=>setTimeout(resolve,0));
+    if(i)doc.addPage();
+    const first=doc.getNumberOfPages(),payload={...sheet,list:{...sheet.list,title:'Walk list'}};
+    maps.push(drawCover(doc,payload,'',opts.scores));
+    doc.outline.add(null,safe(`${names[i].list} - ${sheet.query.import_group_label||'Walk list'} - ${names[i].side}`),{pageNumber:first});
+    const runs=sheet.runs.filter(run=>run.doors.length);
+    const recovered=hasRecovery(sheet),flagged=hasFlag(sheet);
+    for(const run of runs)drawRun(doc,autoTable,run,sheet.totals.stops||runs.length,opts.scores,recovered,flagged);
+    const last=doc.getNumberOfPages(),pageW=doc.internal.pageSize.getWidth(),pageH=doc.internal.pageSize.getHeight();
+    const footer=`${codeLegend()} · ${sheet.window?.abs_rule||ABS_LABEL}`;
+    const hasParcel=sheet.runs.some(run=>run.doors.some(door=>door.placed_by==='parcel'));
+    for(let p=first;p<=last;p++){
+      doc.setPage(p);doc.setFont('helvetica','normal');doc.setTextColor(...MUTED);
+      doc.setFontSize(8.5);doc.text(fullDate(sheet.generated_on),MARGIN,30);
+      doc.setFontSize(7.5);doc.text(fit(doc,footer,pageW-2*MARGIN-90),MARGIN,pageH-24);
+      if(p!==first)footerLegends(doc,pageH-35,[[hasParcel,PARCEL_LABEL],[recovered,RECOVERY_LABEL],[flagged,FLAG_LABEL]]);
+      doc.text(`Page ${p-first+1} of ${last-first+1}`,pageW-MARGIN,pageH-24,{align:'right'});
+    }
+    doc.setPage(last);
+  }
+  if(opts.watermark)stamp(doc,opts.watermark);
+  doc.setDisplayMode('fullwidth','continuous','UseOutlines');
+  return {doc,fileName:opts.fileName||walkFileName(area,sheets[0].generated_on,'pdf'),maps};
 }
 
 /** Builds the walk list PDF and hands it to the browser as walk-list-<area>-<yyyy-mm-dd>.pdf. Resolves to the file name. */

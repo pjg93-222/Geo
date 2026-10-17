@@ -88,7 +88,7 @@ LISTS_SHOWN = 50
 CODES = ('S', 'U', 'O', 'NH', 'MV')
 # an area id as the store holds it: at most 24 characters, but a CT precinct key is the code and the name (build_walk caps it at 64)
 AREA = r'[0-9A-Za-z._-]{1,%d}' % (64 if settings.DISTRICT['precinct_key'] == 'code-name' else 24)
-QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi'}
+QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi', 'split_sides'}
 NO_CANDIDATE = 'No candidate is set for this district.'
 TRIM_NEEDS_BLOCKS = 'Trim needs planned blocks.'
 SUPPORT_NOT_BUILT = 'Support is not built yet.'
@@ -249,13 +249,14 @@ def list_query(values):
     picks = parse_picks(values['streets']) if 'streets' in values else []
     spans = parse_spans(values['spans'], 'doors' in values) if 'spans' in values else []
     fresh = clean(values['fresh'], '1') if 'fresh' in values else None
+    sides = {'split_sides': clean(values['split_sides'], '[01]')} if 'split_sides' in values else {}
     trim = trim_query(values, area, bool(spans and fresh))
     if not picks and not spans and not area:
         raise Refused('Pick an area or add a street first.')
     query = {'streets': ','.join('%d:%s' % pick for pick in picks)} if picks else {}
     if spans:
         query['spans'] = ','.join(map(str, spans))
-    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {}), **trim}
+    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {}), **trim, **sides}
 
 
 CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
@@ -471,20 +472,23 @@ def bounds(runs):
             xs.append(lon)
             ys.append(lat)
         for door in run['doors']:
-            xs.append(door['lon'])
-            ys.append(door['lat'])
+            if door['lon'] is not None and door['lat'] is not None:
+                xs.append(door['lon'])
+                ys.append(door['lat'])
     return [round(min(xs), 6), round(min(ys), 6), round(max(xs), 6), round(max(ys), 6)] if xs else [0.0, 0.0, 0.0, 0.0]
 
 
-def plan_payload(store, rows, query):
+def plan_payload(store, rows, query, *, preserve_unlocated=False):
     """(payload, {person id: voter key}) for the people in `rows`: their stops as runs in walking order, each stop's
-    people as doors (stop, unit) and voters by name, numbered 1..n over the whole list. `last` is left empty."""
+    people as doors (stop, unit) and voters by name, numbered 1..n over the whole list. `last` is left empty.
+    Imported lists can preserve missing coordinates explicitly instead of borrowing another door's location."""
     contacts = store.contacts(row['person_id'] for row in rows)
     at_stop, stops = route_stops(rows, store.directory().by_id)
     if len({(s['street_id'], s['parity'], s['precinct'], s['span_id']) for s in stops}) > MAX_SEGMENTS:
         raise Refused(TOO_SPREAD)
     try:
-        plan = walk_route.plan_route(store.conn, stops, max_runs=MAX_GROUP_RUNS)
+        plan = walk_route.plan_route(store.conn, stops, max_runs=MAX_GROUP_RUNS,
+                                     split_sides=query.get('split_sides', '1') != '0')
     except walk_route.RouteTooLarge:
         raise Refused(TOO_SPREAD) from None
     runs, seq = [], 0
@@ -500,15 +504,21 @@ def plan_payload(store, rows, query):
                 voters = sorted((voter_json(m, contacts) for m in by_unit[unit]), key=lambda v: (v['name'].casefold(), v['person_id']))
                 doors.append({'seq': seq, 'house': house_label(first['house']), 'unit': unit, 'placed_by': first['placed_by'] or 'interpolated',
                               'lon': first['lon'], 'lat': first['lat'], 'voters': voters})
-        place_doors(doors, run.path)
+                if preserve_unlocated and (first['lon'] is None or first['lat'] is None):
+                    doors[-1].update(lon=None, lat=None, placed_by='unlocated')
+        if not preserve_unlocated:
+            place_doors(doors, run.path)
         runs.append({'stop': number, 'street_id': run.street_id, 'street': run.street, 'side': run.side,
                      'precinct': run.precinct, 'from_house': house_label(run.from_house), 'to_house': house_label(run.to_house),
                      'walk_m': run.walk_m, 'lr': run.lr, 'path': run.path, 'approach': run.approach, 'doors': doors})
-    anchor = next(((d['lon'], d['lat']) for r in runs for d in r['doors'] if d['lon'] is not None), (0.0, 0.0))
-    for run in runs:
-        for door in run['doors']:
-            if door['lon'] is None:
-                door['lon'], door['lat'] = anchor
+        if preserve_unlocated:
+            runs[-1]['approach_m'] = run.approach_m
+    if not preserve_unlocated:
+        anchor = next(((d['lon'], d['lat']) for r in runs for d in r['doors'] if d['lon'] is not None), (0.0, 0.0))
+        for run in runs:
+            for door in run['doors']:
+                if door['lon'] is None:
+                    door['lon'], door['lat'] = anchor
     n_doors = sum(len(run['doors']) for run in runs)
     payload = {
         'schema': 'walk-list-1', 'generated_on': date.today().isoformat(),
@@ -908,7 +918,10 @@ def reknock(title, parent_key):
         rows = not_home(store.voters_by_key(again), again, places_of(parent.payload), store.directory().by_id)
         if not rows:
             raise Refused('Those voters are no longer in the walk list data.', 409)
-        payload, keys = plan_payload(store, rows, {'from': parent.key, 'reknock': '1'})
+        query = {'from': parent.key, 'reknock': '1'}
+        if 'split_sides' in parent.query:
+            query['split_sides'] = parent.query['split_sides']
+        payload, keys = plan_payload(store, rows, query)
         info = store.info
     attach_last(payload, keys)
     return freeze(payload, keys, title, 'reknock', parent, info), len(again) - len({row['voter_key'] for row in rows})

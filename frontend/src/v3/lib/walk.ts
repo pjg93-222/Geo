@@ -2,6 +2,7 @@
 // Pure, so node --test can load it directly: value imports name the .ts file, types come in with `import type`.
 import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkScores,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkTurf,WalkVoter,WalkWindow} from '../api/walkTypes';
 import {csvValue} from './csv.ts';
+import {hasEvidence} from './walkEvidence.ts';
 import {MAX_LIST_PEOPLE,MAX_PLAN_SPANS,parseSpansParam,parseTrim} from './plan.ts';
 import {marginBin} from './opinions.ts';
 
@@ -87,7 +88,7 @@ export function areaText(query:Record<string,string>|undefined):string{
   return parts.join(DOT);
 }
 /** walk-list-<area>-<yyyy-mm-dd>.<ext>; the day falls back to today when the given date is not an ISO date. */
-export function walkFileName(area:string,isoDate:string,ext:'pdf'|'csv'):string{
+export function walkFileName(area:string,isoDate:string,ext:'pdf'|'csv'|'zip'):string{
   const slug=area.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60).replace(/-+$/,'')||'list';
   return `walk-list-${slug}-${ymd(isoDate)?isoDate.slice(0,10):localToday()}.${ext}`;
 }
@@ -520,20 +521,30 @@ const resultCode=(v:WalkVoter,results?:WalkResults,history?:WalkHistory,unsaved?
 
 /** One row per voter in walking order. Result holds the mark in `results` when the walker has set one, flagged when it is in `unsaved`, else the latest
  *  result on file (`history` is a fresher look at what is on file than the list itself). */
-export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap):string[][]{
+export const needsAddressLocality=(payload:WalkListPayload):boolean=>payload.query.imported==='1'||(payload.runs??[]).some(run=>run.doors.some(door=>!door.voters.length&&!!(door.city||door.state||door.zip)));
+export function walkCsvRows(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap,includeLocality=needsAddressLocality(payload),includeEvidence=hasEvidence(payload)):string[][]{
   const rows:string[][]=[],cols=scoreColumns(scores);
-  for(const run of payload.runs??[])for(const door of run.doors)for(const v of door.voters)rows.push([
+  const evidenceCells=(door:WalkRun['doors'][number]):string[]=>includeEvidence?(door.evidence?[door.evidence.address_status,door.evidence.location_precision,door.evidence.decision,door.evidence.reason_codes.join('; ')]:['','','','']):[];
+  for(const run of payload.runs??[])for(const door of run.doors){
+    if(!door.voters.length){
+      rows.push([String(run.stop),run.precinct,run.street,sideLabel(run.side),door.house,door.unit,'','','','','','','','','','',...cols.map(()=>''),...includeLocality?[door.city??'',door.state??'',door.zip??'']:[],...evidenceCells(door)]);
+      continue;
+    }
+    for(const v of door.voters)rows.push([
     String(run.stop),run.precinct,run.street,sideLabel(run.side),door.house,door.unit,v.name,phoneText(v.phone),
     csvTally(v.pri),csvTally(v.gen),csvTally(v.abs),v.party,v.age==null?'':String(v.age),v.gender,v.reg_date,resultCode(v,results,history,unsaved),
     ...cols.map(k=>scoreCell(scores,v.person_id,k)),   // after Result, so no column of the default file moves
+    ...includeLocality?[door.city??'',door.state??'',door.zip??'']:[],
+    ...evidenceCells(door),
   ]);
+  }
   return rows;
 }
 const BOM=String.fromCharCode(0xfeff);
 /** UTF-8 BOM, CRLF rows, every field quoted. */
-export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap):string{
-  const head=[...CSV_COLUMNS,...scoreColumns(scores).map(k=>SCORE_NAMES[k])] as string[];
-  const lines=[head,...walkCsvRows(payload,results,history,unsaved,scores)].map(r=>r.map(csvField).join(',')+'\r\n');
+export function buildWalkCsv(payload:WalkListPayload,results?:WalkResults,history?:WalkHistory,unsaved?:ReadonlySet<string>,scores?:WalkScoreMap,includeLocality=needsAddressLocality(payload),includeEvidence=hasEvidence(payload)):string{
+  const head=[...CSV_COLUMNS,...scoreColumns(scores).map(k=>SCORE_NAMES[k]),...includeLocality?['City','State','ZIP']:[],...includeEvidence?['Address status','Location precision','Review decision','Evidence reasons']:[]] as string[];
+  const lines=[head,...walkCsvRows(payload,results,history,unsaved,scores,includeLocality,includeEvidence)].map(r=>r.map(csvField).join(',')+'\r\n');
   return BOM+lines.join('');
 }
 

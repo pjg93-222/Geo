@@ -29,6 +29,22 @@ export function growBounds(b:Bounds|null,pts:Iterable<XY>):Bounds|null{
   return Number.isFinite(w)?[w,s,e,n]:null;
 }
 export const doorPoints=(r:WalkRun):XY[]=>cleanLine((r?.doors??[]).map(d=>[d?.lon,d?.lat]));
+/** Include only connectors retained in this printed route. Older payloads have geometry but no connector metre field. */
+export function walkRouteDistance(runs:WalkRun[]):number{
+  const metres=runs.reduce((sum,run)=>{
+    const points=cleanLine(run.approach);
+    let approach=0;
+    if(points.length>1){
+      if(typeof run.approach_m==='number'&&Number.isFinite(run.approach_m))approach=Math.max(0,run.approach_m);
+      else for(let i=1;i<points.length;i++){
+        const a=points[i-1],b=points[i],lat=(a[1]+b[1])/2;
+        approach+=Math.hypot((b[0]-a[0])*111319.49*Math.cos(lat*RAD),(b[1]-a[1])*metresPerDegreeLat(lat));
+      }
+    }
+    return sum+Math.max(0,run.walk_m||0)+approach;
+  },0);
+  return Math.round(metres*10)/10;
+}
 /** The centreline walked in a run; the doors stand in when a run has no usable path. */
 export const runLine=(r:WalkRun):XY[]=>{const own=cleanLine(r?.path);return own.length>1?own:doorPoints(r);};
 /** The box to show: the context box when the list came with one, else the list's own box, else the route; always wide enough for the whole route. */

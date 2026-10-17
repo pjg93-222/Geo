@@ -143,7 +143,7 @@ test('the plan request carries the weights as text, and the walk list request ca
   assert.deepEqual(weightsQuery({wp: 0.5, wi: 1}), {wp: '0.50', wi: '1.00'});
   assert.deepEqual({preset: 'push', ...weightsQuery({wp: 0.3, wi: 0.25}), doors: 80}, {preset: 'push', wp: '0.30', wi: '0.25', doors: 80});
   const api = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/walk.ts'), 'utf8');
-  assert.ok(/spans\?:number\[\],fresh\?:boolean,trim\?:WalkListTrim\)/.test(api) && /fresh:fresh\?1:undefined/.test(api), 'fresh is sent as fresh=1, and left out otherwise');
+  assert.ok(/spans\?:number\[\],fresh\?:boolean,trim\?:WalkListTrim,splitSides=true\)/.test(api) && /fresh:fresh\?1:undefined/.test(api), 'fresh is sent as fresh=1, and left out otherwise');
   assert.ok(/doors:trim\?\.doors,wp:trim\?\.wp,wi:trim\?\.wi/.test(api), 'doors, wp and wi go on the list request, and only from a trim');
   const types = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/walkTypes.ts'), 'utf8');
   assert.ok(/t_mean\?: number \| null/.test(types) && !/p_mean/.test(types), 'rows carry t_mean, the mean chance of voting');

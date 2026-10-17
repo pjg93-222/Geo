@@ -54,6 +54,10 @@ X_FRAME_OPTIONS = 'DENY'
 HOSTED = os.environ.get('CU_DEPLOYMENT') == 'hosted'
 DESKTOP_BOUNDARY = os.environ.get('CU_DEPLOYMENT') == 'desktop'
 LOCAL_ADMIN_ACCESS = not HOSTED and os.environ.get('CU_LOCAL_ADMIN', '1') == '1'
+# Temporary owner preference, kept beside this installation's private dataset.
+# Hosted deployments and approved recipient accounts never use this switch.
+DESKTOP_PASSWORD_LOCK_DISABLED = (DESKTOP_BOUNDARY and not HOSTED
+                                 and (DATA_DIR / '.desktop-password-lock-disabled').is_file())
 SESSION_COOKIE_SECURE = HOSTED
 CSRF_COOKIE_SECURE = HOSTED
 SECURE_SSL_REDIRECT = HOSTED and os.environ.get('CU_HTTPS_REDIRECT','1') == '1'

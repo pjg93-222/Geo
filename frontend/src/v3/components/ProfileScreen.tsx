@@ -12,6 +12,7 @@ import {getProfile} from '../api/client';
 import {begin,end} from '../lib/timing';
 import {GROUP_LABEL} from '../api/fields';
 import type {Route} from '../lib/router';
+import {useStartupReady} from './StartupFrame';
 
 function backTarget():string{
   try{return '/people'+(sessionStorage.getItem('v3.people.query')||'');}catch{return '/people';}
@@ -20,6 +21,7 @@ function backTarget():string{
 export function ProfileScreen({meta,route}:{meta:Meta|null;route:Route}){
   const [p,setP]=useState<Profile|null>(null);
   const [error,setError]=useState('');
+  useStartupReady(!!p||!!error);
   const pid=route.pid;
   useEffect(()=>{
     const ac=new AbortController();

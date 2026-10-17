@@ -10,7 +10,7 @@ from server.research import v3_area_views as v3a, v3_people_views as v3p
 from server.research.v3_http import error as v3_error
 from server.research.terrier_health import health as terrier_health
 from server.research import terrier_contacts, terrier_workspace
-from server.research import walk_views
+from server.research import walk_views, walk_address_views, walk_image_views
 SNAPSHOT = D.snapshot_pattern(settings.DISTRICT)   # one district per process: its snapshot keys only
 v3_routes = [
     path('api/v3/contacts', terrier_contacts.contacts),
@@ -26,6 +26,11 @@ v3_routes = [
     path('api/v3/street', v3p.street), path('api/v3/search', v3p.search),
     path('api/v3/walk/options', walk_views.options), path('api/v3/walk/streets', walk_views.streets),
     path('api/v3/walk/match', walk_views.match), path('api/v3/walk/list', walk_views.walk_list),
+    path('api/v3/walk/address-match', walk_address_views.address_match),
+    path('api/v3/walk/address-doors', walk_address_views.address_doors),
+    path('api/v3/walk/address-list', walk_address_views.address_list),
+    path('api/v3/walk/image-context', walk_image_views.image_context),
+    path('api/v3/walk/image-resolve', walk_image_views.image_resolve),
     path('api/v3/walk/overview', walk_views.overview), path('api/v3/walk/plan', walk_views.plan),
     path('api/v3/walk/scores', walk_views.voter_scores), path('api/v3/walk/lists', walk_views.lists),
     path('api/v3/walk/lists/<slug:key>', walk_views.saved_list), path('api/v3/walk/dispositions', walk_views.dispositions),

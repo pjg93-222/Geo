@@ -19,7 +19,7 @@ from pathlib import Path
 from django.conf import settings
 from django.http import FileResponse, HttpResponse
 
-CSP = ("default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; "
+CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; "
        "form-action 'self'")
 IMMUTABLE = 'public, max-age=31536000, immutable'

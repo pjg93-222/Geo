@@ -11,6 +11,7 @@ import {getAreas,getPeople} from '../api/client';
 import {begin,endAfterPaint} from '../lib/timing';
 import {replaceQuery,type Route} from '../lib/router';
 import {PRESET_WORDS} from '../lib/plan';
+import {useStartupReady} from './StartupFrame';
 
 const REG:{id:PeopleQuery['reg'];label:string}[]=[
   {id:'all',label:'All'},{id:'D',label:'Democrat'},{id:'R',label:'Republican'},{id:'U',label:'Unaffiliated'},{id:'O',label:'Other'}];
@@ -39,6 +40,7 @@ export function PeopleScreen({meta,route}:{meta:Meta|null;route:Route}){
   const [page,setPage]=useState<PeoplePage|null>(null);
   const [busy,setBusy]=useState(true);
   const [error,setError]=useState('');
+  useStartupReady(!!page||!!error);
   const [attempt,setAttempt]=useState(0);
   const [ready,setReady]=useState<string|null>(null);   // cursor of the prefetched next page
   const cache=useRef(new Map<string,PeoplePage>());

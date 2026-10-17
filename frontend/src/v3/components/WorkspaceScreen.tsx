@@ -1,4 +1,5 @@
 import {useEffect,useMemo,useState} from 'react';
+import {useStartupReady} from './StartupFrame';
 import {ArrowUpRight,Bookmark,Download,Search,Trash2} from 'lucide-react';
 import {GROUP_LABEL,GROUPS,type FieldDef} from '../api/fields';
 import {getAreas,localJson} from '../api/client';
@@ -86,6 +87,7 @@ function SavedWorkspace({meta,route,data}:{meta:Meta;route:Route;data:WorkspaceD
 export function WorkspaceScreen({meta,route}:{meta:Meta;route:Route}){
   const section=route.name as Section;
   const [data,setData]=useState<WorkspaceData|null>(null);const [error,setError]=useState('');const [attempt,setAttempt]=useState(0);
+  useStartupReady(!!data||!!error);
   useEffect(()=>{const ac=new AbortController();setError('');localJson<WorkspaceData>('/api/v3/workspace',ac.signal).then(setData).catch(e=>{if(e.name!=='AbortError')setError(e.message||'The workspace data could not be loaded.');});return()=>ac.abort();},[meta.snapshot,attempt]);
   return <div className="screen workspace-screen"><PageHeader meta={meta} active={section}/><main className="work-main"><div className="work-heading"><span className="work-eyebrow">Terrier workspace</span><h1 className="page-title">{TITLES[section]}</h1><p>{SUBTITLES[section]}</p></div>{error?<div role="alert" className="work-inline-error"><p>{error}</p><button type="button" className="work-button" onClick={()=>setAttempt(n=>n+1)}>Retry workspace</button></div>:!data?<p role="status">Loading the local workspace…</p>:section==='criteria'?<FieldAudit meta={meta} data={data}/>:section==='sources'?<DataSources meta={meta} data={data}/>:<SavedWorkspace meta={meta} route={route} data={data}/>}</main></div>;
 }

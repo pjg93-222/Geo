@@ -60,11 +60,11 @@ function prepare(data:WalkOverview):Prepared{
 
 const runLine=(r:WalkRun):[number,number][]=>{
   const own=(r.path??[]).filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
-  return own.length>1?own:r.doors.map((d):[number,number]=>[d.lon,d.lat]).filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
+  return own.length>1?own:doorPoints(r);
 };
 function boundsOf(payload:WalkListPayload):Box|null{
-  const b=payload.bbox;
-  if(Array.isArray(b)&&b.length===4&&b.every(Number.isFinite)&&b[0]<=b[2]&&b[1]<=b[3])return b;
+  const b=usableBounds(payload.bbox);
+  if(b)return b;
   let w=Infinity,s=Infinity,e=-Infinity,n=-Infinity;
   for(const r of payload.runs)for(const p of [...runLine(r),...(r.approach??[])]){w=Math.min(w,p[0]);e=Math.max(e,p[0]);s=Math.min(s,p[1]);n=Math.max(n,p[1]);}
   return Number.isFinite(w)?[w,s,e,n]:null;
@@ -187,7 +187,7 @@ export function WalkMap({payload,shade,onStop}:WalkMapProps){
     const doors=payload.runs.flatMap(r=>doorPoints(r)).map((c):GeoJSON.Feature=>({type:'Feature',properties:{},geometry:{type:'Point',coordinates:c}}));
     (m.getSource('doors') as maplibregl.GeoJSONSource).setData({type:'FeatureCollection',features:doors});
     const markers=payload.runs.flatMap((r,i)=>{
-      const d=r.doors[0];if(!d||!Number.isFinite(d.lon)||!Number.isFinite(d.lat))return [];
+      const d=r.doors.find(door=>typeof door.lon==='number'&&typeof door.lat==='number'&&Number.isFinite(door.lon)&&Number.isFinite(door.lat));if(!d||typeof d.lon!=='number'||typeof d.lat!=='number')return [];
       const el=document.createElement('div');
       el.className=cx('walk-stop',i===payload.runs.length-1&&'is-last');
       el.textContent=String(r.stop);el.title=`Stop ${r.stop}: ${r.street}`;el.setAttribute('aria-hidden','true');

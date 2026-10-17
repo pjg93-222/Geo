@@ -102,6 +102,78 @@ def grid_stops(net, spans, n, blocks_of, block=100.0, both=True):
                     net.stop(sid, name, parity, span, off, 100 * (k + 1) + 2 * m + parity, precinct)
 
 
+class SideGroupingTests(unittest.TestCase):
+    def test_turning_split_off_combines_sides_and_preserves_every_stop(self):
+        net = Net()
+        span = net.span('Maple St', [(0, 0), (100, 0)])
+        for house in (101, 102, 103, 104):
+            net.stop(1, 'Maple St', house % 2, span, (house - 100) * 20, house)
+        split = plan_route(net.db, net.stops)
+        combined = plan_route(net.db, net.stops, split_sides=False)
+        self.assertEqual({run.side for run in split.runs}, {'even', 'odd'})
+        self.assertEqual(len(combined.runs), 1)
+        self.assertEqual(combined.runs[0].side, 'both')
+        self.assertEqual(combined.runs[0].lr, 0)
+        self.assertEqual(combined.runs[0].stop_ids, [1, 2, 3, 4])
+        self.assertCountEqual([s for run in split.runs for s in run.stop_ids], combined.runs[0].stop_ids)
+
+    def test_unplaced_doors_also_combine_without_losing_precincts(self):
+        net = Net()
+        for house, precinct in ((101, 'P1'), (102, 'P1'), (103, 'P2'), (104, 'P2')):
+            net.stop(1, 'Maple St', house % 2, None, None, house, precinct)
+        combined = plan_route(net.db, net.stops, split_sides=False)
+        self.assertEqual([(r.side, r.precinct, r.stop_ids) for r in combined.runs],
+                         [('both', 'P1', [1, 2]), ('both', 'P2', [3, 4])])
+
+    def test_combined_boundary_street_keeps_two_precinct_runs_instead_of_one_per_door(self):
+        net = Net()
+        spans = [net.span('Boundary Rd', [(x, 0), (x + 100, 0)]) for x in (0, 100)]
+        for index in range(25):
+            position = 10 + index * 7
+            house = 101 + index
+            net.stop(1, 'Boundary Rd', house % 2, spans[position // 100], position % 100,
+                     house, 'P1' if house % 2 else 'P2')
+        combined = plan_route(net.db, net.stops, split_sides=False)
+        self.assertEqual(len(combined.runs), 2)
+        self.assertEqual({run.side for run in combined.runs}, {'both'})
+        self.assertCountEqual([stop for run in combined.runs for stop in run.stop_ids], range(1, 26))
+        for run in combined.runs:
+            self.assertEqual({net.stops[index - 1]['precinct'] for index in run.stop_ids}, {run.precinct})
+            self.assertGreater(run.walk_m, 140)
+            self.assertTrue(any(math.dist(point, ll(100, 0)) < 1e-6 for point in run.path))
+        split = plan_route(net.db, net.stops)
+        self.assertEqual(len(split.runs), 2)
+        self.assertEqual({(run.side, run.precinct) for run in split.runs}, {('even', 'P2'), ('odd', 'P1')})
+
+    def test_combined_precinct_groups_do_not_join_disconnected_street_spans(self):
+        net = Net()
+        for x in (0, 300):
+            span = net.span('Boundary Rd', [(x, 0), (x + 100, 0)])
+            for index in range(4):
+                house = 101 + x + index
+                net.stop(1, 'Boundary Rd', house % 2, span, 10 + index * 20,
+                         house, 'P1' if house % 2 else 'P2')
+        combined = plan_route(net.db, net.stops, split_sides=False)
+        self.assertEqual(len(combined.runs), 4)
+        self.assertCountEqual([stop for run in combined.runs for stop in run.stop_ids], range(1, 9))
+        for run in combined.runs:
+            self.assertEqual(len({net.stops[index - 1]['span_id'] for index in run.stop_ids}), 1)
+            self.assertEqual({net.stops[index - 1]['precinct'] for index in run.stop_ids}, {run.precinct})
+
+    def test_unlocated_interleaved_precincts_combine_without_inventing_geometry(self):
+        net = Net()
+        for house in range(101, 126):
+            net.stop(1, 'Boundary Rd', house % 2, None, None, house, 'P1' if house % 2 else 'P2')
+        combined = plan_route(net.db, net.stops, split_sides=False)
+        self.assertEqual(len(combined.runs), 2)
+        self.assertCountEqual([stop for run in combined.runs for stop in run.stop_ids], range(1, 26))
+        for run in combined.runs:
+            self.assertEqual(run.side, 'both')
+            self.assertEqual(run.path, [])
+            self.assertEqual(run.approach, [])
+            self.assertEqual({net.stops[index - 1]['precinct'] for index in run.stop_ids}, {run.precinct})
+
+
 class DijkstraTests(unittest.TestCase):
     def test_hand_computed_grid(self):
         # 1 -4- 2 -1- 3
