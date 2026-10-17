@@ -74,9 +74,9 @@ env:
   # desktop-installer-acceptance.yml was added to main above REVIEWED_BASE; without it here the source check refused main.
   CI_FILES: .github/workflows/desktop-windows.yml .github/workflows/desktop-installer-acceptance.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
-  # Melange source commit T for desktop 1.0.5 (client 1.0.5, updater sequence-wedge fix included). It must be on
+  # Melange source commit T2 for desktop 1.0.5 (client 1.0.5, updater sequence-wedge fix included). It must be on
   # pjg93-222/Melange before this workflow can run.
-  TOOLING_SHA: d3bcc47568c60a92da903ef94d47ae9ec97539e3
+  TOOLING_SHA: f614ff413cc61eb6e571bf58b7169f03446dcba7
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: 081f44db43bac05d25e4cedc93891b7f31595b920f4deda7f6dc04a9f7548a3a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
