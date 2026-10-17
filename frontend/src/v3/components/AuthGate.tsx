@@ -56,7 +56,7 @@ export function AuthGate({children}:{children:ReactNode}){
   return <main className="terrier-auth"><section aria-labelledby="terrier-auth-title">
     <img src="/brand/terrier-icon-hq.png" alt="" width="72" height="72"/>
     <h1 id="terrier-auth-title">{setup?'Create your password':'Sign in to Terrier'}</h1>
-    <p>{setup?'Choose a password for your approved account. Existing accounts keep their username and access.':'Use the account for this district’s workspace.'}</p>
+    <p>{setup?'Choose a password for your approved account. Existing accounts keep their username and access.':'Use the account for your Terrier workspace.'}</p>
     {session?.account_identity&&<p className="terrier-auth-note">Account: {session.account_identity}</p>}
     {validInvitation?<form onSubmit={submit}>
       {!setup&&<label>Username<input name="username" autoComplete="username" maxLength={150} required autoFocus disabled={busy} defaultValue={session?.account_identity??''} readOnly={Boolean(session?.account_identity)}/></label>}
