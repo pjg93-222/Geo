@@ -262,17 +262,58 @@ class DesktopOwnerTests(TestCase):
         self.assertIsNone(desktop_owner.credential(self.principal()))
         self.assertEqual(self.setup_password('Another-Synthetic-Password-55!')[0], 200)
 
+    @staticmethod
+    def windows_sid():
+        whoami = os.path.join(os.environ['SystemRoot'], 'System32', 'whoami.exe')
+        return subprocess.run([whoami, '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True, check=True).stdout.strip().split(',')[-1].strip('"')
+
     @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
     def test_owner_directory_is_restricted_to_this_user_and_system(self):
         desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        sid = self.windows_sid()
+        flags, aces = desktop_owner._dacl(self.root)
+        self.assertIn('P', flags)
+        self.assertEqual(sorted((ace[0], ace[2], ace[5]) for ace in aces), sorted([('A', 'FA', sid), ('A', 'FA', 'SY')]))
+        _, inherited = desktop_owner._dacl(self.root / desktop_owner.CREDENTIAL)
+        self.assertEqual(sorted(ace[5] for ace in inherited), sorted([sid, 'SY']))
+        self.assertTrue(all('ID' in ace[1] for ace in inherited))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
+    def test_a_labelled_protected_parent_does_not_leave_its_entries_behind(self):
+        # Build run 39076518379: the elevated runner's TEMP carries an inheritable integrity label, and Python's mkdtemp
+        # gives its directory an explicit, protected DACL (SYSTEM, Administrators, OWNER RIGHTS). A directory made
+        # inside it holds entries that icacls reports, and treats, as explicit, so /inheritance:r did not drop them.
         icacls = os.path.join(os.environ['SystemRoot'], 'System32', 'icacls.exe')
-        for target in (self.root, self.root / desktop_owner.CREDENTIAL):
-            entries = [line for line in subprocess.run([icacls, str(target)], capture_output=True, text=True, check=True).stdout.splitlines()
-                       if ':(' in line]
-            self.assertEqual(len(entries), 2, entries)
-        directory = [line for line in subprocess.run([icacls, str(self.root)], capture_output=True, text=True, check=True).stdout.splitlines()
-                     if ':(' in line]
-        self.assertFalse(any('(I)' in line for line in directory), directory)
+        labelled = Path(self.directory.name) / 'labelled'
+        labelled.mkdir()
+        subprocess.run([icacls, str(labelled), '/setintegritylevel', '(OI)(CI)low'], capture_output=True, check=True)
+        root = Path(tempfile.mkdtemp(dir=labelled)) / 'terrier-owner'
+        root.mkdir()
+        descriptor, saved = tempfile.mkstemp()
+        os.close(descriptor)
+        subprocess.run([icacls, str(root), '/save', saved], capture_output=True, check=True)
+        shown = Path(saved).read_bytes().decode('utf-16').splitlines()[1]
+        os.unlink(saved)
+        self.assertRegex(shown, r'^D:\(A;OICI;FA;;;SY\)', 'precondition: icacls shows the inherited entries as explicit')
+        with self.settings(DESKTOP_OWNER_ROOT=root):
+            desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+            self.assertTrue(desktop_owner.check(self.principal(), PASSWORD))
+        self.assertEqual(sorted(ace[5] for ace in desktop_owner._dacl(root)[1]), sorted([self.windows_sid(), 'SY']))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
+    def test_another_explicit_grant_is_removed(self):
+        self.root.mkdir(parents=True)
+        icacls = os.path.join(os.environ['SystemRoot'], 'System32', 'icacls.exe')
+        subprocess.run([icacls, str(self.root), '/grant', '*S-1-1-0:(OI)(CI)R'], capture_output=True, check=True)   # Everyone
+        desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        self.assertEqual(sorted(ace[5] for ace in desktop_owner._dacl(self.root)[1]), sorted([self.windows_sid(), 'SY']))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
+    def test_an_unverified_access_list_fails_closed(self):
+        with mock.patch.object(desktop_owner, '_dacl', return_value=('PAI', [['A', 'OICI', 'FA', '', '', 'SY']])):
+            with self.assertRaises(OwnerStoreUnavailable):
+                desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        self.assertFalse((self.root / desktop_owner.CREDENTIAL).exists())
 
     def test_restriction_failure_writes_nothing(self):
         with mock.patch.object(desktop_owner.subprocess, 'run', side_effect=subprocess.CalledProcessError(5, 'icacls')), \

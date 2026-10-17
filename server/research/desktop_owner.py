@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import subprocess
 import tempfile
@@ -90,6 +91,68 @@ def _system(name):
     return os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', name)
 
 
+def _advapi():
+    import ctypes
+    from ctypes import wintypes
+    advapi, kernel = ctypes.WinDLL('advapi32', use_last_error=True), ctypes.WinDLL('kernel32', use_last_error=True)
+    pointer = ctypes.POINTER(ctypes.c_void_p)
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, pointer, ctypes.c_void_p]
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    advapi.GetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL), pointer, ctypes.POINTER(wintypes.BOOL)]
+    advapi.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    advapi.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD] + [ctypes.c_void_p] * 4
+    advapi.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD] + [ctypes.c_void_p] * 4 + [pointer]
+    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                                                             ctypes.POINTER(wintypes.LPWSTR), ctypes.c_void_p]
+    advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.restype = wintypes.BOOL
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    return ctypes, wintypes, advapi, kernel
+
+
+FILE_OBJECT, DACL_INFORMATION, PROTECTED_DACL = 1, 0x4, 0x80000000
+
+
+def _set_dacl(path, sddl):
+    """Replace path's whole DACL with sddl, protected from inheritance (SetNamedSecurityInfoW). Explicit entries a
+    parent's creation copied in are replaced too; the SACL (a mandatory integrity label) is left alone."""
+    ctypes, wintypes, advapi, kernel = _advapi()
+    descriptor = ctypes.c_void_p()
+    if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        present, dacl, defaulted = wintypes.BOOL(), ctypes.c_void_p(), wintypes.BOOL()
+        if not advapi.GetSecurityDescriptorDacl(descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)) or not present:
+            raise ctypes.WinError(ctypes.get_last_error())
+        error = advapi.SetNamedSecurityInfoW(str(path), FILE_OBJECT, DACL_INFORMATION | PROTECTED_DACL, None, None, dacl, None)
+        if error:
+            raise ctypes.WinError(error)
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+def _dacl(path):
+    """The DACL of path as (flags, [ace fields]) from its SDDL: language-independent, DACL only (no SACL label)."""
+    ctypes, wintypes, advapi, kernel = _advapi()
+    descriptor, text = ctypes.c_void_p(), wintypes.LPWSTR()
+    error = advapi.GetNamedSecurityInfoW(str(path), FILE_OBJECT, DACL_INFORMATION, None, None, None, None, ctypes.byref(descriptor))
+    if error:
+        raise ctypes.WinError(error)
+    try:
+        if not advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, DACL_INFORMATION, ctypes.byref(text), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sddl = text.value
+        kernel.LocalFree(text)
+    finally:
+        kernel.LocalFree(descriptor)
+    match = re.fullmatch(r'D:([A-Z]*)((?:\([^)]*\))*)', sddl)
+    if not match:
+        raise OwnerStoreUnavailable('The desktop owner directory has no readable access list')
+    return match.group(1), [ace.split(';') for ace in re.findall(r'\(([^)]*)\)', match.group(2))]
+
+
 def _secure(directory):
     """Create the owner directory if needed and restrict it to this user and SYSTEM; fail closed."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -97,14 +160,17 @@ def _secure(directory):
         if os.name != 'nt':
             directory.chmod(0o700)
             return
-        run = lambda *args: subprocess.run(args, capture_output=True, text=True, timeout=30, check=True).stdout
-        sid = run(_system('whoami.exe'), '/user', '/fo', 'csv', '/nh').strip().split(',')[-1].strip('"')
-        if not sid.startswith('S-1-'):
+        whoami = subprocess.run([_system('whoami.exe'), '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True, timeout=30, check=True)
+        sid = whoami.stdout.strip().split(',')[-1].strip('"')
+        if not re.fullmatch(r'S-1-[0-9-]+', sid):
             raise OwnerStoreUnavailable('The current Windows account could not be identified')
-        # This directory only: drop inherited entries, grant full control to this user and SYSTEM (inherited by its files).
-        run(_system('icacls.exe'), str(directory), '/inheritance:r', '/grant:r', f'*{sid}:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F')
-        entries = [line for line in run(_system('icacls.exe'), str(directory)).splitlines() if ':(' in line]
-        if len(entries) != 2 or any('(I)' in line for line in entries):
+        # The whole DACL of this directory, protected: full control for this user and SYSTEM, inherited by its files.
+        _set_dacl(directory, f'D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)')
+        # Read it back: exactly those two non-inherited allow entries, and the list is protected.
+        flags, aces = _dacl(directory)
+        account = lambda value: {'SY': 'S-1-5-18', 'LA': sid if sid.endswith('-500') else 'LA'}.get(value, value)
+        if ('P' not in flags or len(aces) != 2 or any(len(ace) != 6 or ace[0] != 'A' or ace[2] != 'FA' or 'ID' in ace[1] for ace in aces)
+                or sorted(account(ace[5]) for ace in aces) != sorted([sid, 'S-1-5-18'])):
             raise OwnerStoreUnavailable('The desktop owner directory still grants access to others')
     except (OSError, subprocess.SubprocessError) as error:
         raise OwnerStoreUnavailable('The desktop owner directory could not be restricted to this user') from error
