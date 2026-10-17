@@ -1,8 +1,7 @@
-"""The native launcher boundary authorizes the exact approved administrator.
+"""The native launcher boundary authorizes an existing signed-in administrator.
 
-Ordinary launches require sign-in. An explicit local owner preference permits
-request-only access without changing the account, password, or stored session.
-The marker is an in-process object issued only by the token gate.
+This never creates an account, changes roles, or authenticates a user. The marker
+is an in-process object, not an HTTP header, and is issued only by the token gate.
 """
 from ipaddress import ip_address
 from django.conf import settings
@@ -58,19 +57,12 @@ def request_principal(request):
     return marker[3]
 
 
-def password_lock_disabled(principal):
-    return bool(principal and principal.mode == 'existing-owner' and not settings.HOSTED
-                and getattr(settings, 'DESKTOP_BOUNDARY', False)
-                and getattr(settings, 'DESKTOP_PASSWORD_LOCK_DISABLED', False))
-
-
 def account_authorized(request, user):
     principal = request_principal(request)
     binding = binding_for(principal) if principal else None
     return bool(binding and binding.user_id is not None and user and user.is_authenticated
                 and user.pk == binding.user_id and user.username == binding.local_username
-                and user.is_active and user.is_staff
-                and (user.has_usable_password() or password_lock_disabled(principal)))
+                and user.is_active and user.is_staff and user.has_usable_password())
 
 
 def administrator_authorized(request):
@@ -103,13 +95,6 @@ class DesktopPrincipalMiddleware:
         principal = request_principal(request)
         if not principal or not binding_for(principal):
             return JsonResponse({'error': 'Desktop approval is required.'}, status=403)
-        if password_lock_disabled(principal):
-            binding = binding_for(principal)
-            owner = binding.user
-            if (owner and str(owner.pk) == principal.local_user_id
-                    and owner.username == principal.local_username and owner.is_active and owner.is_staff):
-                # Request-only access for the exact approved owner; retain account/password/session state.
-                request.user = owner
         if request.path == '/api/health' and request.method in ('GET', 'HEAD'):
             return JsonResponse({'status': 'ok'})
         auth = {'/api/auth/session': {'GET', 'HEAD'}, '/api/auth/login': {'POST'},

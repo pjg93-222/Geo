@@ -101,9 +101,8 @@ def prepare_principal(principal, state_root):
             raise ValueError('The approved account is disabled or lacks its existing role')
         return binding, user
 
-    from .desktop_access import password_lock_disabled
     existing, user = inspect()
-    if existing and user and (user.has_usable_password() or password_lock_disabled(principal)):
+    if existing and user and user.has_usable_password():
         return None
     result = {'launchPath': None}
 
@@ -118,7 +117,7 @@ def prepare_principal(principal, state_root):
                         principal_id=principal.principal_id, account_identity=principal.account_identity,
                         local_username=principal.local_username, district_id=principal.district_id,
                         mode=principal.mode, user=user)
-                if not user or (not user.has_usable_password() and not password_lock_disabled(principal)):
+                if not user or not user.has_usable_password():
                     path = create_invitation(principal.local_username, administrator=True, reset=user is not None)
                     token = path.partition('=')[2]
                     digest = hashlib.sha256(token.encode()).hexdigest()
