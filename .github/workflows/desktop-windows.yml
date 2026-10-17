@@ -1,5 +1,14 @@
-# Terrier desktop: unsigned manual-install PREVIEW for Windows x64, built on a free standard GitHub-hosted runner.
+# Terrier desktop: unsigned Windows x64 installer built on a free standard GitHub-hosted runner, either a manual-install
+# PREVIEW or (RELEASE_PUBLISHER set) the unsigned INPUT of a signed release.
 # Repo path: .github/workflows/desktop-windows.yml on pjg93-222/Geo main.
+#
+# Signed-release input mode (Paul, 2026-10-16: self-signed certificate trusted only on his machines). RELEASE_PUBLISHER
+# is the certificate's exact SignerCertificate.Subject, a public value; the Package step bakes it in as
+# WINDOWS_PUBLISHER_NAME (package.json windowsPublisherName and app-update.yml publisherName), so the packaged updater
+# accepts only installers Windows reports Valid for that subject. No signing material exists here: the installer stays
+# NotSigned, the prerelease below stays an unsigned preview, and STABLE_TAG (desktop-v$VERSION, which must not exist
+# yet) is created later on Paul's PC, after he Authenticode-signs this run's artifact there (Sign-And-Publish-Release.ps1
+# and Melange ops/desktop/GITHUB_RELEASES.md). Empty RELEASE_PUBLISHER and STABLE_TAG = plain preview (pin null).
 #
 # Source binding: the Terrier source is always github.sha on refs/heads/main, and it may differ from the reviewed main
 # REVIEWED_BASE only by the CI files in CI_FILES. The desktop tooling (ops/desktop) is not in Geo: it is checked out from
@@ -16,13 +25,13 @@
 #   releases API and never trusts preflight's mode: no release -> create the draft; exactly one DRAFT with the expected
 #   target -> resume (validate every present asset by sha256 against this build's SHA256SUMS, upload only missing ones,
 #   provenance included; never overwrite, never delete); anything else -> fail. Resuming needs the build artifact
-#   (1-day retention). If it has expired the job fails; rebuilding is then a deliberate decision recorded in the build
-#   queue (delete the stale draft by hand, then dispatch).
+#   (7-day retention: the local signing step also downloads it). If it has expired the job fails; rebuilding is then a
+#   deliberate decision recorded in the build queue (delete the stale draft by hand, then dispatch).
 #
 # Actions are pinned to full commit SHAs, the same reviewed pins as release.yml (re-resolved 2026-10-16 with
 # `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`; trailing comment = floating tag and the exact patch tag).
-# No secrets beyond GITHUB_TOKEN; WINDOWS_PUBLISHER_NAME unset, so the packaged updater stays fail-closed. The tag
-# desktop-preview-v1.0.3 does not match release.yml's 'v*' trigger. Nothing here installs or launches the packaged app.
+# No secrets beyond GITHUB_TOKEN; WINDOWS_PUBLISHER_NAME is set only from RELEASE_PUBLISHER (see above). Neither
+# desktop-preview-v* nor desktop-v* matches release.yml's 'v*' trigger. Nothing here installs or launches the packaged app.
 # Python dependencies: requirements.txt plus explicit pins, constrained by requirements.lock.txt. That lock is version-pinned
 # but NOT hash-locked.
 name: desktop-windows
@@ -55,13 +64,19 @@ concurrency:
 env:
   APP: terrier
   PRODUCT: Terrier
-  VERSION: 1.0.3
-  RELEASE_TAG: desktop-preview-v1.0.3
+  VERSION: 1.0.5
+  RELEASE_TAG: desktop-preview-v1.0.5
+  # Signed-release input mode (header). Both empty = plain preview. The same subject is pinned in Melange and Mentat.
+  RELEASE_PUBLISHER: 'CN=Melange Desktop Release - Paul Goff - self-signed'
+  STABLE_TAG: desktop-v1.0.5
   ARTIFACT: terrier-desktop-${{ github.sha }}
   REVIEWED_BASE: 96d99f9ebfa31f9bc0be2666c5b4b4c6d279353b
-  CI_FILES: .github/workflows/desktop-windows.yml .github/desktop/desktop-access-trust.public.json
+  # desktop-installer-acceptance.yml was added to main above REVIEWED_BASE; without it here the source check refused main.
+  CI_FILES: .github/workflows/desktop-windows.yml .github/workflows/desktop-installer-acceptance.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
-  TOOLING_SHA: 052927b17e7a270aff99199b21c55af0c7cb0e92
+  # Melange source commit T for desktop 1.0.5 (client 1.0.5, updater sequence-wedge fix included). It must be on
+  # pjg93-222/Melange before this workflow can run.
+  TOOLING_SHA: d3bcc47568c60a92da903ef94d47ae9ec97539e3
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: 081f44db43bac05d25e4cedc93891b7f31595b920f4deda7f6dc04a9f7548a3a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
@@ -107,6 +122,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Signed-release input: a CN= subject that is not a test identity, and a still-unused stable desktop-v tag.
+          if [ -n "$RELEASE_PUBLISHER" ] || [ -n "$STABLE_TAG" ]; then
+            [[ "$RELEASE_PUBLISHER" == CN=* && "$RELEASE_PUBLISHER" != *TEST* && "$STABLE_TAG" = "desktop-v$VERSION" ]] \
+              || { echo "::error::signed-release input needs RELEASE_PUBLISHER 'CN=...' (not a TEST subject) and STABLE_TAG desktop-v$VERSION"; exit 1; }
+            stable=$(gh api "repos/$GH_REPO/releases?per_page=100" --paginate | jq -s --arg t "$STABLE_TAG" '[add[] | select(.tag_name == $t)] | length')
+            [ "$stable" -eq 0 ] || { echo "::error::a release named $STABLE_TAG already exists; a signed release is never rebuilt"; exit 1; }
+            if gh api "repos/$GH_REPO/git/ref/tags/$STABLE_TAG" >/dev/null 2>&1; then echo "::error::tag $STABLE_TAG already exists"; exit 1; fi
+          fi
           # Every release, drafts included, matched on tag_name.
           gh api "repos/$GH_REPO/releases?per_page=100" --paginate | jq -s --arg t "$RELEASE_TAG" '[add[] | select(.tag_name == $t)]' > matches.json
           tag_exists=no; gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1 && tag_exists=yes
@@ -303,8 +326,12 @@ jobs:
           npm test 2>&1 | Tee-Object -FilePath "$env:OUT\npm-test.log"
           npm audit --omit=dev --audit-level=high
 
+      # No certificate is configured (CSC_IDENTITY_AUTO_DISCOVERY false, no CSC_LINK or certificateSha1), so electron-builder
+      # skips signing every binary; WINDOWS_PUBLISHER_NAME only bakes the public pin (Melange client/builder.cjs:24-25).
       - name: Package (unsigned NSIS installer plus win-unpacked)
         working-directory: tooling/ops/desktop/client
+        env:
+          WINDOWS_PUBLISHER_NAME: ${{ env.RELEASE_PUBLISHER }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           npm run build -- --publish never
@@ -336,8 +363,16 @@ jobs:
           assert cfg['appId'] == os.environ['APP'], cfg['appId']
           assert cfg['desktopAccessTrust'] == trust, 'packaged access trust differs from the committed descriptor'
           assert cfg['desktopUpdateSource'] == {'provider': 'github', 'repository': os.environ['DESKTOP_GITHUB_REPOSITORY'].lower()}, cfg['desktopUpdateSource']
-          assert cfg['windowsPublisherName'] is None, 'publisher must stay unset for an unsigned preview'
-          print('packaged config OK:', json.dumps({k: cfg[k] for k in ('appId', 'desktopUpdateSource', 'windowsPublisherName')}))
+          # The pin: exactly RELEASE_PUBLISHER (null for a plain preview), in package.json and as the single app-update.yml
+          # publisherName that client/updater.cjs nativeTrust requires (electron-updater otherwise skips Authenticode).
+          publisher = os.environ['RELEASE_PUBLISHER'] or None
+          assert cfg['windowsPublisherName'] == publisher, (cfg['windowsPublisherName'], publisher)
+          yml = open(os.path.join(os.environ['UNPACKED'], 'resources', 'app-update.yml'), encoding='utf-8').read().splitlines()
+          i, names = (yml.index('publisherName:') + 1 if 'publisherName:' in yml else len(yml)), []
+          while i < len(yml) and yml[i].startswith('  - '):
+              names.append(yml[i][4:].strip().strip('\'"')); i += 1
+          assert names == ([publisher] if publisher else []) and sum(l.startswith('publisherName') for l in yml) == (1 if publisher else 0), yml
+          print('packaged config OK:', json.dumps({k: cfg[k] for k in ('appId', 'desktopUpdateSource', 'windowsPublisherName')}), 'app-update.yml publisherName:', names)
 
       # In the FINAL packaged bytes (win-unpacked and the zip): the Python notices present, identical, and complete.
       - name: Gate - third-party notices in the packaged bytes
@@ -390,8 +425,11 @@ jobs:
           ran = re.search(r'^Ran (\d+) tests?', django, re.M); assert ran and re.search(r'^OK\b', django, re.M), 'Django gate did not report OK'
           product, version = env['PRODUCT'], env['VERSION']
           files = [f'{product}-{version}-win-x64-unsigned-installer.exe', f'{product}-{version}-win-x64-unsigned-preview.zip', 'Python-and-packages.md']
+          publisher = env['RELEASE_PUBLISHER'] or None
           prov = {
-            'app': env['APP'], 'version': version, 'channel': 'manual-install preview', 'signed': False,
+            'app': env['APP'], 'version': version, 'signed': False,
+            'channel': 'signed-release input (unsigned here; Authenticode-signed on the release owner PC)' if publisher else 'manual-install preview',
+            'stableTag': env['STABLE_TAG'] or None,
             'repository': f"https://github.com/{env['GITHUB_REPOSITORY']}", 'sourceCommit': env['GITHUB_SHA'], 'releaseTarget': env['GITHUB_SHA'],
             'reviewedBase': env['REVIEWED_BASE'], 'ciOnlyFilesAboveBase': env['CI_FILES'].split(),
             'desktopTooling': {'repository': f"https://github.com/{env['TOOLING_REPOSITORY']}", 'commit': env['TOOLING_SHA'], 'path': 'ops/desktop'},
@@ -403,14 +441,14 @@ jobs:
                           'node': os.popen('node -v').read().strip(), 'electron': '44.7.2', 'electronBuilder': '26.15.3',
                           'pipFreeze': (out / 'pip-freeze.txt').read_text(encoding='utf-8').split()},
             'environment': {k: env[k] for k in ('DESKTOP_APP_ID', 'DESKTOP_UPDATE_PROVIDER', 'DESKTOP_GITHUB_REPOSITORY', 'CSC_IDENTITY_AUTO_DISCOVERY')},
-            'windowsPublisherName': None, 'accessTrust': {'file': env['TRUST_FILE'].removeprefix('geo/'), 'sha256': env['TRUST_SHA256']},
+            'windowsPublisherName': publisher, 'accessTrust': {'file': env['TRUST_FILE'].removeprefix('geo/'), 'sha256': env['TRUST_SHA256']},
             'nativeRuntimes': {},
             'verified': {'djangoCheck': 'no issues', 'djangoGate': {'labels': env['DJANGO_GATE'].split(), 'ran': int(ran.group(1)), 'result': 'OK'},
                          'frontendUnit': node_counts('frontend-unit.log'), 'frontendBuild': 'tsc --noEmit && vite build: exit 0',
                          'clientTests': node_counts('npm-test.log'), 'npmAudit': 'omit=dev, audit-level=high: pass',
                          'nativeRuntimeGate': 'missingNativeRuntimes == []', 'checkoutCleanForStaging': True,
                          'noticeGate': 'THIRD-PARTY-NOTICES/Python-and-packages.md identical in win-unpacked and zip, lists every bundled package',
-                         'packagedConfig': 'version, appId, access trust == committed descriptor, update source, publisher null',
+                         'packagedConfig': 'version, appId, access trust == committed descriptor, update source, publisher == RELEASE_PUBLISHER (package.json and app-update.yml)',
                          'installerAuthenticode': 'NotSigned',
                          'smokeBackend': json.loads((out / 'smoke-backend.json').read_text(encoding='utf-8')),
                          'smokePrincipal': 'synthetic recipient fixture (test_terrier_desktop_access.py), district co-05, temporary state'},
@@ -431,13 +469,13 @@ jobs:
         with:
           name: ${{ env.ARTIFACT }}
           path: |
-            ${{ runner.temp }}/out/Terrier-1.0.3-win-x64-unsigned-installer.exe
-            ${{ runner.temp }}/out/Terrier-1.0.3-win-x64-unsigned-preview.zip
-            ${{ runner.temp }}/out/Terrier-1.0.3-provenance.json
+            ${{ runner.temp }}/out/Terrier-${{ env.VERSION }}-win-x64-unsigned-installer.exe
+            ${{ runner.temp }}/out/Terrier-${{ env.VERSION }}-win-x64-unsigned-preview.zip
+            ${{ runner.temp }}/out/Terrier-${{ env.VERSION }}-provenance.json
             ${{ runner.temp }}/out/Python-and-packages.md
             ${{ runner.temp }}/out/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
           compression-level: 0
 
   release:
@@ -479,6 +517,11 @@ jobs:
           gh api "repos/$GH_REPO/releases?per_page=100" --paginate | jq -s --arg t "$RELEASE_TAG" '[add[] | select(.tag_name == $t)]' > ../matches.json
           if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then echo "::error::tag $RELEASE_TAG exists"; exit 1; fi
           if [ "$(jq length ../matches.json)" -eq 0 ]; then
+            if [ -n "$RELEASE_PUBLISHER" ]; then
+              update_note="- Unsigned INPUT of the signed release $STABLE_TAG. Its updater is pinned to the publisher subject $RELEASE_PUBLISHER and installs only signed desktop-v* releases that Windows reports Valid for exactly that subject; machines that do not trust that self-signed certificate never update. This prerelease's tag does not match the updater's release pattern."
+            else
+              update_note="- Automatic updates are not available for this build. Updates require a signed desktop-v* release, and the updater refuses unsigned installers. This prerelease's tag does not match the updater's release pattern, so no installed client treats it as an update."
+            fi
             cat > ../notes.md <<EOF
           Unsigned manual-install PREVIEW of $PRODUCT $VERSION for Windows x64. This is not a regular release.
 
@@ -489,12 +532,12 @@ jobs:
 
           **Read before installing**
           - NOT CODE-SIGNED. Windows SmartScreen will warn you.
-          - Automatic updates are not available for this build. Updates require a signed desktop-v* release, and the updater refuses unsigned installers. This prerelease's tag does not match the updater's release pattern, so no installed client treats it as an update.
+          $update_note
           - The installer REPLACES an existing $PRODUCT installation for the same Windows user. Back up first if you have one.
           - Access requires an administrator approval from the Melange access server. New users who are not on the access server's LAN cannot enroll yet.
 
           **What was verified on the runner**
-          - Django check and the CI test subset (release.yml's suites plus the pyarrow tests), frontend unit tests and build, client tests, npm audit (production, high), the native-runtime gate, the packaged configuration (access trust equals the installed apps' public descriptor; update source $GITHUB_REPOSITORY; no publisher), installer Authenticode NotSigned, and a packaged-runtime backend smoke on empty data with a synthetic test principal.
+          - Django check and the CI test subset (release.yml's suites plus the pyarrow tests), frontend unit tests and build, client tests, npm audit (production, high), the native-runtime gate, the packaged configuration (access trust equals the installed apps' public descriptor; update source $GITHUB_REPOSITORY; publisher pin ${RELEASE_PUBLISHER:-none}), installer Authenticode NotSigned, and a packaged-runtime backend smoke on empty data with a synthetic test principal.
 
           **Not run**: suites that need the gitignored live-data bundle (listed in the provenance file), Playwright e2e, and live-data verifiers.
 
