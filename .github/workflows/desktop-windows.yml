@@ -61,7 +61,7 @@ env:
   REVIEWED_BASE: 96d99f9ebfa31f9bc0be2666c5b4b4c6d279353b
   CI_FILES: .github/workflows/desktop-windows.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
-  TOOLING_SHA: 252598bc1a512ab5e7fb3f5558efa1f65a33af57
+  TOOLING_SHA: 052927b17e7a270aff99199b21c55af0c7cb0e92
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: 081f44db43bac05d25e4cedc93891b7f31595b920f4deda7f6dc04a9f7548a3a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
