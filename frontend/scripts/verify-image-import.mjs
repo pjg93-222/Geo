@@ -4,13 +4,16 @@ import {importListResponse} from './walk-import-fixture.mjs';
 import {zipSync,unzipSync,strToU8,strFromU8} from 'fflate';
 import {createServer} from 'node:http';
 import {readFile,mkdir,writeFile,unlink} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {extname,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 
 const root=fileURLToPath(new URL('../dist/',import.meta.url));
 const output=fileURLToPath(new URL('../../_build/image-import-verification/',import.meta.url));
-const workbook=process.env.TERRIER_IMAGE_WORKBOOK||'C:/Users/pgoff/Downloads/CT Door Knock Streets 1.xlsx';
+// The workbook is a private local file: pass its path as the first argument or in TERRIER_IMAGE_WORKBOOK.
+const workbook=process.argv[2]||process.env.TERRIER_IMAGE_WORKBOOK;
+if(!workbook||!existsSync(workbook)){console.error('Usage: node scripts/verify-image-import.mjs <workbook.xlsx> (or set TERRIER_IMAGE_WORKBOOK). '+(workbook?'Not found: '+workbook:'No workbook given.'));process.exit(2);}
 const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png','.mp4':'video/mp4','.woff2':'font/woff2','.wasm':'application/wasm','.gz':'application/gzip'};
 const server=createServer(async(req,res)=>{
   try{
