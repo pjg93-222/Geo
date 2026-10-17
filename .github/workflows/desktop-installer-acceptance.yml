@@ -1,4 +1,4 @@
-# Installer acceptance for the published Terrier 1.0.3 unsigned Windows installer.
+# Installer acceptance for the published Terrier 1.0.7 unsigned Windows installer.
 # Repository file: .github/workflows/desktop-installer-acceptance.yml (pjg93-222/Geo).
 #
 # Downloads the EXISTING release asset (public URL, no token), verifies its sha256, records the
@@ -35,13 +35,15 @@ jobs:
     env:
       APP_ID: terrier
       APP_NAME: Terrier
-      APP_VERSION: '1.0.3'
+      APP_VERSION: '1.0.7'
       RELEASE_REPO: pjg93-222/Geo
-      RELEASE_TAG: desktop-preview-v1.0.3
-      ASSET: Terrier-1.0.3-win-x64-unsigned-installer.exe
-      ASSET_SHA256: 884520127a98cabd08776c4fe7599b27bf72ceacd230f6091db8ef7acd20794b
-      ZIP: Terrier-1.0.3-win-x64-unsigned-preview.zip
-      ZIP_SHA256: bbbdb3c808a6d1fde7b1e060aed3efd6939a2d6c68eda45ea926786a1989bc40
+      RELEASE_TAG: desktop-preview-v1.0.7
+      ASSET: Terrier-1.0.7-win-x64-unsigned-installer.exe
+      # SET BEFORE PUSHING: the sha256 of these two assets from desktop-preview-v1.0.7 SHA256SUMS.txt (equal to its provenance
+      # artifacts and the release API digests). Until then the download check fails and the installer is never executed.
+      ASSET_SHA256: SET-FROM-desktop-preview-v1.0.7-SHA256SUMS
+      ZIP: Terrier-1.0.7-win-x64-unsigned-preview.zip
+      ZIP_SHA256: SET-FROM-desktop-preview-v1.0.7-SHA256SUMS
       ZIP_EXPECTED_NOTE: 'none: exact parity (the hosted build zipped win-unpacked before any smoke)'
     defaults:
       run:
@@ -320,39 +322,59 @@ jobs:
           }
 
           # uninstall.silent verdict. Gated: the launcher, Uninstall <Name>.exe and the relaunched %TEMP% Un_*.exe (whose parent
-          # is the launcher) must all exit 0, and no window may be visible. Exactly two descendants are tolerated, each matched on
-          # image, exact command line, parent and exit code:
-          #   nsisExecutionPolicyProbe  - image exactly %SystemRoot%\System32\... or, under WOW64 redirection of the 32-bit NSIS
-          #                               uninstaller, %SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe (Geo v6.1 run
-          #                               38902836244); the command line stays the exact System32 form observed in
-          #                               Geo v5 run 38896840011, parent = an uninstaller process, exit code 0 or 1 (the probe's two outputs)
-          #   probeConsoleHost          - %SystemRoot%\System32\conhost.exe "0x4", parent = the probe or an uninstaller process, exit 0
-          # Any other descendant, or a tolerated one that deviates in any of those fields, fails the check. Probe absence is fine.
+          # is the launcher) must all exit 0, and no window may be visible. Only the helpers of electron-builder's NSIS
+          # un.checkAppRunning (app-builder-lib templates/nsis/include/allowOnlyOneInstallerInstance.nsh, CHECK_APP_RUNNING)
+          # are tolerated, each matched on image, exact command line, parent and exit code. Images may be the System32 form or,
+          # under WOW64 redirection of the 32-bit NSIS uninstaller, the SysWOW64 form; command lines name System32 as nsExec wrote it.
+          #   nsisExecutionPolicyProbe  - powershell.exe running one of IS_POWERSHELL_AVAILABLE's two probes (the
+          #                               ExecutionPolicy form observed in Geo v5 run 38896840011 and v6.1 run 38902836244; the
+          #                               Get-CimInstance form verbatim from the template), parent = an uninstaller process, exit 0 or 1
+          #   nsisFindProcess           - FIND_PROCESS's per-user fallback, cmd.exe /C tasklist ... | findstr ..., run when a probe
+          #                               reports PowerShell unavailable (observed in Melange 1.0.5 run 38998856644), parent = an
+          #                               uninstaller process, exit 1 only (findstr found no running <Name>.exe; 0 means the app was
+          #                               still running and fails)
+          #   nsisFindProcessTasklist / nsisFindProcessFindstr - the pipe's two programs, parent = that cmd.exe, command lines as
+          #                               cmd.exe forms them (reproduced locally with SysWOW64\cmd.exe), tasklist exit 0, findstr exit 1
+          #   probeConsoleHost          - %SystemRoot%\System32\conhost.exe "0x4", parent = a probe, the fallback or an uninstaller
+          #                               process, and only when a probe or the fallback is present, exit 0
+          # Any other descendant, or a tolerated one that deviates in any of those fields, fails the check. Absence of any helper is
+          # fine: the tree is sampled every ~500 ms, so short-lived helpers are recorded only when a sample lands on them.
           function SilentVerdict($launcher, $members, $visibleWindows, [string[]]$argv, [string]$product) {
             $root = "$env:SystemRoot"
+            $images = { param($leaf) @("$root\System32\$leaf", "$root\SysWOW64\$leaf") }
             $probeImage = "$root\System32\WindowsPowerShell\v1.0\powershell.exe"   # the command line names this form in every run
-            $probeImages = @($probeImage, "$root\SysWOW64\WindowsPowerShell\v1.0\powershell.exe")
-            $probeArgs = ' -C "if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }"'
+            $probeArgs = @(' -C "if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }"',
+              ' -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"')
+            $exe = "$product.exe"; $findstr = "$root\system32\findstr.exe"   # nsExec writes $SYSDIR in lower case
+            $findArgs = " /C tasklist /FI `"USERNAME eq %USERNAME%`" /FI `"IMAGENAME eq $exe`" /FO CSV /NH | `"$findstr`" /B /I /C:`"\`"$exe\`"`""
             $hostImage = "$root\System32\conhost.exe"
             $exactCommand = { param($m, $image, $suffix, $prefix) $cl = "$($m.commandLine)"; $head = $prefix + $image + $(if ($prefix -eq '"') { '"' } else { '' })
               $cl.Length -eq ($head.Length + $suffix.Length) -and $cl.StartsWith($head, [StringComparison]::OrdinalIgnoreCase) -and $cl.Substring($head.Length) -ceq $suffix }
             $imageIs = { param($m, $images) [bool]"$($m.path)" -and @($images | Where-Object { "$($m.path)" -ieq $_ }).Count -gt 0 }  # whole-path equality, no substring; an unrecorded image never matches
+            # One tolerated helper: every field must match; the reason names the fields that do not.
+            $tolerate = { param($r, $role, $label, $imgs, $image, $suffixes, $prefix, $parentOk, $exits)
+              $r.role = "${role}?"
+              $checks = [ordered]@{ image = (& $imageIs $r $imgs); argv = (@($suffixes | Where-Object { & $exactCommand $r $image $_ $prefix }).Count -gt 0); parent = [bool]$parentOk; exit = ($r.exited -and $r.exitCode -in $exits) }
+              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } elseif (-not "$($r.path)") { 'image not recorded' } else { "$label deviates: " + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
+              if ($r.ok) { $r.role = $role } }
+            $pidsOf = { param($role) @($rows | Where-Object { $_.role -eq $role } | ForEach-Object { $_.pid }) }
             $rows = @($members | ForEach-Object { [ordered]@{ pid = $_.pid; parent = $_.parent; name = $_.name; path = $_.path; exited = $_.exited; exitCode = $_.exitCode; commandLine = $_.commandLine; role = $null; ok = $false; reason = $null } })
             $uninstallerPids = @($rows | Where-Object { $_.name -ceq "Uninstall $product.exe" -and $_.pid -eq $launcher.pid } | ForEach-Object { $_.pid })
             foreach ($r in $rows) { if ($r.name -ceq "Uninstall $product.exe") { $r.role = 'uninstaller'; $r.ok = ($r.pid -eq $launcher.pid -and $r.exited -and $r.exitCode -eq 0); if (-not $r.ok) { $r.reason = 'uninstaller is not the launcher or did not exit 0' } } }
             foreach ($r in $rows) { if (-not $r.role -and $r.name -cmatch '^Un_[A-Z]\.exe$') { $r.role = 'uninstallerRelaunch'; $r.ok = ($uninstallerPids -contains $r.parent -and $r.exited -and $r.exitCode -eq 0); if (-not $r.ok) { $r.reason = 'relaunch parent is not the launcher or it did not exit 0' } } }
             $nsisPids = @($rows | Where-Object { $_.role -in 'uninstaller', 'uninstallerRelaunch' } | ForEach-Object { $_.pid })
             foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'powershell.exe') {
-              $r.role = 'nsisExecutionPolicyProbe?'
-              $checks = [ordered]@{ image = (& $imageIs $r $probeImages); argv = (& $exactCommand $r $probeImage $probeArgs '"'); parent = ($nsisPids -contains $r.parent); exit = ($r.exited -and $r.exitCode -in @(0, 1)) }
-              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } elseif (-not "$($r.path)") { 'image not recorded' } else { 'probe deviates: ' + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
-              if ($r.ok) { $r.role = 'nsisExecutionPolicyProbe' } } }
-            $probePids = @($rows | Where-Object { $_.role -eq 'nsisExecutionPolicyProbe' } | ForEach-Object { $_.pid })
+              & $tolerate $r 'nsisExecutionPolicyProbe' 'probe' (& $images 'WindowsPowerShell\v1.0\powershell.exe') $probeImage $probeArgs '"' ($nsisPids -contains $r.parent) @(0, 1) } }
+            $probePids = @(& $pidsOf 'nsisExecutionPolicyProbe')
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'cmd.exe') {
+              & $tolerate $r 'nsisFindProcess' 'find-process fallback' (& $images 'cmd.exe') "$root\System32\cmd.exe" @($findArgs) '"' ($nsisPids -contains $r.parent) @(1) } }
+            $findPids = @(& $pidsOf 'nsisFindProcess')
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'tasklist.exe') {
+              & $tolerate $r 'nsisFindProcessTasklist' 'find-process tasklist' (& $images 'tasklist.exe') 'tasklist' @("  /FI `"USERNAME eq $env:USERNAME`" /FI `"IMAGENAME eq $exe`" /FO CSV /NH ") '' ($findPids -contains $r.parent) @(0) } }
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'findstr.exe') {
+              & $tolerate $r 'nsisFindProcessFindstr' 'find-process findstr' (& $images 'findstr.exe') $findstr @("  /B /I /C:`"\`"$exe\`"`"") '"' ($findPids -contains $r.parent) @(1) } }
             foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'conhost.exe') {
-              $r.role = 'probeConsoleHost?'
-              $checks = [ordered]@{ image = (& $imageIs $r @($hostImage)); argv = (& $exactCommand $r $hostImage ' 0x4' '\??\'); parent = (($probePids + $nsisPids) -contains $r.parent -and $probePids.Count -gt 0); exit = ($r.exited -and $r.exitCode -eq 0) }
-              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } elseif (-not "$($r.path)") { 'image not recorded' } else { 'console host deviates: ' + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
-              if ($r.ok) { $r.role = 'probeConsoleHost' } } }
+              & $tolerate $r 'probeConsoleHost' 'console host' @($hostImage) $hostImage @(' 0x4') '\??\' (($probePids + $findPids + $nsisPids) -contains $r.parent -and ($probePids.Count + $findPids.Count) -gt 0) @(0) } }
             foreach ($r in $rows) { if (-not $r.role) { $r.role = 'unexpected'; $r.ok = $false; $r.reason = 'unexpected descendant of the uninstaller' } }
             $relaunch = @($rows | Where-Object { $_.role -eq 'uninstallerRelaunch' })
             $failing = @($rows | Where-Object { -not $_.ok })
@@ -398,6 +420,25 @@ jobs:
             $imageUser = & $copy $geo61; $imageUser[2].path = 'C:\Users\runneradmin\powershell.exe'
             $imageSuffix = & $copy $geo61; $imageSuffix[2].path = 'D:\x\C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
             $hostOrphan = & $copy $geo6; $hostOrphan += [ordered]@{ pid = 1261; parent = 1240; name = 'conhost.exe'; path = "$sys\system32\conhost.exe"; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" }
+            # Melange 1.0.5 run 38998856644 set, verbatim: the FIND_PROCESS cmd.exe fallback and its console host were sampled.
+            $launcher105 = [ordered]@{ pid = 8056; exited = $true; exitCode = 0 }
+            $mel105 = @(
+              [ordered]@{ pid = 1536; parent = 8056; name = 'Un_A.exe'; path = 'C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Melange\' },
+              [ordered]@{ pid = 1884; parent = 3852; name = 'conhost.exe'; path = 'C:\Windows\system32\conhost.exe'; exited = $true; exitCode = 0; commandLine = '\??\C:\Windows\system32\conhost.exe 0x4' },
+              [ordered]@{ pid = 3852; parent = 1536; name = 'cmd.exe'; path = 'C:\Windows\SysWOW64\cmd.exe'; exited = $true; exitCode = 1; commandLine = '"C:\Windows\system32\cmd.exe" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq Melange.exe" /FO CSV /NH | "C:\Windows\system32\findstr.exe" /B /I /C:"\"Melange.exe\""' },
+              [ordered]@{ pid = 8056; parent = 7244; name = 'Uninstall Melange.exe'; path = 'D:\a\_temp\acc\program\Melange\Uninstall Melange.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Melange\Uninstall Melange.exe" /currentuser /S' })
+            # The pipe's two programs as SysWOW64\cmd.exe forms them (command-line shape reproduced locally), and the other probe.
+            $mel105Pipe = (& $copy $mel105) + @(
+              [ordered]@{ pid = 2001; parent = 3852; name = 'tasklist.exe'; path = 'C:\Windows\SysWOW64\tasklist.exe'; exited = $true; exitCode = 0; commandLine = "tasklist  /FI `"USERNAME eq $env:USERNAME`" /FI `"IMAGENAME eq Melange.exe`" /FO CSV /NH " },
+              [ordered]@{ pid = 2002; parent = 3852; name = 'findstr.exe'; path = 'C:\Windows\SysWOW64\findstr.exe'; exited = $true; exitCode = 1; commandLine = '"C:\Windows\system32\findstr.exe"  /B /I /C:"\"Melange.exe\""' },
+              [ordered]@{ pid = 2003; parent = 1536; name = 'powershell.exe'; path = 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Windows\system32\WindowsPowerShell\v1.0\powershell.exe" -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"' })
+            $findRunning = & $copy $mel105; $findRunning[2].exitCode = 0
+            $findArgv = & $copy $mel105; $findArgv[2].commandLine = '"C:\Windows\system32\cmd.exe" /C tasklist /FI "IMAGENAME eq Melange.exe" /FO CSV /NH | "C:\Windows\system32\findstr.exe" /B /I /C:"\"Melange.exe\""'
+            $findOtherExe = & $copy $mel105; $findOtherExe[2].commandLine = $findOtherExe[2].commandLine.Replace('Melange.exe', 'Other.exe')
+            $findParent = & $copy $mel105; $findParent[2].parent = 4321
+            $findImage = & $copy $mel105; $findImage[2].path = 'C:\Users\runneradmin\cmd.exe'
+            $tasklistStray = & $copy $mel105Pipe; $tasklistStray[4].parent = 1536
+            $findstrMatched = & $copy $mel105Pipe; $findstrMatched[5].exitCode = 0
             $cases = @(
               @{ name = 'Geo v5 run 38896840011 set (probe present)'; expect = $true; launcher = $launcher5; set = $geo5 },
               @{ name = 'Geo v6 run 38900109141 set (probe absent)'; expect = $true; launcher = $launcher6; set = $geo6 },
@@ -414,10 +455,19 @@ jobs:
               @{ name = 'probe with a different parent'; expect = $false; launcher = $launcher5; set = $parentChanged },
               @{ name = 'probe with exit code 0'; expect = $true; launcher = $launcher5; set = $exitZero },
               @{ name = 'probe with exit code 2'; expect = $false; launcher = $launcher5; set = $exitChanged },
-              @{ name = 'console host without a probe'; expect = $false; launcher = $launcher6; set = $hostOrphan }
+              @{ name = 'console host without a probe'; expect = $false; launcher = $launcher6; set = $hostOrphan },
+              @{ name = 'Melange 1.0.5 run 38998856644 set (find-process fallback)'; expect = $true; launcher = $launcher105; set = $mel105; product = 'Melange' },
+              @{ name = 'find-process fallback with tasklist, findstr and the Get-CimInstance probe'; expect = $true; launcher = $launcher105; set = $mel105Pipe; product = 'Melange' },
+              @{ name = 'find-process exit 0 (app still running)'; expect = $false; launcher = $launcher105; set = $findRunning; product = 'Melange' },
+              @{ name = 'find-process with a different argv'; expect = $false; launcher = $launcher105; set = $findArgv; product = 'Melange' },
+              @{ name = 'find-process for another executable'; expect = $false; launcher = $launcher105; set = $findOtherExe; product = 'Melange' },
+              @{ name = 'find-process with a different parent'; expect = $false; launcher = $launcher105; set = $findParent; product = 'Melange' },
+              @{ name = 'find-process image in a user directory'; expect = $false; launcher = $launcher105; set = $findImage; product = 'Melange' },
+              @{ name = 'tasklist not under the find-process'; expect = $false; launcher = $launcher105; set = $tasklistStray; product = 'Melange' },
+              @{ name = 'findstr matched (app still running)'; expect = $false; launcher = $launcher105; set = $findstrMatched; product = 'Melange' }
             )
             foreach ($c in $cases) {
-              $v = SilentVerdict $c.launcher $c.set @() ([string[]]@('/currentuser', '/S')) 'Terrier'
+              $v = SilentVerdict $c.launcher $c.set @() ([string[]]@('/currentuser', '/S')) $(if ($c.product) { $c.product } else { 'Terrier' })
               [ordered]@{ case = $c.name; expected = $c.expect; actual = $v.ok; ok = ($v.ok -eq $c.expect); failing = @($v.failing | ForEach-Object { "$($_.name): $($_.reason)" }) }
             }
           }
