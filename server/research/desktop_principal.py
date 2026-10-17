@@ -112,11 +112,12 @@ def prepare_principal(principal, state_root):
             return desktop_owner.credential(principal) is None
         return not user or not user.has_usable_password()
 
-    existing, user = inspect()
-    if principal.mode == 'existing-owner' and desktop_owner.credential(principal) is None and user.has_usable_password():
+    def adopts(user):
         # An owner who already has a password here keeps it, as the one password for every district.
-        desktop_owner.set_credential(principal, user.password)
-    if existing and user and not needs_password(user):
+        return principal.mode == 'existing-owner' and desktop_owner.credential(principal) is None and user.has_usable_password()
+
+    existing, user = inspect()
+    if existing and user and not adopts(user) and not needs_password(user):
         return None
     result = {'launchPath': None}
 
@@ -131,6 +132,11 @@ def prepare_principal(principal, state_root):
                         principal_id=principal.principal_id, account_identity=principal.account_identity,
                         local_username=principal.local_username, district_id=principal.district_id,
                         mode=principal.mode, user=user)
+                if adopts(user):
+                    AuditEvent.objects.create(actor=principal.local_username, action='account.desktop_owner_password_adopted',
+                                              detail={'district': principal.district_id})
+                    # The last write before commit: if publishing the credential fails, the audit event rolls back.
+                    desktop_owner.set_credential(principal, user.password)
                 if needs_password(user):
                     path = create_invitation(principal.local_username, administrator=True, reset=user is not None)
                     token = path.partition('=')[2]
