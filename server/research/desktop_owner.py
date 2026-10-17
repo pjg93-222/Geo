@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import subprocess
 import tempfile
@@ -90,6 +91,22 @@ def _system(name):
     return os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', name)
 
 
+def _dacl(path):
+    """The DACL of path as (flags, [ace fields]) from its SDDL (icacls /save): language-independent, and the SACL
+    (for example the mandatory integrity label an elevated process attaches to what it creates) is not an access grant."""
+    descriptor, saved = tempfile.mkstemp(prefix='terrier-owner-acl-', suffix='.txt')
+    os.close(descriptor)
+    try:
+        subprocess.run([_system('icacls.exe'), str(path), '/save', saved], capture_output=True, timeout=30, check=True)
+        text = Path(saved).read_bytes().decode('utf-16')
+    finally:
+        Path(saved).unlink(missing_ok=True)
+    match = re.search(r'D:([A-Z]*)((?:\([^)]*\))*)', text)
+    if not match:
+        raise OwnerStoreUnavailable('The desktop owner directory has no readable access list')
+    return match.group(1), [ace.split(';') for ace in re.findall(r'\(([^)]*)\)', match.group(2))]
+
+
 def _secure(directory):
     """Create the owner directory if needed and restrict it to this user and SYSTEM; fail closed."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -103,8 +120,11 @@ def _secure(directory):
             raise OwnerStoreUnavailable('The current Windows account could not be identified')
         # This directory only: drop inherited entries, grant full control to this user and SYSTEM (inherited by its files).
         run(_system('icacls.exe'), str(directory), '/inheritance:r', '/grant:r', f'*{sid}:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F')
-        entries = [line for line in run(_system('icacls.exe'), str(directory)).splitlines() if ':(' in line]
-        if len(entries) != 2 or any('(I)' in line for line in entries):
+        # Exactly two non-inherited allow entries, full control, for this user and SYSTEM; the list is protected.
+        flags, aces = _dacl(directory)
+        account = lambda value: {'SY': 'S-1-5-18', 'LA': sid if sid.endswith('-500') else 'LA'}.get(value, value)
+        if ('P' not in flags or len(aces) != 2 or any(len(ace) != 6 or ace[0] != 'A' or ace[2] != 'FA' or 'ID' in ace[1] for ace in aces)
+                or sorted(account(ace[5]) for ace in aces) != sorted([sid, 'S-1-5-18'])):
             raise OwnerStoreUnavailable('The desktop owner directory still grants access to others')
     except (OSError, subprocess.SubprocessError) as error:
         raise OwnerStoreUnavailable('The desktop owner directory could not be restricted to this user') from error

@@ -262,17 +262,39 @@ class DesktopOwnerTests(TestCase):
         self.assertIsNone(desktop_owner.credential(self.principal()))
         self.assertEqual(self.setup_password('Another-Synthetic-Password-55!')[0], 200)
 
+    @staticmethod
+    def windows_sid():
+        whoami = os.path.join(os.environ['SystemRoot'], 'System32', 'whoami.exe')
+        return subprocess.run([whoami, '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True, check=True).stdout.strip().split(',')[-1].strip('"')
+
     @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
     def test_owner_directory_is_restricted_to_this_user_and_system(self):
         desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        sid = self.windows_sid()
+        flags, aces = desktop_owner._dacl(self.root)
+        self.assertIn('P', flags)
+        self.assertEqual(sorted((ace[0], ace[2], ace[5]) for ace in aces), sorted([('A', 'FA', sid), ('A', 'FA', 'SY')]))
+        _, inherited = desktop_owner._dacl(self.root / desktop_owner.CREDENTIAL)
+        self.assertEqual(sorted(ace[5] for ace in inherited), sorted([sid, 'SY']))
+        self.assertTrue(all('ID' in ace[1] for ace in inherited))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
+    def test_a_mandatory_integrity_label_is_not_an_access_grant(self):
+        # An elevated process (a hosted CI runner) labels what it creates; the label is in the SACL, not the DACL.
+        self.root.mkdir(parents=True)
         icacls = os.path.join(os.environ['SystemRoot'], 'System32', 'icacls.exe')
-        for target in (self.root, self.root / desktop_owner.CREDENTIAL):
-            entries = [line for line in subprocess.run([icacls, str(target)], capture_output=True, text=True, check=True).stdout.splitlines()
-                       if ':(' in line]
-            self.assertEqual(len(entries), 2, entries)
-        directory = [line for line in subprocess.run([icacls, str(self.root)], capture_output=True, text=True, check=True).stdout.splitlines()
-                     if ':(' in line]
-        self.assertFalse(any('(I)' in line for line in directory), directory)
+        subprocess.run([icacls, str(self.root), '/setintegritylevel', '(OI)(CI)low'], capture_output=True, check=True)
+        desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        self.assertTrue(desktop_owner.check(self.principal(), PASSWORD))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
+    def test_another_explicit_grant_fails_closed(self):
+        self.root.mkdir(parents=True)
+        icacls = os.path.join(os.environ['SystemRoot'], 'System32', 'icacls.exe')
+        subprocess.run([icacls, str(self.root), '/grant', '*S-1-1-0:(OI)(CI)R'], capture_output=True, check=True)   # Everyone
+        with self.assertRaises(OwnerStoreUnavailable):
+            desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        self.assertFalse((self.root / desktop_owner.CREDENTIAL).exists())
 
     def test_restriction_failure_writes_nothing(self):
         with mock.patch.object(desktop_owner.subprocess, 'run', side_effect=subprocess.CalledProcessError(5, 'icacls')), \
