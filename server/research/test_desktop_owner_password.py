@@ -4,16 +4,22 @@ Synthetic accounts, a temporary desktop-level owner directory and the real middl
 through a WSGI handler, with the native boundary marker inserted as the launcher's token gate does.
 """
 import json
+import os
+import subprocess
 import tempfile
+import unittest
 from http.cookies import SimpleCookie
 from pathlib import Path
+from unittest import mock
 
+from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import User
 from django.core.handlers.wsgi import WSGIHandler
 from django.test import RequestFactory, TestCase, override_settings
 
 from . import desktop_owner
 from .desktop_access import DesktopBoundary
+from .desktop_owner import OwnerStoreUnavailable
 from .desktop_principal import Principal
 from .models import AuditEvent, DesktopPrincipalBinding, Invitation, LoginAttempt
 from .views import create_invitation
@@ -23,6 +29,17 @@ APP_SESSION = 'a' * 43
 SERVER, DEVICE, OWNER_ID = ('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
                             '33333333-3333-4333-8333-333333333333')
 RECIPIENT_ID = '44444444-4444-4444-8444-444444444444'
+
+
+def write_raw(root, text):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / desktop_owner.CREDENTIAL).write_text(text, encoding='utf-8')
+
+
+def foreign_credential(principal):
+    return json.dumps({'schemaVersion': 1, 'binding': {'serverId': principal.server_id, 'deviceId': principal.device_id,
+                       'principalId': '55555555-5555-4555-8555-555555555555', 'localUsername': 'admin'},
+                       'password': make_password('Another-Owner-Password-For-Tests-1!')})
 
 
 class DesktopOwnerTests(TestCase):
@@ -206,3 +223,60 @@ class DesktopOwnerTests(TestCase):
         self.assertIsNone(desktop_owner.root(self.principal(principal_id=RECIPIENT_ID, mode='recipient')))
         with self.assertRaises(ValueError):
             desktop_owner.set_credential(self.principal(), PASSWORD)          # plaintext is refused
+
+    def test_unreadable_or_foreign_credential_fails_sign_in_closed(self):
+        for text in ('{not json', foreign_credential(self.principal()), json.dumps({'schemaVersion': 1})):
+            write_raw(self.root, text)
+            self.cookies = SimpleCookie()
+            self.assertEqual(self.sign_in()[0], 401, text)
+            self.assertFalse(self.session()['authenticated'])
+            with self.assertRaises(OwnerStoreUnavailable):
+                desktop_owner.credential(self.principal())
+            self.assertEqual((self.root / desktop_owner.CREDENTIAL).read_text(encoding='utf-8'), text)
+
+    def test_pending_owner_invitation_is_refused_and_the_file_is_unchanged(self):
+        self.setup_password()
+        before = (self.root / desktop_owner.CREDENTIAL).read_bytes()
+        status, _ = self.setup_password('Another-Synthetic-Password-55!')
+        self.assertEqual(status, 400)
+        self.assertEqual((self.root / desktop_owner.CREDENTIAL).read_bytes(), before)
+        self.assertEqual(Invitation.objects.filter(used_at=None).count(), 1)     # the second invitation stays unspent
+        # A damaged credential: the invitation is refused too and nothing is written.
+        write_raw(self.root, '{not json')
+        status, _ = self.setup_password('Another-Synthetic-Password-55!')
+        self.assertEqual(status, 400)
+        self.assertEqual((self.root / desktop_owner.CREDENTIAL).read_text(encoding='utf-8'), '{not json')
+
+    def test_a_second_set_credential_raises_and_never_replaces(self):
+        desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        before = (self.root / desktop_owner.CREDENTIAL).read_bytes()
+        with self.assertRaises(OwnerStoreUnavailable):
+            desktop_owner.set_credential(self.principal(), make_password('Another-Synthetic-Password-55!'))
+        self.assertEqual((self.root / desktop_owner.CREDENTIAL).read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), [desktop_owner.CREDENTIAL])   # no temp file left
+        self.assertTrue(desktop_owner.check(self.principal(), PASSWORD))
+
+    def test_deleting_the_credential_is_the_deliberate_reset(self):
+        desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        (self.root / desktop_owner.CREDENTIAL).unlink()
+        self.assertIsNone(desktop_owner.credential(self.principal()))
+        self.assertEqual(self.setup_password('Another-Synthetic-Password-55!')[0], 200)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACL')
+    def test_owner_directory_is_restricted_to_this_user_and_system(self):
+        desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        icacls = os.path.join(os.environ['SystemRoot'], 'System32', 'icacls.exe')
+        for target in (self.root, self.root / desktop_owner.CREDENTIAL):
+            entries = [line for line in subprocess.run([icacls, str(target)], capture_output=True, text=True, check=True).stdout.splitlines()
+                       if ':(' in line]
+            self.assertEqual(len(entries), 2, entries)
+        directory = [line for line in subprocess.run([icacls, str(self.root)], capture_output=True, text=True, check=True).stdout.splitlines()
+                     if ':(' in line]
+        self.assertFalse(any('(I)' in line for line in directory), directory)
+
+    def test_restriction_failure_writes_nothing(self):
+        with mock.patch.object(desktop_owner.subprocess, 'run', side_effect=subprocess.CalledProcessError(5, 'icacls')), \
+                mock.patch.object(desktop_owner.os, 'name', 'nt'):
+            with self.assertRaises(OwnerStoreUnavailable):
+                desktop_owner.set_credential(self.principal(), make_password(PASSWORD))
+        self.assertFalse((self.root / desktop_owner.CREDENTIAL).exists())
