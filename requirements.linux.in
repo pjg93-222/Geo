@@ -1,6 +1,6 @@
 # Runtime dependencies of the hosted image (Dockerfile). Only what the serving code imports: Django and its password
-# hasher, the WSGI server, numpy/pandas (score store, untapped) and shapely (area geometry, imported lazily).
-# geopandas, pyogrio, pyproj and requests build the stores on the laptop and are deliberately not in the image.
+# hasher, the WSGI server, numpy/pandas (score store, untapped), shapely (area geometry, imported lazily) and pyproj (the walk views
+# reproject lines through tools.walk_geo). geopandas, pyogrio and requests build the stores on the laptop and are deliberately not in the image.
 #
 # The hashed lock (requirements.linux.lock, committed next to this file) is for CPython 3.12 on linux x86_64, wheels only. Regenerate
 # it from any OS with pip alone (its header has the exact command): resolve with `pip install --dry-run --report` for
@@ -11,3 +11,4 @@ argon2-cffi>=25.1,<26
 waitress>=3.0,<4
 pandas>=2.2,<4
 shapely>=2.1,<3
+pyproj>=3.7,<4

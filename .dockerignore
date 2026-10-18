@@ -13,6 +13,8 @@
 !frontend/index.html
 !frontend/src/**
 !frontend/public/**
+!frontend/scripts/copy-ocr-assets.mjs
+!frontend/scripts/ocr-LICENSE-tessdata.txt
 # Exclusions come last so they win over the inclusions above.
 **/__pycache__/**
 **/*.pyc
