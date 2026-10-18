@@ -39,11 +39,10 @@ jobs:
       RELEASE_REPO: pjg93-222/Geo
       RELEASE_TAG: desktop-preview-v1.0.7
       ASSET: Terrier-1.0.7-win-x64-unsigned-installer.exe
-      # SET BEFORE PUSHING: the sha256 of these two assets from desktop-preview-v1.0.7 SHA256SUMS.txt (equal to its provenance
-      # artifacts and the release API digests). Until then the download check fails and the installer is never executed.
-      ASSET_SHA256: SET-FROM-desktop-preview-v1.0.7-SHA256SUMS
+      # From desktop-preview-v1.0.7 (build run 39081008873, target S 78c45b710): SHA256SUMS.txt = provenance artifacts = API digests.
+      ASSET_SHA256: 7390fe7826538a717ef8cdd11d7636b90fb6a0edfce84a02b64aa9acde76ad1d
       ZIP: Terrier-1.0.7-win-x64-unsigned-preview.zip
-      ZIP_SHA256: SET-FROM-desktop-preview-v1.0.7-SHA256SUMS
+      ZIP_SHA256: d706f182c77201e3f869c4f37fb2e7d1d86e917b19ca60d8c76ee8e5dde92507
       ZIP_EXPECTED_NOTE: 'none: exact parity (the hosted build zipped win-unpacked before any smoke)'
     defaults:
       run:
