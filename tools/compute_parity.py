@@ -24,6 +24,12 @@
   check on A1 and B. A `metadata` table that differs between A1 and A2 is not left out whole: per key (and per field of a JSON value,
   such as w1.seconds) only what varies is, the rest must match B. One throwaway demo key serves A1, A2 and B (scratch/demo_key.hex,
   build_step.seed_demo_key), or the demo names, their search index and the stored key would differ in every build.
+  --single-reference (Paul 2026-10-18, D-242): the Windows side is built once (A1, no A2), so no variance is measured. What a store records
+  about the build itself is left out ONLY where the fixed, reviewed list tools/compute_volatile.json names it: per key and JSON field of the
+  key/value table of a SQLite store, each entry citing the line that writes it, and only when both values have the same JSON type (an entry
+  with or_null also takes null: the walk store's peak memory is a Windows call). Everything else stays exact: an unlisted key, table or
+  store, a shape change, and every zip and file (the bundle never reads the list). The list must be committed and clean (git status),
+  else the run does not start; the report records its sha256 and HEAD blob. Without --single-reference nothing changes.
   The shadow tables of an FTS5 table (demo_search_data, _idx, _docsize, _config, _content) are the physical layout of its index, which
   the SQLite library decides (D-177, ruling of 2026-10-13): when they are not exactly equal they must be equal after FTS5 'rebuild' by
   one library on scratch copies, and 400 MATCH queries must return the same rowids on the stores as built (fts_parity).
@@ -31,7 +37,9 @@
   One heavy job at a time: A1, then A2, then B. Never point --scratch at a .local folder.
 """
 import argparse
+import copy
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -132,6 +140,189 @@ def metadata_variance(a1, a2, b, measured=None):
     return left_out, mismatched
 
 
+# ---- the fixed volatile list of --single-reference (D-242) -----------------------------------------------------------------
+
+VOLATILE_FILE = REPO / 'tools' / 'compute_volatile.json'     # what --single-reference may leave out of a store: committed, reviewed, cited
+OR_NULL_TYPES = ('number', 'string', 'bool')
+LIST_FIELDS = ('store', 'table', 'key', 'pointer', 'writer', 'kind', 'needle')
+
+
+class Raw(str):
+    """A key/value cell that is not JSON (walk.meta[built_utc] is a bare ISO time): one leaf of the type 'text'."""
+
+
+def parse_value(value):
+    """A cell of a key/value table as one JSON document when it is JSON text, else as it is (Raw for text that is not JSON)."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return Raw(value)
+
+
+def value_type(value):
+    return ('null' if value is None else 'bool' if isinstance(value, bool) else 'number' if isinstance(value, (int, float))
+            else 'text' if isinstance(value, Raw) else 'string' if isinstance(value, str) else 'array' if isinstance(value, list)
+            else 'object' if isinstance(value, dict) else 'blob')
+
+
+def json_diffs(x, y, path=()):
+    """[(path, 'value' | 'shape')] for every leaf where two parsed documents differ: a leaf of another value or type is a 'value'
+    difference; another key set, another list length or a container against a leaf is a 'shape' difference."""
+    if isinstance(x, dict) and isinstance(y, dict):
+        return [d for k in sorted(set(x) | set(y))
+                for d in (json_diffs(x[k], y[k], (*path, k)) if k in x and k in y else [((*path, k), 'shape')])]
+    if isinstance(x, list) and isinstance(y, list):
+        return [(path, 'shape')] if len(x) != len(y) else [d for i, (p, q) in enumerate(zip(x, y)) for d in json_diffs(p, q, (*path, i))]
+    if isinstance(x, (dict, list)) or isinstance(y, (dict, list)):
+        return [(path, 'shape')]
+    return [] if value_type(x) == value_type(y) and x == y else [(path, 'value')]
+
+
+def json_at(document, path):
+    for step in path:
+        document = document[step]
+    return document
+
+
+def blanked(document, path):
+    """A copy of the parsed document with the leaf at `path` replaced by None (the whole document when the path is empty)."""
+    if not path:
+        return None
+    copied = copy.deepcopy(document)
+    json_at(copied, path[:-1])[path[-1]] = None
+    return copied
+
+
+def pointer_segments(pointer):
+    return [] if pointer == '' else [s.replace('~1', '/').replace('~0', '~') for s in pointer[1:].split('/')]
+
+
+def listed(entries, path):
+    """The entry whose pointer names the value path `path` (a `*` segment matches exactly one segment), else None."""
+    for entry in entries:
+        want = pointer_segments(entry['pointer'])
+        if len(want) == len(path) and all(w in ('*', str(p)) for w, p in zip(want, path)):
+            return entry
+    return None
+
+
+def listed_difference(x, y, entries):
+    """The labels of the listed entries that explain the difference between the two cells of one key (x: the Windows build, y: the
+    container), or None when anything is left that no entry explains: no difference in the parsed values (the same document in other
+    text), a shape difference, a leaf the list does not name, a value of another type (an entry with or_null also takes null), or a
+    document that differs beside the leaves left out (key order and number formatting count)."""
+    px, py = parse_value(x), parse_value(y)
+    diffs = json_diffs(px, py)
+    if not diffs:
+        return None
+    used, mx, my = set(), px, py
+    for path, kind in diffs:
+        entry = listed(entries, path)
+        if kind != 'value' or entry is None:
+            return None
+        types = {value_type(json_at(px, path)), value_type(json_at(py, path))}
+        if not (types <= {entry['or_null'], 'null'} if entry.get('or_null') else len(types) == 1):
+            return None
+        used.add('.'.join([entry['key'], *pointer_segments(entry['pointer'])]))
+        mx, my = blanked(mx, path), blanked(my, path)
+    return sorted(used) if json.dumps(mx, default=repr) == json.dumps(my, default=repr) else None
+
+
+def listed_variance(a, b, entries):
+    """(left_out, mismatched) for the key/value dicts of one table as the Windows build wrote it (a) and the container did (b), under the
+    volatile list's `entries` for that table. A key whose cells differ is left out only through listed_difference; a key that is unlisted
+    or present on one side only is a mismatch."""
+    left_out, mismatched = set(), []
+    for key in sorted(set(a) | set(b)):
+        if key in a and key in b and repr(a[key]) == repr(b[key]):
+            continue
+        labels = listed_difference(a[key], b[key], [e for e in entries if e['key'] == key]) if key in a and key in b else None
+        if labels is None:
+            mismatched.append(key)
+        else:
+            left_out.update(labels)
+    return sorted(left_out), mismatched
+
+
+def volatile_entries(volatile, name, table):
+    """The entries of the loaded volatile list for the store `name` (its file name; the district folder does not matter) and its table."""
+    return [e for e in volatile['entries'] if e['store'] == Path(name).name and e['table'] == table] if volatile else []
+
+
+def load_volatile(path=None):
+    """The fixed volatile list of --single-reference -> {'path', 'rel', 'sha256', 'entries'}. ValueError for a list that cannot be read and for
+    an entry that could reach more than a stamp: a store no build step writes as SQLite (so never a zip, the shown table, density.json or a
+    receipt), a table that is not a key/value table, a missing writer or needle, a key with a wildcard, a pointer of nothing but wildcards."""
+    path = Path(path or VOLATILE_FILE)
+    try:
+        raw = path.read_bytes()
+        document = json.loads(raw.decode('utf-8'))
+    except (OSError, ValueError) as error:
+        raise ValueError('cannot read the volatile list %s: %s' % (path, error)) from error
+    entries = document.get('entries') if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('the volatile list %s has no entries' % path)
+    stores = {Path(f).name for step in S.STEPS.values() for f in (step.store, *step.also) if f.endswith('.sqlite3')}
+    seen = set()
+    for number, entry in enumerate(entries):
+        if not (isinstance(entry, dict) and all(isinstance(entry.get(f), str) for f in LIST_FIELDS)):
+            problem = 'needs a string for each of ' + ', '.join(LIST_FIELDS)
+        elif entry['store'] not in stores:
+            problem = 'names %r, which is not a SQLite store of a build step: only a key/value table of a store can be listed' % entry['store']
+        elif entry['table'] not in KV_TABLES:
+            problem = 'names the table %r, which is not a key/value table (%s)' % (entry['table'], ', '.join(KV_TABLES))
+        elif not entry['key'] or '*' in entry['key']:
+            problem = 'needs one exact key'
+        elif entry['pointer'] and (entry['pointer'][0] != '/' or all(seg == '*' for seg in entry['pointer'][1:].split('/'))):
+            problem = 'has a pointer that is not "" or a JSON pointer naming a field (%r)' % entry['pointer']
+        elif not re.fullmatch(r'[\w./-]+:\d+', entry['writer']) or not entry['needle']:
+            problem = 'needs a writer (path:line) and a needle that line contains'
+        elif 'or_null' in entry and entry['or_null'] not in OR_NULL_TYPES:
+            problem = 'has an or_null that is not one of ' + ', '.join(OR_NULL_TYPES)
+        elif (entry['store'], entry['table'], entry['key'], entry['pointer']) in seen:
+            problem = 'is listed twice'
+        else:
+            seen.add((entry['store'], entry['table'], entry['key'], entry['pointer']))
+            continue
+        raise ValueError('the volatile list %s: entry %d %s' % (path, number, problem))
+    try:
+        rel = path.resolve().relative_to(REPO).as_posix()
+    except ValueError:
+        rel = path.as_posix()
+    return {'path': str(path), 'rel': rel, 'sha256': hashlib.sha256(raw).hexdigest(), 'entries': entries}
+
+
+def _git(repo, *args):
+    """stdout of `git -C <repo> ARGS`; a failure is a refusal (the list cannot be shown to be reviewed)."""
+    try:
+        done = subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError('git is unavailable (%s): the volatile list cannot be shown to be committed' % error) from error
+    if done.returncode:
+        raise ValueError('git %s failed: %s' % (' '.join(args), (done.stderr or done.stdout).strip()))
+    return done.stdout.strip()
+
+
+def reviewed_blob(path, repo=REPO):
+    """HEAD blob id of the volatile list. "Reviewed" means committed: a staged, unstaged or untracked change to the file, a file HEAD does not
+    hold, or a working file that does not hash to HEAD's blob (which git status can be told to overlook) is a refusal (ValueError)."""
+    try:
+        rel = Path(os.path.relpath(path, repo)).as_posix()
+    except ValueError as error:
+        raise ValueError('the volatile list %s is not in the repository %s' % (path, repo)) from error
+    if rel.startswith('..'):
+        raise ValueError('the volatile list %s is not in the repository %s' % (path, repo))
+    if _git(repo, 'status', '--porcelain', '--', rel):
+        raise ValueError('%s is not committed (git status --porcelain is not empty): --single-reference masks only from a reviewed, '
+                         'committed list' % rel)
+    blob = _git(repo, 'rev-parse', 'HEAD:' + rel)
+    if _git(repo, 'hash-object', '--', rel) != blob:
+        raise ValueError('%s differs from HEAD:%s although git status is empty: --single-reference masks only from a committed list' % (rel, rel))
+    return blob
+
+
 FTS_SHADOWS = ('_data', '_idx', '_docsize', '_config', '_content')       # the shadow tables of an FTS5 table
 MATCH_QUERIES = 400
 
@@ -215,8 +406,9 @@ def change_one_indexed_name(path):
     return fts, text, column
 
 
-def compare_store(name, a1, a2, b):
-    """(ok, detail) for one SQLite store in folders a1, a2 (Windows) and b (container)."""
+def compare_store(name, a1, a2, b, volatile=None):
+    """(ok, detail) for one SQLite store in folders a1, a2 (Windows) and b (container). `volatile` (--single-reference, a2 is a1): the loaded
+    fixed volatile list; a key/value table that differs between A1 and B is then judged key by key against its entries (listed_variance)."""
     paths = {label: Path(folder) / name for label, folder in (('A1', a1), ('A2', a2), ('B', b))}
     missing = [label for label, path in paths.items() if not path.is_file()]
     if missing:
@@ -235,9 +427,19 @@ def compare_store(name, a1, a2, b):
     names = (set(tables['A1']) | set(tables['A2']) | set(tables['B'])) - {t for shadows in fts.values() for t in shadows}
     noise = sorted(t for t in names if tables['A1'].get(t) != tables['A2'].get(t))
     differ = sorted(t for t in names if t not in noise and tables['A1'].get(t) != tables['B'].get(t))
+    left_out = [t for t in noise if t not in KV_TABLES]
+    for kv in KV_TABLES:                          # --single-reference: the stamps the list names, key by key; anything else the table differs in fails
+        entries = volatile_entries(volatile, name, kv)
+        pair = [key_values(paths[label], kv) for label in ('A1', 'B')] if entries and kv in differ else [None]
+        if None not in pair:
+            keys, mismatched = listed_variance(*pair, entries)
+            if mismatched:
+                differ[differ.index(kv)] = '%s[%s]' % (kv, ', '.join(mismatched))
+            elif keys:
+                differ.remove(kv)
+                left_out.append('%s[%s]' % (kv, ', '.join(keys)))
     if differ:
         return False, 'B differs from the Windows build in table(s): ' + ', '.join(differ)
-    left_out = [t for t in noise if t not in KV_TABLES]
     for kv in KV_TABLES:
         if kv in noise:                           # refine the mask: the stamps vary, the facts beside them must match
             pairs = [key_values(paths[label], kv) for label in ('A1', 'A2', 'B')]
@@ -259,8 +461,9 @@ def compare_store(name, a1, a2, b):
             return False, 'B differs from the Windows build: ' + detail
         notes.append(detail)
     rows = sum(t['rows'] for t in tables['B'].values())
-    return True, '; '.join(['%d tables, %s rows; run-to-run variance (left out): %s' % (len(tables['B']), '{:,}'.format(rows),
-                                                                                       ', '.join(left_out) or 'none')] + notes)
+    return True, '; '.join(['%d tables, %s rows; %s (left out): %s' % (len(tables['B']), '{:,}'.format(rows),
+                                                                      'fixed volatile list' if volatile else 'run-to-run variance',
+                                                                      ', '.join(left_out) or 'none')] + notes)
 
 
 def compare_file(name, a1, a2, b):
@@ -320,9 +523,9 @@ def compare_zip(name, a1, a2, b):
     return True, '%d members identical, %d with run-to-run variance (left out): %s' % (same, len(left_out), ', '.join(left_out))
 
 
-def compare(name, a1, a2, b):
+def compare(name, a1, a2, b, volatile=None):
     if name.endswith('.sqlite3'):
-        return compare_store(name, a1, a2, b)
+        return compare_store(name, a1, a2, b, volatile)
     return (compare_zip if name.endswith('.zip') else compare_file)(name, a1, a2, b)
 
 
@@ -675,8 +878,9 @@ def main(argv=None):
     parser.add_argument('--negative-control', action='store_true', help='also prove the comparison fails when one row is removed')
     parser.add_argument('--skip-container', action='store_true', help='Windows only: learn the run-to-run variance (A1 vs A2)')
     parser.add_argument('--single-reference', action='store_true',
-                        help='the Lighter proof (Paul 2026-10-13): build the Windows side once (A1, no A2) and compare B with it exactly, nothing left out as '
-                             'run-to-run variance; for artifacts whose Windows build has no stamp (the bundle zip). A store with a stamp fails it')
+                        help='the lighter proof (Paul 2026-10-13, D-242 2026-10-18): build the Windows side once (A1, no A2) and compare B with it exactly, '
+                             'but for the store stamps that the committed list tools/compute_volatile.json names (per key and field, each citing its '
+                             'writer, same JSON type only); any other stamp fails it, and a list that is not committed and clean stops the run')
     parser.add_argument('--reuse-windows', action='store_true', help='keep an existing <scratch>/A1 and A2 instead of building them again')
     parser.add_argument('--reuse-container', action='store_true',
                         help='with --reuse-windows: keep an existing <scratch>/B too and only judge the three again (a changed comparison rule); '
@@ -715,6 +919,13 @@ def main(argv=None):
     if args.link_inputs and (not args.inputs_from or 'contacts' in steps):
         parser.error('--link-inputs needs --inputs-from and a run without contacts (which changes street.sqlite3 in place)')
     names = store_names(d, steps, [f for f in args.files.split(',') if f])
+    volatile = None
+    if args.single_reference:                         # before anything builds: no reviewed list, no run
+        try:
+            volatile = load_volatile()
+            volatile['head_blob'] = reviewed_blob(volatile['path'])
+        except ValueError as error:
+            parser.error(str(error))
     folders = {label: scratch / label for label in ('A1', 'A2', 'B')}
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     report = {'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources,
@@ -737,6 +948,11 @@ def main(argv=None):
     report['inputs'] = needed
 
     report['single_reference'] = args.single_reference
+    if volatile:
+        report['volatile_list'] = {'path': volatile['rel'], 'sha256': volatile['sha256'], 'head_blob': volatile['head_blob'],
+                                   'entries': len(volatile['entries'])}
+        print('volatile list %s: %d entries, sha256 %s, HEAD blob %s' % (volatile['rel'], len(volatile['entries']), volatile['sha256'],
+                                                                         volatile['head_blob']), flush=True)
     for label in ('A1',) if args.single_reference else ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():
             print('%s: reusing %s' % (label, folders[label]), flush=True)
@@ -774,7 +990,7 @@ def main(argv=None):
             ok, detail = compare(name, folders['A1'], folders['A2'], folders['A2'])
             detail = '(Windows only) ' + detail
         else:
-            ok, detail = compare(name, folders['A1'], folders['A2'], folders['B'])
+            ok, detail = compare(name, folders['A1'], folders['A2'], folders['B'], volatile)
         before[name], passed[name] = differing_tables(detail), ok
         verdict(name, ok, detail)
         note = baseline_note(name, folders['A1']) if name.endswith('.sqlite3') and d['id'] == D.DEFAULT else None
@@ -787,13 +1003,13 @@ def main(argv=None):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(folders['B'] / name, target)
             if name.endswith('.sqlite3'):
-                skip = noise_tables(name, folders['A1'], folders['A2'])
+                skip = noise_tables(name, folders['A1'], folders['A2']) | {t for t in KV_TABLES if volatile_entries(volatile, name, t)}
                 table = remove_one_row(target, skip)
-                found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control), table, before[name])
+                found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control, volatile), table, before[name])
                 verdict('negative control ' + name, found, 'one row removed from %s: %s' % (table, 'detected' if found else 'NOT detected'))
                 shutil.copyfile(folders['B'] / name, target)
                 table, column, step = perturb_one_value(target, skip)
-                found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control), table, before[name])
+                found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control, volatile), table, before[name])
                 verdict('negative control ' + name + ' (value)', found, 'one %s.%s value changed (%s): %s' % (
                     table, column, step, 'detected' if found else 'NOT detected'))
                 fts = fts5_tables(folders['B'] / name, rebuildable=True)
