@@ -806,6 +806,7 @@ class RunTests(unittest.TestCase):
         self.salts = []             # the $TERRIER_WALK_SALT each build was started with
         self.after_container = None  # a function of B's folder, called once the fake container build has written it
         self.reviewed = lambda path: 'f' * 40       # reviewed_blob of a committed list: its HEAD blob (a function a test replaces)
+        self.tree = lambda repo: 'a' * 40           # built_tree_head of a clean tree: its HEAD (likewise)
 
     @staticmethod
     def write_step(out, step, stamp, rows, fts=None):
@@ -814,8 +815,9 @@ class RunTests(unittest.TestCase):
             (out / 'area_scores_shown.csv').write_bytes(b'area,score\n1,2\n')
             (out / 'area_scores_shown.manifest.json').write_bytes(SHOWN_MANIFEST.encode())
         elif step == 'walk':      # the walk store: a meta table that carries the stamps, and the peak memory only Windows can measure
-            make_walk_store(out / 'walk.sqlite3', 5, built=stamp, qa={'rows': 5, 'timing': {'total': stamp},
-                                                                       'peak_memory_mb': None if stamp == 'c' else 1234})
+            tick = sum(map(ord, stamp))           # a distinct ISO time and timing per build: the kinds of stamp the volatile list may leave out
+            make_walk_store(out / 'walk.sqlite3', 5, built='2026-10-18T10:00:%02d+00:00' % (tick % 60),
+                            qa={'rows': 5, 'timing': {'total': float(tick)}, 'peak_memory_mb': None if stamp == 'c' else 1234})
         elif step == 'ingest':    # ingest and extend stamp created_at in manifest.json: the zips differ between the two Windows builds
             make_zip(out / 'ingest' / 'k1.zip', {'manifest.json': {'created_at': stamp, 'snapshot': 'k1'}, 'rows.json': [1, 2]})
             (out / 'ingest' / 'ingest_receipt.json').write_bytes(b'{"rows": 2}')
@@ -853,7 +855,8 @@ class RunTests(unittest.TestCase):
                 mock.patch.object(P, 'windows_fingerprint', lambda pythons, repo, images: {i: {'python': 'win'} for i in images}),
                 mock.patch.object(P, 'container_fingerprint', lambda images, repo, out, run_id: {i: {'python': 'box'} for i in images}),
                 mock.patch.object(P, 'seed_stage', lambda images, repo, out, run_id, district, source, names: self.seeded.append((tuple(names), str(source)))),
-                mock.patch.object(P, 'reviewed_blob', lambda path: self.reviewed(path))]
+                mock.patch.object(P, 'reviewed_blob', lambda path: self.reviewed(path)),
+                mock.patch.object(P, 'built_tree_head', lambda repo: self.tree(repo))]
 
     def main(self, *args, b_rows=ROWS, scratch=None, image=EXPLICIT, score_image=SCORE_EXPLICIT, environ=None):
         """`image`, `score_image`: the --image / --score-image flags (None: no flag). `environ`: the process environment's
@@ -1140,10 +1143,12 @@ class RunTests(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls], ['windows', 'container'])
         self.assertRegex(text, r'PASS  walk\.sqlite3 .*fixed volatile list \(left out\): meta\[built_utc, qa\.peak_memory_mb, qa\.timing\.\*\]')
         self.assertRegex(text, r'PASS  negative control walk\.sqlite3 .*detected')
-        self.assertRegex(text, r'volatile list tools/compute_volatile\.json: \d+ entries, sha256 [0-9a-f]{64}, HEAD blob f{40}')
+        self.assertRegex(text, r'PASS  negative control walk\.sqlite3 \(beside the list\) +in meta: qa\.rows changed beside the listed fields: detected')
+        self.assertRegex(text, r'volatile list tools/compute_volatile\.json: \d+ entries, sha256 [0-9a-f]{64}, HEAD blob f{40}; tree .* HEAD a{40}')
         report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
         self.assertEqual(report['volatile_list'], {'path': 'tools/compute_volatile.json', 'entries': len(P.load_volatile()['entries']),
                                                    'sha256': hashlib.sha256(P.VOLATILE_FILE.read_bytes()).hexdigest(), 'head_blob': 'f' * 40})
+        self.assertEqual(report['repo_head'], 'a' * 40)
 
     def test_single_reference_stops_before_building_when_the_list_is_not_committed_or_cannot_be_read(self):
         def refuse(path):
@@ -1171,7 +1176,32 @@ class RunTests(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertEqual([c[0] for c in self.calls], ['windows', 'windows', 'container'])
         self.assertRegex(text, r'PASS  walk\.sqlite3 .*run-to-run variance \(left out\): meta\[built_utc, qa\.peak_memory_mb, qa\.timing\]')
-        self.assertNotIn('volatile_list', json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8')))
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertNotIn('volatile_list', report)
+        self.assertIsNone(report['repo_head'])
+
+    def test_single_reference_stops_before_building_on_a_dirty_tree_a_moved_writer_or_skip_container(self):
+        def dirty(repo):
+            raise ValueError('the tree %s to build has 2 uncommitted path(s) (git status --porcelain)' % repo)
+        self.tree = dirty
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--steps', 'walk')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('uncommitted', errors.getvalue())
+        self.tree = lambda repo: 'a' * 40
+        (self.root / 'tree').mkdir()                                      # a tree whose writers are not the lines the list cites
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--steps', 'walk', '--repo', str(self.root / 'tree'))
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('no longer holds the needle', errors.getvalue())
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--skip-container', scratch=self.root / 'skip')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('--skip-container', errors.getvalue())
+        self.assertEqual(self.calls, [])
 
     def test_refusals(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -2238,8 +2268,13 @@ class VolatileListTests(unittest.TestCase):
 
     # street, scores, walk: the cells their writers produce, with the stamp of one build and of another
 
+    @staticmethod
+    def iso(stamp):
+        """A distinct ISO-8601 time for a short label ('t1'); an ISO time stays as it is."""
+        return stamp if 'T' in stamp else '2026-10-18T10:00:%02d+00:00' % (sum(map(ord, stamp)) % 60)
+
     def street(self, stamp, **extra):
-        return {'schema_version': '1', 'source_sha256': json.dumps('abc'), 'created_at_utc': json.dumps(stamp), **extra}
+        return {'schema_version': '1', 'source_sha256': json.dumps('abc'), 'created_at_utc': json.dumps(self.iso(stamp)), **extra}
 
     @staticmethod
     def w1(seconds, **fields):
@@ -2247,11 +2282,10 @@ class VolatileListTests(unittest.TestCase):
                           separators=(',', ':'), sort_keys=True)
 
     def scores(self, stamp, seconds, **extra):
-        return {'schema': json.dumps('scores-v3'), 'built_utc': json.dumps(stamp), 'w1': self.w1(seconds), **extra}
+        return {'schema': json.dumps('scores-v3'), 'built_utc': json.dumps(self.iso(stamp)), 'w1': self.w1(seconds), **extra}
 
-    @staticmethod
-    def walk(stamp, timing=None, peak=1234, **qa):
-        return {'schema': 'walk-v1', 'built_utc': stamp, 'n_people': '5',
+    def walk(self, stamp, timing=None, peak=1234, **qa):
+        return {'schema': 'walk-v1', 'built_utc': self.iso(stamp), 'n_people': '5',
                 'qa': json.dumps({'rows': 5, 'timing': timing or {'checksums': 1.5, 'total': 9.0}, 'peak_memory_mb': peak, **qa}, sort_keys=True)}
 
     # the list itself
@@ -2262,10 +2296,7 @@ class VolatileListTests(unittest.TestCase):
                          [('street.sqlite3', 'metadata', 'created_at_utc', ''), ('scores.sqlite3', 'metadata', 'built_utc', ''),
                           ('scores.sqlite3', 'metadata', 'w1', '/seconds'), ('walk.sqlite3', 'meta', 'built_utc', ''),
                           ('walk.sqlite3', 'meta', 'qa', '/timing/*'), ('walk.sqlite3', 'meta', 'qa', '/peak_memory_mb')])
-        for entry in entries:
-            path, line = entry['writer'].rsplit(':', 1)
-            text = (REPO / path).read_text(encoding='utf-8').splitlines()[int(line) - 1]
-            self.assertIn(entry['needle'], text, '%s no longer writes %s at %s' % (path, entry['key'], line))
+        P.check_writers(entries, REPO)                                      # every needle is on its cited line in this tree
         self.assertEqual(self.LIST['sha256'], hashlib.sha256(P.VOLATILE_FILE.read_bytes()).hexdigest())
         self.assertEqual(self.LIST['rel'], 'tools/compute_volatile.json')
 
@@ -2291,6 +2322,10 @@ class VolatileListTests(unittest.TestCase):
         self.assertIn('needs a writer', self.refused({**good, 'needle': ''}))
         self.assertIn('needs a string', self.refused({k: v for k, v in good.items() if k != 'writer'}))
         self.assertIn('or_null', self.refused({**good, 'or_null': 'object'}))
+        self.assertIn('kind that is not one of', self.refused({**good, 'kind': 'wall'}))
+        pointed = self.LIST['entries'][2]                                                              # a pointer needs the writer's dump format
+        self.assertIn('needs dumps', self.refused({k: v for k, v in pointed.items() if k != 'dumps'}))
+        self.assertIn('needs dumps', self.refused({**pointed, 'dumps': 'pretty'}))
         self.assertIn('listed twice', self.refused(good, good))
         self.assertIn('no entries', self.refused())
         self.assertIn('cannot read', self.refused(raw='not json'))
@@ -2372,6 +2407,82 @@ class VolatileListTests(unittest.TestCase):
         self.assertTrue(ok, detail)
         ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('2026-10-18T10:00:00+00:00'), {**self.walk('x'), 'built_utc': json.dumps('t2')})
         self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[built_utc]'))      # raw text against a JSON string
+
+    def test_a_writer_that_moved_is_found_by_the_needle_check(self):
+        entry = self.LIST['entries'][0]
+        path, line = entry['writer'].rsplit(':', 1)
+        lines = (REPO / path).read_text(encoding='utf-8').splitlines()
+        tree = self.root / 'tree'
+        (tree / path).parent.mkdir(parents=True)
+        (tree / path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        P.check_writers([entry], tree)                                                 # the same file: holds
+        for edited in (['# one more line'] + lines, lines[:int(line) - 1]):            # the line moved down; the file ends before it
+            (tree / path).write_text('\n'.join(edited) + '\n', encoding='utf-8')
+            with self.assertRaises(ValueError) as caught:
+                P.check_writers([entry], tree)
+            self.assertIn('no longer holds the needle', str(caught.exception))
+        for other in (self.root / 'empty', tree):                                      # no such file; line 0
+            with self.assertRaises(ValueError):
+                P.check_writers([{**entry, 'writer': entry['writer'] if other.name == 'empty' else path + ':0'}], other)
+
+    def test_the_text_around_a_masked_field_is_the_writers_own_text(self):
+        good = self.w1(61.0)                 # {"matches":3,"rows_checked":3,"seconds":61.0,"source_sha256":"abc","status":"verified"}
+        variants = {
+            'spacing': good.replace(':3,', ': 3,', 1),
+            'number spelling beside the field': good.replace('"matches":3', '"matches":3E0'),
+            'number spelling of the field': good.replace('61.0', '6.1e1'),
+            'escape': good.replace('"abc"', '"\\u0061bc"'),
+            'key order': '{"rows_checked":3,"matches":3,' + good.split('"matches":3,"rows_checked":3,')[1],
+            'duplicate key': good.replace('"matches":3,', '"matches":3,"matches":3,'),
+            'NaN': good.replace('61.0', 'NaN'),
+            'Infinity': good.replace('61.0', 'Infinity'),
+        }
+        windows = self.scores(self.STAMP, 60.0)
+        failed = (False, 'B differs from the Windows build in table(s): metadata[w1]')
+        for name, text in variants.items():
+            self.assertNotEqual(text, good, name)
+            self.assertEqual(self.judge('scores.sqlite3', 'metadata', windows, {**windows, 'w1': text}), failed, name)
+            self.assertEqual(self.judge('scores.sqlite3', 'metadata', {**windows, 'w1': text}, {**windows, 'w1': good}), failed, name + ' (Windows side)')
+        # the walk store's qa is dumped with sort_keys and default separators, the street cell with neither: each entry names its own format
+        qa = json.loads(self.walk('t1')['qa'])
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), {**self.walk('t2'), 'qa': json.dumps(qa, separators=(',', ':'), sort_keys=True)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+
+    def test_a_listed_value_must_look_like_its_kind(self):
+        sound = {'created_at_utc': json.dumps(self.STAMP)}
+        for other in ('soon', '', '1.5'):                                               # a clock holds an ISO-8601 time on both sides
+            for windows, container in ((sound, {'created_at_utc': json.dumps(other)}), ({'created_at_utc': json.dumps(other)}, sound),
+                                       ({'created_at_utc': json.dumps(other)}, {'created_at_utc': json.dumps(other + ' ')})):
+                ok, detail = self.judge('street.sqlite3', 'metadata', windows, container)
+                self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[created_at_utc]'), other)
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), {**self.walk('t2'), 'built_utc': 'soon'})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[built_utc]'))
+        for seconds in (-1.0, True, '5'):                                               # a duration is a number of at least 0
+            ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), {**self.scores(self.STAMP, 61.0), 'w1': self.w1(seconds)})
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'), seconds)
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', timing={'checksums': -0.5, 'total': 9.0}))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', peak=-5))                  # a measurement likewise
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 0.0), self.scores(self.LATER, 0.5))      # 0 is fine
+        self.assertTrue(ok, detail)
+
+    def test_the_control_beside_the_list_changes_what_the_list_does_not_name_and_the_comparison_sees_it(self):
+        cases = (('street.sqlite3', 'metadata', self.street(self.STAMP), 'an unlisted key', 'metadata[zz_unlisted_control]'),
+                 ('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), 'w1.matches', 'metadata[w1]'),
+                 ('walk.sqlite3', 'meta', self.walk(self.STAMP), 'qa.rows', 'meta[qa]'))
+        for store, table, cells, what, named in cases:
+            self.put('A1', store, table, cells)
+            self.put('B', store, table, cells)
+            control = self.root / 'NC'
+            (control / store).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.root / 'B' / store, control / store)
+            self.assertTrue(P.compare_store(store, self.root / 'A1', self.root / 'A1', control, self.LIST)[0], store)      # equal until changed
+            entries = [e for e in self.LIST['entries'] if e['store'] == store]
+            self.assertEqual(P.change_beside_listed(control / store, entries), (table, what))
+            ok, detail = P.compare_store(store, self.root / 'A1', self.root / 'A1', control, self.LIST)
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): ' + named))
+            self.assertTrue(P.control_detected(ok, detail, table))
 
     def test_the_same_document_in_another_text_is_not_a_stamp(self):
         windows = {**self.scores(self.STAMP, 60.0), 'w1': '{"matches":3,"seconds":60.0,"status":"verified"}'}
@@ -2458,6 +2569,20 @@ class ReviewedListTests(unittest.TestCase):
         self.assertIn('is not committed', self.refused())                                  # edited after the commit
         self.git('add', '--', 'tools/compute_volatile.json')
         self.assertIn('is not committed', self.refused())                                  # edited and staged
+
+    def test_built_tree_head_wants_a_clean_tree(self):
+        self.commit()
+        self.assertEqual(P.built_tree_head(self.repo), self.git('rev-parse', 'HEAD'))
+        (self.repo / 'other.py').write_text('x', encoding='utf-8')                         # an untracked file
+        with self.assertRaises(ValueError) as caught:
+            P.built_tree_head(self.repo)
+        self.assertIn('uncommitted', str(caught.exception))
+        (self.repo / 'other.py').unlink()
+        self.list.write_bytes(b'{"entries": [2]}\n')                                      # a tracked file edited
+        with self.assertRaises(ValueError):
+            P.built_tree_head(self.repo)
+        with tempfile.TemporaryDirectory() as elsewhere, self.assertRaises(ValueError):    # no repository at all
+            P.built_tree_head(elsewhere)
 
     def test_a_list_hidden_from_git_status_is_still_refused(self):
         self.commit()

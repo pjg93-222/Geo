@@ -28,8 +28,12 @@
   about the build itself is left out ONLY where the fixed, reviewed list tools/compute_volatile.json names it: per key and JSON field of the
   key/value table of a SQLite store, each entry citing the line that writes it, and only when both values have the same JSON type (an entry
   with or_null also takes null: the walk store's peak memory is a Windows call). Everything else stays exact: an unlisted key, table or
-  store, a shape change, and every zip and file (the bundle never reads the list). The list must be committed and clean (git status),
-  else the run does not start; the report records its sha256 and HEAD blob. Without --single-reference nothing changes.
+  store, a shape change, and every zip and file (the bundle never reads the list). A listed value must also look like its kind (clock:
+  ISO-8601; duration, measured: a number >= 0) and the cells around a left-out field must be the writer's own text (entry `dumps`).
+  The run does not start unless the list is committed and clean (git status; the raw bytes hash to HEAD's blob), every entry's needle is
+  still on its cited line in the tree built, and that tree is clean; the report records the list's sha256 and HEAD blob and `repo_head`.
+  Each store with entries also gets a negative control that changes a field beside a listed one. --skip-container is refused with it.
+  Without --single-reference nothing changes.
   The shadow tables of an FTS5 table (demo_search_data, _idx, _docsize, _config, _content) are the physical layout of its index, which
   the SQLite library decides (D-177, ruling of 2026-10-13): when they are not exactly equal they must be equal after FTS5 'rebuild' by
   one library on scratch copies, and 400 MATCH queries must return the same rowids on the stores as built (fts_parity).
@@ -144,6 +148,8 @@ def metadata_variance(a1, a2, b, measured=None):
 
 VOLATILE_FILE = REPO / 'tools' / 'compute_volatile.json'     # what --single-reference may leave out of a store: committed, reviewed, cited
 OR_NULL_TYPES = ('number', 'string', 'bool')
+KINDS = ('clock', 'duration', 'measured')
+DUMPS = {'default': {}, 'sorted': {'sort_keys': True}, 'compact_sorted': {'separators': (',', ':'), 'sort_keys': True}}      # how the writers dump
 LIST_FIELDS = ('store', 'table', 'key', 'pointer', 'writer', 'kind', 'needle')
 
 
@@ -151,12 +157,23 @@ class Raw(str):
     """A key/value cell that is not JSON (walk.meta[built_utc] is a bare ISO time): one leaf of the type 'text'."""
 
 
+def _no_duplicates(pairs):
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError('duplicate key')
+    return dict(pairs)
+
+
+def _no_constant(name):
+    raise ValueError(name)
+
+
 def parse_value(value):
-    """A cell of a key/value table as one JSON document when it is JSON text, else as it is (Raw for text that is not JSON)."""
+    """A cell of a key/value table as one JSON document when it is JSON text, else as it is (Raw for text that is not JSON; so are
+    a document with a duplicate key and one with NaN or Infinity, which json.loads would take)."""
     if not isinstance(value, str):
         return value
     try:
-        return json.loads(value)
+        return json.loads(value, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except ValueError:
         return Raw(value)
 
@@ -208,16 +225,32 @@ def listed(entries, path):
     return None
 
 
+def stamp_ok(entry, value):
+    """Is `value` what the entry's kind writes: an ISO-8601 time for a clock, a number >= 0 for a duration or a measurement, or null for an
+    entry with or_null?"""
+    if value is None:
+        return bool(entry.get('or_null'))
+    if entry['kind'] == 'clock':
+        try:
+            datetime.datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return False
+        return True
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+
+
 def listed_difference(x, y, entries):
     """The labels of the listed entries that explain the difference between the two cells of one key (x: the Windows build, y: the
     container), or None when anything is left that no entry explains: no difference in the parsed values (the same document in other
-    text), a shape difference, a leaf the list does not name, a value of another type (an entry with or_null also takes null), or a
-    document that differs beside the leaves left out (key order and number formatting count)."""
+    text), a shape difference, a leaf the list does not name, a value of another type (an entry with or_null also takes null) or
+    not of its kind (stamp_ok), a document that differs beside the leaves left out (key order and number formatting count), or a cell
+    that is not the writer's own text for its document (entry `dumps`): then spelling, spacing and escapes beside a left-out field
+    would go unseen."""
     px, py = parse_value(x), parse_value(y)
     diffs = json_diffs(px, py)
     if not diffs:
         return None
-    used, mx, my = set(), px, py
+    used, mx, my = {}, px, py
     for path, kind in diffs:
         entry = listed(entries, path)
         if kind != 'value' or entry is None:
@@ -225,8 +258,13 @@ def listed_difference(x, y, entries):
         types = {value_type(json_at(px, path)), value_type(json_at(py, path))}
         if not (types <= {entry['or_null'], 'null'} if entry.get('or_null') else len(types) == 1):
             return None
-        used.add('.'.join([entry['key'], *pointer_segments(entry['pointer'])]))
+        if not (stamp_ok(entry, json_at(px, path)) and stamp_ok(entry, json_at(py, path))):
+            return None
+        used['.'.join([entry['key'], *pointer_segments(entry['pointer'])])] = entry
         mx, my = blanked(mx, path), blanked(my, path)
+    for entry in used.values():
+        if entry.get('dumps') and any(cell != json.dumps(doc, **DUMPS[entry['dumps']]) for cell, doc in ((x, px), (y, py))):
+            return None
     return sorted(used) if json.dumps(mx, default=repr) == json.dumps(my, default=repr) else None
 
 
@@ -279,6 +317,10 @@ def load_volatile(path=None):
             problem = 'has a pointer that is not "" or a JSON pointer naming a field (%r)' % entry['pointer']
         elif not re.fullmatch(r'[\w./-]+:\d+', entry['writer']) or not entry['needle']:
             problem = 'needs a writer (path:line) and a needle that line contains'
+        elif entry['kind'] not in KINDS:
+            problem = 'has a kind that is not one of ' + ', '.join(KINDS)
+        elif ('dumps' in entry or entry['pointer']) and entry.get('dumps') not in DUMPS:
+            problem = 'needs dumps, one of %s: how its writer dumps the value it lists a field of' % ', '.join(DUMPS)
         elif 'or_null' in entry and entry['or_null'] not in OR_NULL_TYPES:
             problem = 'has an or_null that is not one of ' + ', '.join(OR_NULL_TYPES)
         elif (entry['store'], entry['table'], entry['key'], entry['pointer']) in seen:
@@ -307,7 +349,8 @@ def _git(repo, *args):
 
 def reviewed_blob(path, repo=REPO):
     """HEAD blob id of the volatile list. "Reviewed" means committed: a staged, unstaged or untracked change to the file, a file HEAD does not
-    hold, or a working file that does not hash to HEAD's blob (which git status can be told to overlook) is a refusal (ValueError)."""
+    hold, or a working file whose raw bytes (no filters) do not hash to HEAD's blob (which git status can be told to overlook) is a
+    refusal (ValueError). So the bytes load_volatile reads and hashes are the committed bytes."""
     try:
         rel = Path(os.path.relpath(path, repo)).as_posix()
     except ValueError as error:
@@ -318,9 +361,31 @@ def reviewed_blob(path, repo=REPO):
         raise ValueError('%s is not committed (git status --porcelain is not empty): --single-reference masks only from a reviewed, '
                          'committed list' % rel)
     blob = _git(repo, 'rev-parse', 'HEAD:' + rel)
-    if _git(repo, 'hash-object', '--', rel) != blob:
+    if _git(repo, 'hash-object', '--no-filters', '--', rel) != blob:
         raise ValueError('%s differs from HEAD:%s although git status is empty: --single-reference masks only from a committed list' % (rel, rel))
     return blob
+
+
+def check_writers(entries, repo):
+    """ValueError unless every entry's needle is on its cited writer line in the tree `repo`: an edited writer sends its entry back to review."""
+    for entry in entries:
+        path, line = entry['writer'].rsplit(':', 1)
+        try:
+            lines = (Path(repo) / path).read_bytes().decode('utf-8').split('\n')
+        except (OSError, ValueError):
+            lines = []
+        if not 1 <= int(line) <= len(lines) or entry['needle'] not in lines[int(line) - 1]:
+            raise ValueError('%s no longer holds the needle of the volatile list entry %s[%s] in %s: review the entry again' % (
+                entry['writer'], entry['table'], entry['key'], repo))
+
+
+def built_tree_head(repo):
+    """HEAD of the tree a --single-reference run builds. It must be clean: the run proves a commit, not a working copy (ValueError)."""
+    dirty = _git(repo, 'status', '--porcelain')
+    if dirty:
+        raise ValueError('the tree %s to build has %d uncommitted path(s) (git status --porcelain): --single-reference proves a commit, '
+                         'not a working copy' % (repo, len(dirty.splitlines())))
+    return _git(repo, 'rev-parse', 'HEAD')
 
 
 FTS_SHADOWS = ('_data', '_idx', '_docsize', '_config', '_content')       # the shadow tables of an FTS5 table
@@ -561,6 +626,38 @@ def remove_one_row(path, skip=()):
                 except sqlite3.Error:
                     continue
     raise ValueError('no table to remove a row from in %s' % path)
+
+
+def leaves(document, path=()):
+    """(path, value) of every scalar leaf of a parsed JSON document."""
+    if isinstance(document, dict):
+        for key, value in document.items():
+            yield from leaves(value, (*path, key))
+    elif isinstance(document, list):
+        for index, value in enumerate(document):
+            yield from leaves(value, (*path, index))
+    else:
+        yield path, document
+
+
+def change_beside_listed(path, entries):
+    """Negative control for the volatile list: in a copy of a store that has `entries`, change a field BESIDE a listed one (the first number
+    or text leaf of a listed JSON value that no entry names, by its smallest step, dumped again as the writer does), else add a key the list
+    does not name to the table of the first entry. Returns (table, what)."""
+    with closing(sqlite3.connect(path)) as connection, connection:
+        for entry in entries:
+            row = connection.execute('SELECT value FROM %s WHERE key = ?' % B.quote(entry['table']), (entry['key'],)).fetchone()
+            document = parse_value(row[0]) if row else None
+            mine = [e for e in entries if (e['table'], e['key']) == (entry['table'], entry['key'])]
+            found = next(((p, v) for p, v in leaves(document) if p and listed(mine, p) is None and isinstance(v, (int, float, str))
+                          and not isinstance(v, bool)), None) if isinstance(document, dict) and entry['pointer'] else None
+            if found:
+                json_at(document, found[0][:-1])[found[0][-1]] = step_value(found[1])[0]
+                connection.execute('UPDATE %s SET value = ? WHERE key = ?' % B.quote(entry['table']),
+                                   (json.dumps(document, **DUMPS[entry['dumps']]), entry['key']))
+                return entry['table'], '%s.%s' % (entry['key'], '.'.join(map(str, found[0])))
+        connection.execute('INSERT INTO %s VALUES (?, ?)' % B.quote(entries[0]['table']), ('zz_unlisted_control', '1'))
+        return entries[0]['table'], 'an unlisted key'
 
 
 def step_value(value):
@@ -901,6 +998,8 @@ def main(argv=None):
         parser.error('--scratch %s is not empty; a parity run starts from a new folder' % scratch)
     if args.reuse_container and (not args.reuse_windows or args.skip_container or not (scratch / 'B').is_dir()):
         parser.error('--reuse-container needs --reuse-windows, an existing <scratch>/B, and no --skip-container')
+    if args.single_reference and args.skip_container:
+        parser.error('--single-reference compares B with A1: it does not combine with --skip-container (which has no B)')
     build_container = not args.skip_container and not args.reuse_container
     toolchains = [t for t in IMAGE_NAMES if any(S.STEPS[s].image == t for s in steps)]          # geo first
     pythons = {'geo': args.python, 'score': args.score_python}
@@ -919,16 +1018,18 @@ def main(argv=None):
     if args.link_inputs and (not args.inputs_from or 'contacts' in steps):
         parser.error('--link-inputs needs --inputs-from and a run without contacts (which changes street.sqlite3 in place)')
     names = store_names(d, steps, [f for f in args.files.split(',') if f])
-    volatile = None
-    if args.single_reference:                         # before anything builds: no reviewed list, no run
+    volatile, repo_head = None, None
+    if args.single_reference:                         # before anything builds: no reviewed list, no current writers, no clean tree, no run
         try:
             volatile = load_volatile()
             volatile['head_blob'] = reviewed_blob(volatile['path'])
+            check_writers(volatile['entries'], args.repo)
+            repo_head = built_tree_head(args.repo)
         except ValueError as error:
             parser.error(str(error))
     folders = {label: scratch / label for label in ('A1', 'A2', 'B')}
     run_id = 'B-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    report = {'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources,
+    report = {'district': d['id'], 'steps': steps, 'images': images, 'image_sources': sources, 'repo_head': repo_head,
               'python': {t: pythons[t] for t in toolchains}, 'results': []}
 
     if not os.environ.get('TERRIER_DEMO_KEY'):       # one throwaway demo key for A1, A2 and B; kept in the scratch folder for --reuse-windows
@@ -951,8 +1052,8 @@ def main(argv=None):
     if volatile:
         report['volatile_list'] = {'path': volatile['rel'], 'sha256': volatile['sha256'], 'head_blob': volatile['head_blob'],
                                    'entries': len(volatile['entries'])}
-        print('volatile list %s: %d entries, sha256 %s, HEAD blob %s' % (volatile['rel'], len(volatile['entries']), volatile['sha256'],
-                                                                         volatile['head_blob']), flush=True)
+        print('volatile list %s: %d entries, sha256 %s, HEAD blob %s; tree %s HEAD %s' % (
+            volatile['rel'], len(volatile['entries']), volatile['sha256'], volatile['head_blob'], args.repo, repo_head), flush=True)
     for label in ('A1',) if args.single_reference else ('A1', 'A2'):
         if args.reuse_windows and folders[label].is_dir():
             print('%s: reusing %s' % (label, folders[label]), flush=True)
@@ -1012,6 +1113,13 @@ def main(argv=None):
                 found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control, volatile), table, before[name])
                 verdict('negative control ' + name + ' (value)', found, 'one %s.%s value changed (%s): %s' % (
                     table, column, step, 'detected' if found else 'NOT detected'))
+                mine = [e for e in volatile['entries'] if e['store'] == Path(name).name] if volatile else []
+                if mine:                                 # the list must not hide a change beside what it names
+                    shutil.copyfile(folders['B'] / name, target)
+                    table, what = change_beside_listed(target, mine)
+                    found = control_detected(*compare_store(name, folders['A1'], folders['A2'], control, volatile), table, before[name])
+                    verdict('negative control ' + name + ' (beside the list)', found, 'in %s: %s changed beside the listed fields: %s' % (
+                        table, what, 'detected' if found else 'NOT detected'))
                 fts = fts5_tables(folders['B'] / name, rebuildable=True)
                 if fts:                                  # the FTS5 comparison itself must catch a changed indexed name
                     shutil.copyfile(folders['B'] / name, target)
