@@ -3,7 +3,7 @@
 import {localJson,postJson} from './client.ts';
 import type {
   WalkArea,WalkDispositionEntry,WalkDispositionsResult,WalkLevel,WalkListPayload,WalkListsPayload,WalkListTrim,WalkMatchInput,WalkMatchPayload,
-  WalkOptionsPayload,WalkOverviewProps,WalkPlan,WalkPlanOptions,WalkReknockPayload,WalkSavedPayload,WalkScores,WalkStreetsPayload,
+  WalkOptionsPayload,WalkOptInEntry,WalkOptInsResult,WalkOverviewProps,WalkPlan,WalkPlanOptions,WalkReknockPayload,WalkSavedPayload,WalkScores,WalkStreetsPayload,
 } from './walkTypes';
 
 const BASE='/api/v3/walk';
@@ -55,6 +55,10 @@ export function reknockWalkList(title:string,from:string,signal?:AbortSignal):Pr
 /** Results for a saved list; a null code clears a result. `on` is the day of the visit (yyyy-mm-dd). */
 export function saveWalkDispositions(list:string,on:string,entries:WalkDispositionEntry[],signal?:AbortSignal):Promise<WalkDispositionsResult>{
   return postJson(`${BASE}/dispositions`,{list,on,entries},signal);
+}
+/** Manually recorded opt-ins for voters on a saved list. Omitted kinds keep their existing state. */
+export function saveWalkOptIns(list:string,entries:WalkOptInEntry[],signal?:AbortSignal):Promise<WalkOptInsResult>{
+  return postJson(`${BASE}/opt-ins`,{list,entries},signal);
 }
 /** Blocks of an area with door counts and registration counts, for the map shading. */
 export function getWalkOverview(area:WalkArea,signal?:AbortSignal):Promise<WalkOverview>{return localJson(`${BASE}/overview${query(areaOf(area))}`,signal);}

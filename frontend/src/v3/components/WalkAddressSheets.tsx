@@ -1,6 +1,6 @@
 import {useMemo,useRef,useState} from 'react';
 import {Upload} from 'lucide-react';
-import {readAddressFile} from '../lib/walkAddressImport';
+import {parseAddressText,readAddressFile} from '../lib/walkAddressImport';
 import type {AddressImportResult,ImportedWalkAddress,ImportedWalkStreet,ImportSource} from '../lib/walkAddressImport';
 import {addressReviewEntries,applyEvidenceDecisions,evidenceReviewRows} from '../lib/walkAddressSheets';
 import type {ImportedWalkSelection} from '../lib/walkAddressSheets';
@@ -15,6 +15,8 @@ import {ApiError,getSession,postJson} from '../api/client';
 import {WalkImageReview} from './WalkImageReview';
 import type {WalkImageEvidence} from './WalkImageReview';
 import {readWalkImageFile,assertWalkImages} from '../lib/walkImageImport';
+import {WalkOptIns} from './WalkOptIns';
+import {hasRecordedOptIn} from '../lib/walkOptIns';
 
 type Candidate={id:number;label:string;city:string;state:string;zip:string;zip_filter:string;doors:number};
 type Proximity={distance_m:number|null;runner_up_distance_m:number|null;runner_up_beyond_m?:number;anchor_count:number;confidence:'clear'|'review';reason:string};
@@ -30,8 +32,9 @@ const excluded='__exclude';
 const distanceText=(metres:number)=>metres<1000?`${Math.round(metres)} m`:`${(metres/1000).toFixed(1)} km`;
 const imageNameKey=(value:string)=>value.toLowerCase().replace(/\b(?:street|road|drive|avenue|terrace|circle|court|lane|boulevard|place|parkway)\b/g,word=>({street:'st',road:'rd',drive:'dr',avenue:'ave',terrace:'ter',circle:'cir',court:'ct',lane:'ln',boulevard:'blvd',place:'pl',parkway:'pkwy'}[word]!)).replace(/[^a-z0-9]/g,'');
 
-export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;splitSides:boolean;hosted:boolean}){
+export function WalkAddressSheets({capText,splitSides,hosted,showOptIns=false}:{capText:string;splitSides:boolean;hosted:boolean;showOptIns?:boolean}){
   const [loaded,setLoaded]=useState<{name:string;result:AddressImportResult}|null>(null);
+  const [pastedText,setPastedText]=useState('');
   const [streets,setStreets]=useState<ReviewStreet[]>([]);
   const [matchedDistrict,setMatchedDistrict]=useState<{district:string;snapshot:string}|null>(null);
   const [expanded,setExpanded]=useState<ImportedLocalGroup[]|null>(null),[expandedSplit,setExpandedSplit]=useState(splitSides);
@@ -125,18 +128,20 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
       return {...row,match,choice:chosen?candidateKey(chosen):'',choiceOrigin:inferred?'proximity':exact?'exact':undefined};
     }));
   }
-  async function upload(file:File){
+  async function importAddresses(name:string,read:()=>Promise<AddressImportResult>){
     invalidateImageContext();
     const id=++request.current;setBusy(true);setError('');setLoaded(null);setStreets([]);imageEvidenceRef.current={};setImageEvidence({});setMatchedDistrict(null);resetOutput();setExcludedAddresses(new Set());setExcludedIssues(new Set());setBulkTown('');setBulkState('');setBulkZip('');
     try{
-      const result=await readAddressFile(file);if(id!==request.current)return;
-      setLoaded({name:file.name,result});
+      const result=await read();if(id!==request.current)return;
+      setLoaded({name,result});
       const rows=(result.streets??[]).map(source=>({source,query:{...source},choice:''}));setStreets(rows);
-      if(!result.addresses.length&&!rows.length&&!result.issues.length&&!result.images?.length)setError('No addresses or street names found in this file.');
+      if(!result.addresses.length&&!rows.length&&!result.issues.length&&!result.images?.length)setError('No addresses or street names found.');
       if(rows.length)await matchStreets(rows,id,result.addresses,{});
-    }catch(e){if(id===request.current)setError(e instanceof Error?e.message:'The file could not be read.');}
+    }catch(e){if(id===request.current)setError(e instanceof Error?e.message:'The addresses could not be read.');}
     finally{if(id===request.current)setBusy(false);}
   }
+  const upload=(file:File)=>importAddresses(file.name,()=>readAddressFile(file));
+  const reviewPaste=()=>importAddresses('pasted-addresses.txt',async()=>parseAddressText(pastedText,'pasted-addresses.txt'));
   async function checkMatches(rows=streets,anchors=loaded?.result.addresses.filter((_,i)=>!excludedAddresses.has(i))??[],evidence=imageEvidenceRef.current){
     const id=++request.current;setBusy(true);setError('');resetOutput();
     // A failed recheck must not leave stale automatic choices available for sheet generation.
@@ -260,8 +265,8 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
   }
   const suggested=loaded?.result.addresses.find(address=>!!address.city);
   return <div className="walk-address-sheets">
-    <h2>Sheets from your file</h2>
-    <p className="walk-hint">Upload CSV, TSV, TXT, JSON, XLSX or an image. Terrier reads address fields, text lists, scattered workbook cells, and printed text in pictures.</p>
+    <h2>Sheets from your addresses</h2>
+    <p className="walk-hint">Paste addresses or street names, or upload CSV, TSV, TXT, JSON, XLSX or an image. Terrier reads address fields, text lists, scattered workbook cells, and printed text in pictures.</p>
     <p className="walk-hint">Exact addresses stay as supplied. Street names use recorded doors from the selected district after review. Recorded voter details are included for selected streets. Supplied exact addresses retain blank voter fields. Repeated source entries are retained. Workbook sections and distant locations receive separate local maps; the door cap applies to each local list.</p>
     <div className="walk-upload">
       <input ref={input} type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.png,.jpg,.jpeg,.webp,.gif,.bmp" hidden aria-label="Upload an address file" onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void upload(f);}}/>
@@ -270,6 +275,13 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
       <button className="walk-button" type="button" disabled={blocked} onClick={()=>imageInput.current?.click()}>Add map or address image</button>
       {loaded&&<span className="walk-file">{loaded.name}</span>}
     </div>
+    <details className="walk-paste">
+      <summary>Paste addresses or street names</summary>
+      <label htmlFor="walk-pasted-addresses">Addresses or street names</label>
+      <p className="walk-hint" id="walk-paste-hint">Use one address or street per line, or paste columns copied from a spreadsheet. Include a town or ZIP when street names repeat. Reviewing this text replaces the current import.</p>
+      <textarea id="walk-pasted-addresses" aria-describedby="walk-paste-hint" value={pastedText} disabled={blocked} rows={6} placeholder={'123 Main St, Hartford, CT 06103\nOak Rd, Hartford, CT 06103'} onChange={e=>setPastedText(e.target.value)}/>
+      <button className="walk-button" type="button" disabled={blocked||!pastedText.trim()} onClick={()=>void reviewPaste()}>Review pasted list</button>
+    </details>
     {(error||capError)&&<p className="walk-note" role="alert">{error||capError}</p>}
     {loaded&&<>
       <p className="walk-summary">Found {loaded.result.addresses.length} exact {loaded.result.addresses.length===1?'address':'addresses'} and {countText(streets.length,'street request')}{loaded.result.issues.length?` · ${countText(loaded.result.issues.length,'entry')} ${loaded.result.issues.length===1?'needs':'need'} review`:''}.</p>
@@ -342,7 +354,7 @@ export function WalkAddressSheets({capText,splitSides,hosted}:{capText:string;sp
       </div>
       <div className="walk-address-table-wrap"><table className="walk-address-table">
         <thead><tr><th>Door</th><th>Precinct</th><th>Street</th><th>Address</th><th>Unit</th><th>Recorded people</th><th>Side</th><th>Notes</th></tr></thead>
-        <tbody>{sheet?.runs.flatMap(run=>run.doors.map(door=><tr key={door.seq}><td>{door.seq}</td><td>{run.precinct||'—'}</td><td>{run.street}</td><td>{door.house}</td><td>{door.unit}</td><td>{door.voters.length?door.voters.map(voter=>voter.name).join('; '):'—'}</td><td>{run.side==='both'?'Both':run.side}</td><td>{addresses[door.seq-1]?.note}</td></tr>))}</tbody>
+        <tbody>{sheet?.runs.flatMap(run=>run.doors.map(door=><tr key={door.seq}><td>{door.seq}</td><td>{run.precinct||'—'}</td><td>{run.street}</td><td>{door.house}</td><td>{door.unit}</td><td>{door.voters.length?(showOptIns?door.voters.map(voter=><div key={voter.person_id} className={hasRecordedOptIn(voter.opt_ins)?'has-recorded-opt-in':undefined}>{voter.name}<WalkOptIns personId={voter.person_id} name={voter.name} value={voter.opt_ins} displayOnly/></div>):door.voters.map(voter=>voter.name).join('; ')):'—'}</td><td>{run.side==='both'?'Both':run.side}</td><td>{addresses[door.seq-1]?.note}</td></tr>))}</tbody>
       </table></div>
     </>}
   </div>;

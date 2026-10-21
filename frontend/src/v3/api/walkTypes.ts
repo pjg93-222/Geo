@@ -45,11 +45,16 @@ export interface WalkTally { voted: number; eligible: number }
 // A voter's latest result across all lists: its code, the day of the visit, and the key of the saved list it was recorded on
 // (a result with `list` equal to the open list's key is a mark on that list; any other is history from another list).
 export interface WalkLast { code: WalkCode; on: string; list: string | null }
+export type WalkOptInKind = 'donor' | 'volunteer';
+export type WalkOptInStatus = 'unknown' | 'opted_in' | 'opted_out';
+export interface WalkOptInState { status: WalkOptInStatus; recorded_at: string | null; source: 'recorded_manually' | null }
+export interface WalkOptIns { donor: WalkOptInState; volunteer: WalkOptInState }
 export interface WalkVoter {
   person_id: string; name: string; phone: string;
   pri: WalkTally; gen: WalkTally; abs: WalkTally;
   party: string; age: number | null; gender: string; reg_date: string;
   last: WalkLast | null;
+  opt_ins?: WalkOptIns; // Older list payloads may omit recorded opt-ins.
 }
 export interface WalkDoor { seq: number; house: string; unit: string; placed_by: WalkPlacement; lon: number | null; lat: number | null; voters: WalkVoter[]; city?: string; state?: string; zip?: string; address?: string; warnings?: string[]; location_evidence?: unknown; evidence?: WalkEvidence }
 export interface WalkRun {
@@ -87,6 +92,10 @@ export interface WalkListsPayload { lists: WalkSavedList[] }
 // POST /api/v3/walk/dispositions {list, on, entries} -> {saved}
 export interface WalkDispositionEntry { person_id: string; code: WalkCode | null }
 export interface WalkDispositionsResult { saved: number }
+
+// POST /api/v3/walk/opt-ins {list, entries}; only supplied kinds are changed.
+export type WalkOptInEntry = { person_id: string } & Partial<Record<WalkOptInKind, WalkOptInStatus>>;
+export interface WalkOptInsResult { saved: number; opt_ins: Record<string, WalkOptIns> }
 
 // GET /api/v3/walk/overview?ss=&sh=&precinct= -> GeoJSON FeatureCollection<LineString, WalkOverviewProps>
 // `parties` counts each person by party code as it is on file ('' = no code), codes sorted.

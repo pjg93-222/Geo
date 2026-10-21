@@ -1,13 +1,14 @@
 """Field staff: the one way a hosted deployment opens person-level routes (ruling 8: walk lists and door-knock results).
 
 Every person-level route is local_only (street_views.py): the passwordless owner on this machine, nobody else. Hosted there
-is no such owner, so those routes answer 403 to everyone, except the three the walk-list flow needs, which pass
+is no such owner, so those routes answer 403 to everyone, except the four the walk-list flow needs, which pass
 `field=GROUP` and are then open to an account that is all of:
   * signed in, active, and in the Django group "field-staff" (granted when the invitation is made: manage.py invite
     --field-staff). The accounts database is this district's alone, so the group is district staff by construction;
   * the person the verified Cloudflare Access token names (the middleware in access.py, which must have run);
   * under the per-user rate limit.
-Opened: GET /api/v3/walk/lists (titles and counts), GET /api/v3/walk/lists/<key> (a saved list), POST /api/v3/walk/dispositions.
+Opened: GET /api/v3/walk/lists (titles and counts), GET /api/v3/walk/lists/<key> (a saved list), POST /api/v3/walk/dispositions,
+and POST /api/v3/walk/opt-ins (explicitly recorded donor/volunteer status, independent of visit results).
 Each opened read or write leaves an AuditEvent (who, route, list key, voter keys written: never a name, address or phone).
 Everything else, including scoring lists, contacts, search and the workspace, stays closed.
 
