@@ -1,0 +1,2878 @@
+{
+  "schema": "terrier-district-testsets-v1",
+  "description": "Repository-owner-declared synthetic test data; synthetic status has not been independently verified.",
+  "declaration_date": "2026-10-21",
+  "independently_verified_synthetic": false,
+  "provenance": "Original source filenames, source fingerprints, schema metadata and archived bytes are preserved; the owner supplied the synthetic classification.",
+  "districts": [
+    "co-05",
+    "or-05",
+    "ct-01"
+  ],
+  "unique_dataset_files": 262,
+  "dataset_input_bytes": 9730654698,
+  "files": [
+    {
+      "path": "co-05/data/area_scores_shown.csv",
+      "district": "co-05",
+      "bytes": 15034527,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "a0e96d47c390b927033f5c994da249f7bfba629ac522f6283d3de97caaaebee0",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/area_scores_shown.manifest.json",
+      "district": "co-05",
+      "bytes": 1246,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "7beec077e828984964b04730bca95a5ed190fd1d32a3ebc0e784955daf7fadf9",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/contacts.sqlite3",
+      "district": "co-05",
+      "bytes": 217464832,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "c6c796a18654b7b4f87802f0455758951b8dc20929a20261f8776b3de98f570f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/credit-quality.json",
+      "district": "co-05",
+      "bytes": 3338,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "46e36e96b8912caf887a459d295ea84081f9576aab6c508ae74fe24239361cc8",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/density.json",
+      "district": "co-05",
+      "bytes": 417139,
+      "roles": [
+        "runtime_dataset",
+        "supplemental"
+      ],
+      "sha256": "20147ce223d245c18fe7cdc9673d12e91055344e4f639ddc114cb922f9622200",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/roads.sqlite3",
+      "district": "co-05",
+      "bytes": 13991936,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "2af303ccd381c3bcf1145025408798d4b4be4bddd36adc843e6b68e2145047af",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/scores.sqlite3",
+      "district": "co-05",
+      "bytes": 577916928,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "358d89ec32c33ef4990375dc65170887ad996bbdfe41b959ff203c1f9cdbf89d",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/adjacency.json",
+      "district": "co-05",
+      "bytes": 36802,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "30bd2a0b69554ae42502a25648c820b3b9e9120f2a556d24cfa43eff1210c6f8",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/area_indices.json",
+      "district": "co-05",
+      "bytes": 13402652,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "fb3af849d120faf47f57f40fb29db8bac8684226574cfd07b28d86d5e56ea9f6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_block.json",
+      "district": "co-05",
+      "bytes": 4099801,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "72677e29561d212c9d68fa32526411e6f1938d48806d6e7fb93f934285fa51e0",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_block.json.gz",
+      "district": "co-05",
+      "bytes": 1355360,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "74062ff6a4b1ff351fbf06c62affba9316a2eeacbc86061127c47934b9a5c3cc",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_precinct.json",
+      "district": "co-05",
+      "bytes": 166549,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "c2f19d6877315d5f419adc3869db84c7f52e76aed8392ffa13af18ccd1ad11e6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_precinct.json.gz",
+      "district": "co-05",
+      "bytes": 57195,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "095c2b61e0da5a06e00d3e49e7462d4268634a08c51e2b93a011d0d257d33c14",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_tract.json",
+      "district": "co-05",
+      "bytes": 88952,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "fae8d465f02a6342af1c3ec1300896f6048d560d12dbc8c66bb98475a8c6d9d8",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_tract.json.gz",
+      "district": "co-05",
+      "bytes": 31064,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "68c27830d3642aef200284a2f0d4e5e6c01bd0095f2d5ea4d7d21ddfd6b4b004",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_zip.json",
+      "district": "co-05",
+      "bytes": 21697,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "186fa5912713d37946c36444e4ecb3a14dc7adad8b452fce892d3f638513aa1b",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_registration_zip.json.gz",
+      "district": "co-05",
+      "bytes": 8240,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b57fb44db105bc3b0b25f55cf78d420bf4db4377f167b5b658f02dee29714d1c",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_residence_tract.json",
+      "district": "co-05",
+      "bytes": 108848,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "15a8d9547433d2aada0385f1d61e8f4fe6aaf5495d98d9f77d4791f91517bf14",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_residence_tract.json.gz",
+      "district": "co-05",
+      "bytes": 35171,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b0fd1290b6a2ff429968a540ead15242cd499fd2a4cbfd4b55fcaeec41db3099",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_residence_zip.json",
+      "district": "co-05",
+      "bytes": 45275,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f89a144996004b4a08303a107f3420388e3be7b8826eba9e292dc1747f3b9698",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_areas_residence_zip.json.gz",
+      "district": "co-05",
+      "bytes": 14524,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5e45b6f49033ce044b0dbb000a8b751d9e6a30bc3c42e0a93cc6355ecc4e2623",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_block_coarse.json",
+      "district": "co-05",
+      "bytes": 2496526,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7a232f36d52c620a942cc76759964ad18d190f2ab01d1d32754ef583e17f882f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_block_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 347460,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "887383594916f3d8875a1a8ad81931d2a792b02f121aca1bfb55233aae1efbe9",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_block_fine.json",
+      "district": "co-05",
+      "bytes": 3774775,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9cbbd5d34f226b4b3921791ce276c60ab9560a5b989409e133f4db3f8ea3e997",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_block_fine.json.gz",
+      "district": "co-05",
+      "bytes": 596988,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "248be03ea5cb10a7c7fa76b7fbf949ccc85e1eefc3d250529a4c2cd66a874798",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_precinct_coarse.json",
+      "district": "co-05",
+      "bytes": 588373,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "db37672ab5bdc55074758947bf2415f9e81588d20e470f25a32603529b53d76b",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_precinct_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 126666,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7b814fe33f2c2230a61eab8688b844d110c5acd2753849a63d95e845a30de9d6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_precinct_fine.json",
+      "district": "co-05",
+      "bytes": 914362,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bb28b467a629b3d1ea798a5c4d5482041421ffe1a6586cf3492acf4944b21312",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_precinct_fine.json.gz",
+      "district": "co-05",
+      "bytes": 202538,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "50669c234d6e167378dafbf32e0d9a74b0efd783e72f1c939d45821396d8b72f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_tract_coarse.json",
+      "district": "co-05",
+      "bytes": 563855,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "8b1c01e3a04910d467b762f3a9d926855d8d770b5ea5b7c15e3f6cfb99c2e85a",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_tract_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 122793,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "faf16afabd0085d86bbc6a42beea117e407f003894d415c676c42b6891a9fa0b",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_tract_fine.json",
+      "district": "co-05",
+      "bytes": 820062,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d95f47805bc61f4fc7fb590b97fc27cd15800dc7b8577e7c199a74209b7b97d6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_tract_fine.json.gz",
+      "district": "co-05",
+      "bytes": 183973,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ee58c3c878c6d345a8006870ced1649921deda169fa372187af19391c4cdc298",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_zip_coarse.json",
+      "district": "co-05",
+      "bytes": 85167,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4a31f272cd998e2fc2678dc6ddc404bc36790d47a1bb93a87f5200bbd09400bf",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_zip_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 20897,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e52c95ced4fc5909d1a1f38231a59df3e46464531ba7a7acd0a6c05b540b6b94",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_zip_fine.json",
+      "district": "co-05",
+      "bytes": 255742,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bd46fe57c952c02828118aa64161a26583bf2add61d716281ac391f53e9e85ce",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_geometry_zip_fine.json.gz",
+      "district": "co-05",
+      "bytes": 63979,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4ec307e23bc7b1f823d4d29839e882b7ad0632b1dda821130a83621c81f98325",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_meta.json",
+      "district": "co-05",
+      "bytes": 2388,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ccb72c38bd666440954ae398b31e0a4761cb248acaa2a3101edd2023f7533ec5",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/derived/v3_meta.json.gz",
+      "district": "co-05",
+      "bytes": 1140,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "587ba27cb5c16b018f9157d9fc4ff246252489100821e2532ba2af44b1775f38",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/district.geojson",
+      "district": "co-05",
+      "bytes": 44786,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b96745b3d669190341b55d8735670ff8a10411d5d7466f2a7cffebf55f23db02",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/geometry.json",
+      "district": "co-05",
+      "bytes": 13097458,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e7616a05ff1114bf91f756b984f2b7c524f4623e637d2c1fbab10a66758b7f59",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/manifest.json",
+      "district": "co-05",
+      "bytes": 31331,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "c9578e5817521194a49c0473462d6a7ce6324ae249cdb4ef0f588c43d236b8d6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/rows.json",
+      "district": "co-05",
+      "bytes": 96984346,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7e55b9e7cdc329ef21fabe731143463bb0de9858469748b87296631c03012be2",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-5fd70b1cb698/streets.geojson",
+      "district": "co-05",
+      "bytes": 13136349,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "3860cb66fa99d67eafec30ef10e8aa50a5da1862bf0df49cf4c209f21d785fef",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/adjacency.json",
+      "district": "co-05",
+      "bytes": 36802,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "30bd2a0b69554ae42502a25648c820b3b9e9120f2a556d24cfa43eff1210c6f8",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/area_indices.json",
+      "district": "co-05",
+      "bytes": 9951974,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "63c5d82ef50b8d17a5c6618ddf96393430ab120a1a84a68e25155d15f406bb59",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_block.json",
+      "district": "co-05",
+      "bytes": 3529267,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ca6d90f9ef5c6dacf0b6834bb644dac98dc02fe57189cc497312c4d89ba61a19",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_block.json.gz",
+      "district": "co-05",
+      "bytes": 1047098,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5bd602d017d92ae7bb0e0aa3522f5405d5dd0997db20d3434b63e657ada3afbc",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_precinct.json",
+      "district": "co-05",
+      "bytes": 165130,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "93478e8a1aefbdfbe0d6461b17fd82ac97171aea74c9ce1ddc1dd132fc5481c4",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_precinct.json.gz",
+      "district": "co-05",
+      "bytes": 57044,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b9213373768fc0a145660aaaa78ce192d88bb4fa3586fa31c87a03ced2a3cbf9",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_tract.json",
+      "district": "co-05",
+      "bytes": 84707,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4c0963c6d44337aaf7c737c06851b5a52715fe3b31f8165da2f48c91f8cfe0dc",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_tract.json.gz",
+      "district": "co-05",
+      "bytes": 28875,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5a1014eecc2c63423d16e8725efbbe9342fb1325e2f087002ca606d465da1f43",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_zip.json",
+      "district": "co-05",
+      "bytes": 20401,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "845e26aabfab643bc07180411e7b91d1506e2dd784329edf47eb900a7c2a15d1",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_registration_zip.json.gz",
+      "district": "co-05",
+      "bytes": 7476,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "8d8a9d280c851eddad12dfa9aef1a214a735238a17863388f94bf66df42ce5a4",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_residence_tract.json",
+      "district": "co-05",
+      "bytes": 94187,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "502cf9247823ef68aafd5653cc691162efc1b3ab6242d68e7781586dc148fdb7",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_residence_tract.json.gz",
+      "district": "co-05",
+      "bytes": 28817,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9a6f00c7628587cb8c2439cd5c571463595c1e0a6eced990fa21dd91424e35d9",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_residence_zip.json",
+      "district": "co-05",
+      "bytes": 36078,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0460c8dd0b8d40490de3747f42020fa621130dd0f26863bf296cca6d532fdd9b",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_areas_residence_zip.json.gz",
+      "district": "co-05",
+      "bytes": 10009,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e169fd9b8ab746d3f626ca91860ad918d8f83f2916cbca6b915ad045a085ad0f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_block_coarse.json",
+      "district": "co-05",
+      "bytes": 2496526,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7a232f36d52c620a942cc76759964ad18d190f2ab01d1d32754ef583e17f882f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_block_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 347460,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "887383594916f3d8875a1a8ad81931d2a792b02f121aca1bfb55233aae1efbe9",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_block_fine.json",
+      "district": "co-05",
+      "bytes": 3774775,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9cbbd5d34f226b4b3921791ce276c60ab9560a5b989409e133f4db3f8ea3e997",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_block_fine.json.gz",
+      "district": "co-05",
+      "bytes": 596988,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "248be03ea5cb10a7c7fa76b7fbf949ccc85e1eefc3d250529a4c2cd66a874798",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_precinct_coarse.json",
+      "district": "co-05",
+      "bytes": 588373,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "db37672ab5bdc55074758947bf2415f9e81588d20e470f25a32603529b53d76b",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_precinct_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 126666,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7b814fe33f2c2230a61eab8688b844d110c5acd2753849a63d95e845a30de9d6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_precinct_fine.json",
+      "district": "co-05",
+      "bytes": 914362,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bb28b467a629b3d1ea798a5c4d5482041421ffe1a6586cf3492acf4944b21312",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_precinct_fine.json.gz",
+      "district": "co-05",
+      "bytes": 202538,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "50669c234d6e167378dafbf32e0d9a74b0efd783e72f1c939d45821396d8b72f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_tract_coarse.json",
+      "district": "co-05",
+      "bytes": 563855,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "8b1c01e3a04910d467b762f3a9d926855d8d770b5ea5b7c15e3f6cfb99c2e85a",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_tract_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 122793,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "faf16afabd0085d86bbc6a42beea117e407f003894d415c676c42b6891a9fa0b",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_tract_fine.json",
+      "district": "co-05",
+      "bytes": 820062,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d95f47805bc61f4fc7fb590b97fc27cd15800dc7b8577e7c199a74209b7b97d6",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_tract_fine.json.gz",
+      "district": "co-05",
+      "bytes": 183973,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ee58c3c878c6d345a8006870ced1649921deda169fa372187af19391c4cdc298",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_zip_coarse.json",
+      "district": "co-05",
+      "bytes": 85167,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4a31f272cd998e2fc2678dc6ddc404bc36790d47a1bb93a87f5200bbd09400bf",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_zip_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 20897,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e52c95ced4fc5909d1a1f38231a59df3e46464531ba7a7acd0a6c05b540b6b94",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_zip_fine.json",
+      "district": "co-05",
+      "bytes": 255742,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bd46fe57c952c02828118aa64161a26583bf2add61d716281ac391f53e9e85ce",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_geometry_zip_fine.json.gz",
+      "district": "co-05",
+      "bytes": 63979,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4ec307e23bc7b1f823d4d29839e882b7ad0632b1dda821130a83621c81f98325",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_meta.json",
+      "district": "co-05",
+      "bytes": 2484,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "a7f9a198d455a05a61191fe3e9df12a4d97ce7a4896e5b39cfbe5c76630aeb61",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v2_meta.json.gz",
+      "district": "co-05",
+      "bytes": 1200,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "efeb60e654caa6dba24f4ac1f9c433d591182351744bb295d6e32ebff7bb3b44",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v3_areas_registration_block.json",
+      "district": "co-05",
+      "bytes": 3501592,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5ea5dfc6d4f2b5f007442c3f2019d5ab0d430d2030c4a41a672d35dedf9dfe3c",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v3_areas_registration_block.json.gz",
+      "district": "co-05",
+      "bytes": 1045820,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e99a80661a686e1776155e69212efa5a23bc7fc411cfb1f6410cc6c601ce88f1",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v3_geometry_block_coarse.json",
+      "district": "co-05",
+      "bytes": 2496526,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7a232f36d52c620a942cc76759964ad18d190f2ab01d1d32754ef583e17f882f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v3_geometry_block_coarse.json.gz",
+      "district": "co-05",
+      "bytes": 347460,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "887383594916f3d8875a1a8ad81931d2a792b02f121aca1bfb55233aae1efbe9",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v3_geometry_block_fine.json",
+      "district": "co-05",
+      "bytes": 3774775,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9cbbd5d34f226b4b3921791ce276c60ab9560a5b989409e133f4db3f8ea3e997",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/derived/v3_geometry_block_fine.json.gz",
+      "district": "co-05",
+      "bytes": 596988,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "248be03ea5cb10a7c7fa76b7fbf949ccc85e1eefc3d250529a4c2cd66a874798",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/district.geojson",
+      "district": "co-05",
+      "bytes": 44786,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b96745b3d669190341b55d8735670ff8a10411d5d7466f2a7cffebf55f23db02",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/geometry.json",
+      "district": "co-05",
+      "bytes": 13097458,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e7616a05ff1114bf91f756b984f2b7c524f4623e637d2c1fbab10a66758b7f59",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/manifest.json",
+      "district": "co-05",
+      "bytes": 31819,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "1d8317210aca6e65ccfda652de358d24fa842160e708e93ead515e5d7f19f3e0",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/rows.json",
+      "district": "co-05",
+      "bytes": 45478729,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b1db4ab59c1505a6861c94aa05f0365980afec4f89671f43aa9632fc37bdc523",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-6cf898496ca2/streets.geojson",
+      "district": "co-05",
+      "bytes": 13136349,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "3860cb66fa99d67eafec30ef10e8aa50a5da1862bf0df49cf4c209f21d785fef",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-b0edb0f04d6c/district.geojson",
+      "district": "co-05",
+      "bytes": 44786,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b96745b3d669190341b55d8735670ff8a10411d5d7466f2a7cffebf55f23db02",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-b0edb0f04d6c/geometry.json",
+      "district": "co-05",
+      "bytes": 9297891,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "fdc96ab5efa6efff3cef436ba47a6128cb655e67d0c599a89f27920ea64aa90f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-b0edb0f04d6c/manifest.json",
+      "district": "co-05",
+      "bytes": 29104,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "3c6253fb695c29f18349dd2216beaeb7ae851ec8aff068776e93e9411ea5d482",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-b0edb0f04d6c/rows.json",
+      "district": "co-05",
+      "bytes": 45478729,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b1db4ab59c1505a6861c94aa05f0365980afec4f89671f43aa9632fc37bdc523",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/snapshots/co-cd005-b0edb0f04d6c/streets.geojson",
+      "district": "co-05",
+      "bytes": 13136349,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "3860cb66fa99d67eafec30ef10e8aa50a5da1862bf0df49cf4c209f21d785fef",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/street.sqlite3",
+      "district": "co-05",
+      "bytes": 748011520,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "5377229d08bb938c14e0b8e3404d39c5801acffb78cefad3cfb40847cc16374c",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/data/walk.sqlite3",
+      "district": "co-05",
+      "bytes": 326139904,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "589e73b9d2bd8beffc0ef7cad8c00bbf586bc94c6a79039e3f6ba4be864b58c0",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "co-05/sources/statara_co_cd005_20260904.csv",
+      "district": "co-05",
+      "bytes": 867435428,
+      "roles": [
+        "source_csv"
+      ],
+      "sha256": "4c48800b8c21870e6e2b6242810bbbe917d8169e529b440efb662f71c464239f",
+      "asset": "terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/area_scores_shown.csv",
+      "district": "ct-01",
+      "bytes": 13585828,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "e71cceec6e439dcdac758434be377c89e3ed5a9770a9484d4a8b02d86cb18851",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/area_scores_shown.manifest.json",
+      "district": "ct-01",
+      "bytes": 1247,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "52009e63e64721203d0ba2663682ca70b77a7e891e5c1d4d00a336e1ea201bb3",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/contacts.sqlite3",
+      "district": "ct-01",
+      "bytes": 199684096,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "5e79a5335e1e04530243068dfc10b86c5ee78b9a65e0527794b20814351840fa",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/density.json",
+      "district": "ct-01",
+      "bytes": 373183,
+      "roles": [
+        "runtime_dataset",
+        "supplemental"
+      ],
+      "sha256": "bc3b5b721962f1f5445e98925f8ff6e0f57b9b82b376f7d67e35559a15f573fa",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/reviewed-address-corrections.json",
+      "district": "ct-01",
+      "bytes": 1670,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "b6ba0489af3423cbde7330c55c974bcd93319532343eb1c02daf4025cc5db76a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/roads.sqlite3",
+      "district": "ct-01",
+      "bytes": 11538432,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "f9396213f88d1b19ac7607c2e515d194e3c5eba68d63259adc75bccd28184bd1",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/scores.sqlite3",
+      "district": "ct-01",
+      "bytes": 586461184,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "c768f7d5ae2622de3d0784a76692ae928f36cb2823efc9d662763626249e73cd",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/adjacency.json",
+      "district": "ct-01",
+      "bytes": 59511,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "592ae2c67ecf02924f383ed2a3c2e7c1359d04afb717e56bb0b99d0c97d75072",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/area_indices.json",
+      "district": "ct-01",
+      "bytes": 9529539,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "8e6a3ee97fbf781b8540fea49537fce24676eeab56e05be4dc2b7dbe1cb0e310",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_block.json",
+      "district": "ct-01",
+      "bytes": 3391271,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0a26f1647c8f43847dccd918bb3e868e708f19e127258cbc3515b4430c18498c",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_block.json.gz",
+      "district": "ct-01",
+      "bytes": 934712,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "60a7d738f40b09015746cfc0841e8001d210228f14db5998092de68ca135a7ff",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_precinct.json",
+      "district": "ct-01",
+      "bytes": 103840,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "08c56b610060e889a4ad50b3fbb627991781f32dd241f97a1faf2e7d1619d412",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_precinct.json.gz",
+      "district": "ct-01",
+      "bytes": 26613,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e5e6e68e2a39f89e5f57da1f950a88c4ba204cbebc87dfc46ed77b61e4997e48",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_tract.json",
+      "district": "ct-01",
+      "bytes": 131763,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "21e2d6e2e5471ff5876e67e987b3e7fb3f433cad18dc6b64284b84cc2bcf7f42",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_tract.json.gz",
+      "district": "ct-01",
+      "bytes": 39607,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0a0b8249698bfcd14c551afcd0960956cba3448001cf1d05177b15dba85c40f8",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_zip.json",
+      "district": "ct-01",
+      "bytes": 26306,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5ef838ca9ab6497cebc2de3055841588978c24380ad2a3b48a2eb15db6920547",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_registration_zip.json.gz",
+      "district": "ct-01",
+      "bytes": 8430,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e2725fc0b92364277a159e9f1d37791f10429e4a59ba83137d43dfdad2c1c43a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_residence_tract.json",
+      "district": "ct-01",
+      "bytes": 125868,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "287e798770f4f3200824286d7c1937f5c99a35665ebe66f6460a9e91bce0dd02",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_residence_tract.json.gz",
+      "district": "ct-01",
+      "bytes": 38162,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "692721af33050b30ad9766e4fd9f34c0b44af132b5e98c6fa1342a17c54017f7",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_residence_zip.json",
+      "district": "ct-01",
+      "bytes": 37221,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9bfb37fdc888de421758c820fd5836f16d0e559db0b2f5ce8a4ad1cc03627a8e",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_areas_residence_zip.json.gz",
+      "district": "ct-01",
+      "bytes": 12269,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9661bed1fb42a9cd96a5ec320197d062c5019595f2f60d55595166ad358300ba",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_block_coarse.json",
+      "district": "ct-01",
+      "bytes": 2144977,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "187e43a3bad1f6f9be7165021a002b5de1f8f5cc84ea08f03837a97fa65d544a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_block_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 317607,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "32d2f1d003c9dafa864ff85b7039907d873391b45617e1a93b479a312aa8cf4a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_block_fine.json",
+      "district": "ct-01",
+      "bytes": 3408490,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "3d8f55d698e7c73385ecc3804259b0da17e6188dbc337a0e196b149d478f9c05",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_block_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 574063,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "6a3dc2918e0f7268e0fabb57898d72e2f50e54a89236f587bc63f639eb8d878b",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_precinct_coarse.json",
+      "district": "ct-01",
+      "bytes": 429885,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "da3b6f86e992ac3ced736174d05ba2b885e6faa0362b87850471475a34e87015",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_precinct_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 108112,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "052536a28a59b131687030f8ae6232c87a4690e4abd1340463943f39e7d6853b",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_precinct_fine.json",
+      "district": "ct-01",
+      "bytes": 728168,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "874a04ccec59b439079b858c00a84fb5015691baf3709385f3dc699bf7746890",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_precinct_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 187010,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "69218eca0746c6736fca4ff0472d51fe8af726d75a57e09b51f89de8397526db",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_tract_coarse.json",
+      "district": "ct-01",
+      "bytes": 417839,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "251223a8a878e01dfe9d90f19109fb14d9f184c800de721a5f59b15529d0bfae",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_tract_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 98248,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "24f062889266aaa7d36886459210a676ffeb5c9e8c0ae63b24ede987bc1bfb8a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_tract_fine.json",
+      "district": "ct-01",
+      "bytes": 688666,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ccc9e45d645e76eb5d9ad19f909b1d357485d5843f2eb49c58b3dc2768a28d80",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_tract_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 165116,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "c727292b763bec3a8d492ef857f30e980aa427d1bb26271e4a5dd4d8183f347d",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_zip_coarse.json",
+      "district": "ct-01",
+      "bytes": 46186,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "25ea22de1cb35643f3e89ebc1c1492ac24fad79b2f948694177cb1961dc9076a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_zip_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 10777,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "137b651b36d1dd6c6af4382aa32e043e9cd16e73f055cfb9b6a57a8681712dfc",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_zip_fine.json",
+      "district": "ct-01",
+      "bytes": 136374,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bb07708828fb118ec55fda2cbafe60ce1c7bb0e4763f55cb82e0410c20b90742",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_geometry_zip_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 33083,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "dc688a61c08064425e22023189397a5f9500da8dc888f4f6443264eb19500f8e",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_meta.json",
+      "district": "ct-01",
+      "bytes": 2610,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "164a77b901944b6117a3224bce949ecf07264f41fc6fa044ba06b2ed20115b7b",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/derived/v2_meta.json.gz",
+      "district": "ct-01",
+      "bytes": 1264,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "1410b9201792079e6e1a35dfab3316a6de45a03974afd1ce6f93749f7b9cf7ea",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/district.geojson",
+      "district": "ct-01",
+      "bytes": 90218,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "40fd680fafbf506b799b624bd4e5ca0a6572f3c5bfefa3ea6ece44af8620fefd",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/geometry.json",
+      "district": "ct-01",
+      "bytes": 11888028,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "54f2fb5e12fbfa85ff315d5d0fb1e0f779e4977cfbfd3c79b426255aa4192ac6",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/manifest.json",
+      "district": "ct-01",
+      "bytes": 32439,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "70ff9406a4af616589658d1376c675a2e2e6e12e0d4af120e86bdfaa664e0d9b",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/rows.json",
+      "district": "ct-01",
+      "bytes": 36738958,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "735e0382e03a0046bf898640f3a71faed5a560e0eed02e6b7cc2b2beeceeed96",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-35fd4a0f3254/streets.geojson",
+      "district": "ct-01",
+      "bytes": 8291711,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "56b65d63204ff53cfff2b254e7c9a0c5f013afcf7cebcd87d74a9d8bbeedc89e",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/adjacency.json",
+      "district": "ct-01",
+      "bytes": 63304,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "dda0d47685d00ebee96b6a15f5149c37a36379d268ed234c2c0874960a101009",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/area_indices.json",
+      "district": "ct-01",
+      "bytes": 14385623,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9fad7c71abe6d31342aff03500be58d710c886677e0e617357e266b823be4981",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_block.json",
+      "district": "ct-01",
+      "bytes": 4434584,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "73af91a6bd3a7506e0996de933ac5c7c2ec7c600960e167e1052a9a1252b9126",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_block.json.gz",
+      "district": "ct-01",
+      "bytes": 1210136,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "13c43a3ae8f9a25ea4adc18f5be44d6d2502f005ca10c0f8afd7faeb22c31063",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_precinct.json",
+      "district": "ct-01",
+      "bytes": 117078,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "48b76520e54eb2533a3f51bfbc263ab2a71f4dd2d121acf8d907cfe988814d25",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_precinct.json.gz",
+      "district": "ct-01",
+      "bytes": 30978,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "93e7b39262068d5268ee99f12f84f8e08ca231882e9a8546e917b07c1dc6c2fb",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_tract.json",
+      "district": "ct-01",
+      "bytes": 173904,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "91bc82f5dc469d2c083363444ed409851bb5c1cea9139c21f0cb31122a9c2820",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_tract.json.gz",
+      "district": "ct-01",
+      "bytes": 58552,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e34fd7c2ad87a4b937f2c558c57e0d69dd120241385ff5ed142921ee7c662c4c",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_zip.json",
+      "district": "ct-01",
+      "bytes": 36172,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "1335a9aa4dfdfd4b04b53e7463bbba10e318faf759af69b1f797f43c3a63b37c",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_registration_zip.json.gz",
+      "district": "ct-01",
+      "bytes": 13205,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0d37f9246c7843387acbf23e740bb22d4369d76047d920d323b5bef39b33cbc8",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_residence_tract.json",
+      "district": "ct-01",
+      "bytes": 173416,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0cf665d47e7fdbffc5b00ce83a0979b9cab0e8e07a42723fdeb3ec38e14612ed",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_residence_tract.json.gz",
+      "district": "ct-01",
+      "bytes": 57899,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e9a35c8226f2c8fcb89ef05269ebe24dbf87e4cfd99e8c42de0c414be0c8f302",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_residence_zip.json",
+      "district": "ct-01",
+      "bytes": 51052,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "99351a3419e92eb51d7e893b01c4c29efad361af9429ba2ed86112d0ef941d28",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_areas_residence_zip.json.gz",
+      "district": "ct-01",
+      "bytes": 17580,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "40c6dbcdf712cd2cc1bb5dbf634f3027697e8aae38b107359f1b4081183bbe95",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_block_coarse.json",
+      "district": "ct-01",
+      "bytes": 2227805,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "835728d733ad92ce32738cb1daf04c27d526af85bc8e6ee9eade24a5c7bb96a6",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_block_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 334242,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "227af5c8fc8cc3b9ebdf96b8b79aeca444216a063352e9900b73bc0f493aa418",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_block_fine.json",
+      "district": "ct-01",
+      "bytes": 3569372,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "79b3be6891f0fbc13c429e3b622787438befab3f6d9bf55634ad916cb80aed29",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_block_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 610728,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f7dbbe6e25522f5295ba18c6f03a9bc24a200d751fcd29b0b692ae217a99f0b1",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_precinct_coarse.json",
+      "district": "ct-01",
+      "bytes": 473638,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5281e663ca68ed4f43179c26a87964c373cfaa5a4b8ab456c2cadbc9cfd41a24",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_precinct_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 120939,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "a51ff0135951e5e8bbf272c06655f2cc4c460e8e3b9f52e1a0615104bca54546",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_precinct_fine.json",
+      "district": "ct-01",
+      "bytes": 843125,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f43605f3e28ad22adc99fbe47143f95a9fde63fbbf8254f77872db9c4a3991c0",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_precinct_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 219322,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4ae5da94ecac270c25c14ce525e43764a75491873ada6fc4a24b573fbd6c99d4",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_tract_coarse.json",
+      "district": "ct-01",
+      "bytes": 470187,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "670cb00b1a15a4277be10492486097ea2abee6c870f9762a63741a9d0761e2d2",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_tract_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 111313,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "1d8fcd9a0cc63725da139d0af09ddcc9f90f6616675e01049f23b50f537020e8",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_tract_fine.json",
+      "district": "ct-01",
+      "bytes": 806686,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "cd3368f971e0f95ddc0a288542181c116b373ba5f41b6b7add75d83b81e0583f",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_tract_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 195685,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4c4b0de42bcfbb43aeaf7057eb358fcdc09371c7e650f6c7d9079d13a155377a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_zip_coarse.json",
+      "district": "ct-01",
+      "bytes": 46186,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "25ea22de1cb35643f3e89ebc1c1492ac24fad79b2f948694177cb1961dc9076a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_zip_coarse.json.gz",
+      "district": "ct-01",
+      "bytes": 10777,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "137b651b36d1dd6c6af4382aa32e043e9cd16e73f055cfb9b6a57a8681712dfc",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_zip_fine.json",
+      "district": "ct-01",
+      "bytes": 136374,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bb07708828fb118ec55fda2cbafe60ce1c7bb0e4763f55cb82e0410c20b90742",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_geometry_zip_fine.json.gz",
+      "district": "ct-01",
+      "bytes": 33083,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "dc688a61c08064425e22023189397a5f9500da8dc888f4f6443264eb19500f8e",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_meta.json",
+      "district": "ct-01",
+      "bytes": 2589,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "1655aa79e1492d8cb1060d8d49f58b498a2fc6fb2b42bfd8fe702047854037b9",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/derived/v3_meta.json.gz",
+      "district": "ct-01",
+      "bytes": 1216,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7da699384180b14d12f9717890a3bd9465cad29762cc50705f6eec4157c6cc5d",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/district.geojson",
+      "district": "ct-01",
+      "bytes": 90218,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "40fd680fafbf506b799b624bd4e5ca0a6572f3c5bfefa3ea6ece44af8620fefd",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/geometry.json",
+      "district": "ct-01",
+      "bytes": 13412400,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "acbd576e2fef1212ecfb06a2a7eec718c63736f1adf8e38d5cb39d3358c2efd3",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/manifest.json",
+      "district": "ct-01",
+      "bytes": 32256,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ad8e6d589c11f31cb295986703f45d42a8c35535ec0d325380b8158b18dbb9a8",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/rows.json",
+      "district": "ct-01",
+      "bytes": 85350492,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "80c6448fa6cf12db07f7d5f88a54b8c3d1a88abdc37bb3118cac22ffaca9ce57",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/snapshots/ct-cd001-630140c42d8a/streets.geojson",
+      "district": "ct-01",
+      "bytes": 8291711,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "56b65d63204ff53cfff2b254e7c9a0c5f013afcf7cebcd87d74a9d8bbeedc89e",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/street.sqlite3",
+      "district": "ct-01",
+      "bytes": 676511744,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "1956d85ef0e2ff1d39764dd5ac85bd9b21460d731c4626d58f7f4bb96367d4a3",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/data/walk.sqlite3",
+      "district": "ct-01",
+      "bytes": 328224768,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "bdcd47e6212c98f199937c25bcef2aa0da2a46ccabd1bae288e69f98471df102",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "ct-01/sources/statara_ct_cd001_20260904.csv",
+      "district": "ct-01",
+      "bytes": 831664503,
+      "roles": [
+        "source_csv"
+      ],
+      "sha256": "6e6c7822c44bf04712cf67c25721e6a180281a603af41721df32c9ab7074129a",
+      "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/area_scores_shown.csv",
+      "district": "or-05",
+      "bytes": 19500932,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "e7b55db8220839af9b92326a2450cd81eb0f164d361516e1a80e4e1b9476e951",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/area_scores_shown.manifest.json",
+      "district": "or-05",
+      "bytes": 1247,
+      "roles": [
+        "supplemental"
+      ],
+      "sha256": "ad3653fd1d74860e77b49a97aec5de9f902a0199f2ccb51d7191d1097a01a156",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/contacts.sqlite3",
+      "district": "or-05",
+      "bytes": 247910400,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "3ba1b050c1d2962e87d869dfc8f065133a77247c10e84157f432e79a829cb29c",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/density.json",
+      "district": "or-05",
+      "bytes": 538908,
+      "roles": [
+        "runtime_dataset",
+        "supplemental"
+      ],
+      "sha256": "7d0320269494ba18cde9ec59ae678a7785be0e079d39748ef5b1df4e2e61c07d",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/roads.sqlite3",
+      "district": "or-05",
+      "bytes": 29675520,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "cb28cd9075d8b68fc0b152efe3b702802e1b11767a56650329e036aa659b40f7",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/scores.sqlite3",
+      "district": "or-05",
+      "bytes": 688787456,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "85de88f97df2f3c98dd3b40f10a139f36ce368784e6356a5ea76ee16706a21b9",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/adjacency.json",
+      "district": "or-05",
+      "bytes": 32413,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7161b2f3da4bd816482b8e684583662480174f5dd75a34abf00c7bf8cbf515ea",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/area_indices.json",
+      "district": "or-05",
+      "bytes": 11566284,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ebca66f370bf9e9fc176abfa17502ef62d56537ed9a91054399b1a8c963f3116",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_block.json",
+      "district": "or-05",
+      "bytes": 4459547,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7a419a14dd4d7af12874e2af66c7fe72627a414e62aaa2d6709ca4f9b75ad8ba",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_block.json.gz",
+      "district": "or-05",
+      "bytes": 1252097,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d5fae2822aff4885e12414445a2ef0863c82f4266a2dbafd656c1a0e7ccf88e6",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_precinct.json",
+      "district": "or-05",
+      "bytes": 123146,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "50665a5aa6f3ce88f4afc94d2aba4da18ad47ce3e2f1159c2e4ef30e6b462c46",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_precinct.json.gz",
+      "district": "or-05",
+      "bytes": 42828,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "6605ec72568a0e345a5952144f34df9133a8809e81e814a14ab8df77e6510c8b",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_tract.json",
+      "district": "or-05",
+      "bytes": 88538,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e4ce2ca22d1613e1dd35c59b41a18bd73b9a075af360c032c2a55ca6cd5c1c97",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_tract.json.gz",
+      "district": "or-05",
+      "bytes": 28739,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "35ddcfe87ca74755a271f6bbb35aef80de6dedd19265df97a43cd5bd189b4c04",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_zip.json",
+      "district": "or-05",
+      "bytes": 27676,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "836b43c579365af9e6e8f932ec6b46d0cb399c277e0a747f56fa21ade833591e",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_registration_zip.json.gz",
+      "district": "or-05",
+      "bytes": 10036,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bd9fd88bca76efaa4da556d91084266aa14d05c7ad67455da3c7ea6f068a4710",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_residence_tract.json",
+      "district": "or-05",
+      "bytes": 104726,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "15843d1ecd04075e37ebc5e8e2c8d75b27d90d5a5ab426ac8513a0a41888a976",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_residence_tract.json.gz",
+      "district": "or-05",
+      "bytes": 27759,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9545fea2646e0798f0d7be68f74b16bb1a92ef7838507764cb064032bdde51b6",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_residence_zip.json",
+      "district": "or-05",
+      "bytes": 47294,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7e2092a9bbf71e2aa14c94273e03e654d8227f9465a9f2d17f56ea2fd255f78f",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_areas_residence_zip.json.gz",
+      "district": "or-05",
+      "bytes": 12351,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "748c7b6a480b579cadf2d5d64fc9139024dc2ad11f61847f0bce6d4592ced9b8",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_block_coarse.json",
+      "district": "or-05",
+      "bytes": 3639061,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "aea55616e1a072f0a54f86f24e9fe508989f0a5f6ccbab7cc64d5e3c649f0d50",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_block_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 542229,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9f382a2915cad6dc00a9cc92fb5ac0a2e0396736b98b8c3f07a9c4b4bc6b31fe",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_block_fine.json",
+      "district": "or-05",
+      "bytes": 6137243,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5a27701c6aa6b1ae35fd3e379658f0c378fb5466ef537fc2e584a4a7e13b0ebd",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_block_fine.json.gz",
+      "district": "or-05",
+      "bytes": 1059388,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "7f4e0499c8d638dcbd78bab7aceb012c5eeae7aa5e4977db2e263b27899faead",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_precinct_coarse.json",
+      "district": "or-05",
+      "bytes": 1051282,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f80f249dad42e845e2981c48184fee15d3f543761f6f7746bc97a78c9bdd5ee8",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_precinct_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 243844,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5316a2d0d54ac3c245647ef14b12e9b0b0da1ed1e964c2d594ec5e35ab322c26",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_precinct_fine.json",
+      "district": "or-05",
+      "bytes": 1916930,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "75f1272ab0e4e08488183adb6daebe0f255178f4340752f9a4862fe120063356",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_precinct_fine.json.gz",
+      "district": "or-05",
+      "bytes": 455375,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d53655632e9067685c828c2b6e05d2a83ec6d765ac9753005a9ec3597da2b982",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_tract_coarse.json",
+      "district": "or-05",
+      "bytes": 958221,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "a746ee982cf26f5034ad5f30bdc889ed2db94f3a2d8704b91f349d9992720b52",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_tract_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 219114,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "c949f04d4bef7963909e17b9c3a93d96887bab51565025609637a9932fb50b6c",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_tract_fine.json",
+      "district": "or-05",
+      "bytes": 1699572,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5524ea124539ff2de13768391c4be3217f447f49b8328411a4578183d1e52306",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_tract_fine.json.gz",
+      "district": "or-05",
+      "bytes": 403560,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "654007d7a0d96ff092adcc80ad2f9c7f017969dab61ef9e9615554427fbc11d6",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_zip_coarse.json",
+      "district": "or-05",
+      "bytes": 275366,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9253d889b01ac67b2d89d34b10aee43364b4b5feeddfd0eedda1eb25da820dbd",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_zip_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 73956,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4a4285748d2960a8ac2ecb85af973e7e9d0dfe922b8924d8b946a985f031ccbd",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_zip_fine.json",
+      "district": "or-05",
+      "bytes": 924552,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bd677f41c64e8532df6cbc43c1fed279a3cba26f454c1855ad5f07179a28baef",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_geometry_zip_fine.json.gz",
+      "district": "or-05",
+      "bytes": 241998,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ca47b8bb59ddb2ab5a9c806074ef6e2725126016095cca7d656783b1b817b430",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_meta.json",
+      "district": "or-05",
+      "bytes": 2610,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "28a1ccdf0072e2f034d3d5b8c757d69da4bd855cf11c6ebd1053b1f8b9b90dc6",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/derived/v2_meta.json.gz",
+      "district": "or-05",
+      "bytes": 1263,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "c1e129a6b17be8dffb57c388c2e198d9ee0b70003434dd1f67e76d714da9698b",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/district.geojson",
+      "district": "or-05",
+      "bytes": 438924,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0cf71ad002f43313c4bb90f7e38551946fc3b07f14f1578eb21be03f64d30899",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/geometry.json",
+      "district": "or-05",
+      "bytes": 29305429,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "666ee9b303c8fcd717ed9cf59922eededd45ad326b4cde7f1fd03c93b3abab5d",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/manifest.json",
+      "district": "or-05",
+      "bytes": 32780,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ae3e570e758823f7022b5989c3508e86ab029a8d7d437126e7f925e4209296f1",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/rows.json",
+      "district": "or-05",
+      "bytes": 51870468,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "641e31284f7b0097c57c713fffc54b02fec6a555a345a15dd552c5027b441189",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-3eeeadd38e4e/streets.geojson",
+      "district": "or-05",
+      "bytes": 21000345,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "074926065b2f226fdf834fcbaaa6c9f8cd955fbed1cee00483a2f24f31f39040",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/adjacency.json",
+      "district": "or-05",
+      "bytes": 32753,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "77a0a252b49d8acd3de688e61297346adce9787c744a30f5651b34b492dff548",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/area_indices.json",
+      "district": "or-05",
+      "bytes": 20244068,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ef7b6fe513f032565ffb6c4a416773f49a00ba1866aa78db448cdd420f7fba8e",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_block.json",
+      "district": "or-05",
+      "bytes": 6222060,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0a60ba09b0d24c93403ee5116ae7d380ceb1289174dd802f521cb2167e84e6d4",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_block.json.gz",
+      "district": "or-05",
+      "bytes": 1961917,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f4eb28dfd834938346f43e4d3d8c72caadbd6fd4c0fe9952386730d0e490bc66",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_precinct.json",
+      "district": "or-05",
+      "bytes": 143757,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "143785cf7bc93389ddcb4af8bbed04e9c3064dc774ef79dd2e24adef775ae0e0",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_precinct.json.gz",
+      "district": "or-05",
+      "bytes": 49639,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d524b7c3b13dbfc5c52ffc0e0d81921617f35fda691630359437ea35b16f9acd",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_tract.json",
+      "district": "or-05",
+      "bytes": 110740,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "18106b016c90ad8211e243eeba5906269b9375e6ed05c0744ba468aac95b8c5e",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_tract.json.gz",
+      "district": "or-05",
+      "bytes": 38147,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f2681985665f6c908f48adbd0b853858119922aea393edac378053d479c5f047",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_zip.json",
+      "district": "or-05",
+      "bytes": 38769,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "859805869e4a4d379a9daba85d79f509401ded8d994a00834911c02d671a7528",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_registration_zip.json.gz",
+      "district": "or-05",
+      "bytes": 14617,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9e0444b9cf57f67dfddc3564ec367010bf39aa82eea45b48e3b54f007bfd169e",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_residence_tract.json",
+      "district": "or-05",
+      "bytes": 152886,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "039ad2d7658cb387b10f6d625fea629d5aefb9652330afed3a270bd96703f879",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_residence_tract.json.gz",
+      "district": "or-05",
+      "bytes": 45989,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "20ab28fa724ddfe06cc828fe3d18295d31ad62f015f9748d667c992547e2901c",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_residence_zip.json",
+      "district": "or-05",
+      "bytes": 71116,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "87ad79c0f40bb50fc9871d799e4a7533d9ef4cf68700a9c7b2ae599656bd7614",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_areas_residence_zip.json.gz",
+      "district": "or-05",
+      "bytes": 21674,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d31e4e14a9489f9311e29d4039ae9d680b46bf3f6d52dc2f659a7ac3bb0541cb",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_block_coarse.json",
+      "district": "or-05",
+      "bytes": 3648263,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d915a05e8dde6aab6e5a9bb16c3ea4424e242da209a5508d435e5f6562447fa2",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_block_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 544308,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "6ec6800be930e630181dd19dba1833430d47f49862932b15c25a5a12e1204bbb",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_block_fine.json",
+      "district": "or-05",
+      "bytes": 6153128,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "59e1066b926408c0dd20f3b5d553303c731f2f62e2df3298f9d40faec8f1ca93",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_block_fine.json.gz",
+      "district": "or-05",
+      "bytes": 1063227,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "fd0f2185b09f9cd11fe8b93cf75e1227c1b44cab6e36450a4dda634b567df1a1",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_precinct_coarse.json",
+      "district": "or-05",
+      "bytes": 1057158,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "cd31e032d910192bc77f9ded7a13d0142fcca5142fe4bfb46b1465f08e3ee672",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_precinct_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 245430,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "b20060e3171e9b54b3cc214bf48cd9be31940e8a73cb4dfac1c879eb684680f8",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_precinct_fine.json",
+      "district": "or-05",
+      "bytes": 1929306,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "e22922a71741d3896558c899e1bee2ef08b5099d8e0edfcc4dfee672254c56a7",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_precinct_fine.json.gz",
+      "district": "or-05",
+      "bytes": 458634,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "a20333a07ecd31b05425b50608c753e5131ecd05f538d37d84e651895f3abe09",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_tract_coarse.json",
+      "district": "or-05",
+      "bytes": 966440,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "d0315ec4aa4b6b109a1c1e48ded096f9405cf021ffc67521b8618d4a04aefff8",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_tract_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 221077,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "f933cd52cad34931ad4fa52625c91cce29a678b066acbc4a7eefa6445ffed6cc",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_tract_fine.json",
+      "district": "or-05",
+      "bytes": 1714326,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ab4b364379c56e0001c13819ebb69304260d7fa58c1cd0b8ae143fb4e87ca993",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_tract_fine.json.gz",
+      "district": "or-05",
+      "bytes": 407232,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "82851bf2aab8ebcac4c397dd3706003503bed3c1c76fc800099ffab58421cb52",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_zip_coarse.json",
+      "district": "or-05",
+      "bytes": 275366,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "9253d889b01ac67b2d89d34b10aee43364b4b5feeddfd0eedda1eb25da820dbd",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_zip_coarse.json.gz",
+      "district": "or-05",
+      "bytes": 73956,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "4a4285748d2960a8ac2ecb85af973e7e9d0dfe922b8924d8b946a985f031ccbd",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_zip_fine.json",
+      "district": "or-05",
+      "bytes": 924552,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "bd677f41c64e8532df6cbc43c1fed279a3cba26f454c1855ad5f07179a28baef",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_geometry_zip_fine.json.gz",
+      "district": "or-05",
+      "bytes": 241998,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "ca47b8bb59ddb2ab5a9c806074ef6e2725126016095cca7d656783b1b817b430",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_meta.json",
+      "district": "or-05",
+      "bytes": 2592,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "5d8e11a637313877d4f0b8b26572bfbf143b040b2f745babac766d0afd0517db",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/derived/v3_meta.json.gz",
+      "district": "or-05",
+      "bytes": 1216,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "61a4195f2e774172c1a70770aea26dc4ecc95df869cffefb566c7ca1a7789ebe",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/district.geojson",
+      "district": "or-05",
+      "bytes": 438924,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "0cf71ad002f43313c4bb90f7e38551946fc3b07f14f1578eb21be03f64d30899",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/geometry.json",
+      "district": "or-05",
+      "bytes": 29471192,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "c1a67eae5d9b9b7fc8caee1c9f2eb678c41bac4eb40e1dc858070235aec74147",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/manifest.json",
+      "district": "or-05",
+      "bytes": 32601,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "eee7bfd5eba5316056d83be1766ee0f789db598fac493399665bc5a0c2101831",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/rows.json",
+      "district": "or-05",
+      "bytes": 128452104,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "460bc909d6dedb2c9df09e170d40e355da9c53aa6490225dcd4b2e126380f816",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/snapshots/or-cd005-81eb3b22c776/streets.geojson",
+      "district": "or-05",
+      "bytes": 21000345,
+      "roles": [
+        "snapshot_or_cache"
+      ],
+      "sha256": "074926065b2f226fdf834fcbaaa6c9f8cd955fbed1cee00483a2f24f31f39040",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/street.sqlite3",
+      "district": "or-05",
+      "bytes": 927756288,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "04f48d9e83e8a27a8c453a0161278c2361507b83c5773b9a217a04328cc8787e",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/data/walk.sqlite3",
+      "district": "or-05",
+      "bytes": 408100864,
+      "roles": [
+        "runtime_dataset"
+      ],
+      "sha256": "e0ab7d3fb758ef184c6217e822c14df96bb6a5eca71b7feb32f020aed719c289",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "path": "or-05/sources/statara_or_cd005_20260904.csv",
+      "district": "or-05",
+      "bytes": 1074173461,
+      "roles": [
+        "source_csv"
+      ],
+      "sha256": "d75d13ccfea891eb252b7609017e338a70263ddee5a27ced5dda17abda91a598",
+      "asset": "terrier-testsets-or-05-2026-10-21.zip"
+    }
+  ],
+  "dataset_assets": [
+    {
+      "name": "terrier-testsets-co-05-2026-10-21.zip",
+      "bytes": 1304736417,
+      "sha256": "38fa6ec8352cca2e4d7d11c864c7d17f14cc3691e1f1f07212d4253567c60674",
+      "members": 95,
+      "raw_bytes": 3098155748,
+      "member_sha256_verified": true,
+      "zip_crc_verified": true,
+      "download_url": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/terrier-testsets-co-05-2026-10-21.zip"
+    },
+    {
+      "name": "terrier-testsets-or-05-2026-10-21.zip",
+      "bytes": 1576961706,
+      "sha256": "f2f8605c22a2e9b3dbd0e55477897cbc2fc10347531b8adb8c413dc1e59107fc",
+      "members": 83,
+      "raw_bytes": 3765233527,
+      "member_sha256_verified": true,
+      "zip_crc_verified": true,
+      "download_url": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/terrier-testsets-or-05-2026-10-21.zip"
+    },
+    {
+      "name": "terrier-testsets-ct-01-2026-10-21.zip",
+      "bytes": 1188416354,
+      "sha256": "add8b34da05c6bd1e385a7ef584eac414b5c8515efdfd795eed2e0edce76378c",
+      "members": 84,
+      "raw_bytes": 2867265423,
+      "member_sha256_verified": true,
+      "zip_crc_verified": true,
+      "download_url": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/terrier-testsets-ct-01-2026-10-21.zip"
+    }
+  ],
+  "geography_asset": {
+    "name": "terrier-district-geography-2026-10-21.zip",
+    "bytes": 1007926127,
+    "sha256": "dd5e5ea7c03d3b4fef446732486e14bbabe3a38d2518ace941e2d8c2725eeb47",
+    "input_files": 48,
+    "manifest": "geography-manifest.json",
+    "scope": "geography_only",
+    "download_url": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/terrier-district-geography-2026-10-21.zip"
+  },
+  "source_lineage": {
+    "co-05": {
+      "contacts.sqlite3": {
+        "schema": "contacts-v1",
+        "source_sha256_matches_public_vendor_source": true
+      },
+      "street.sqlite3": {
+        "schema_version": "1",
+        "source_sha256_matches_public_vendor_source": true
+      },
+      "scores.sqlite3": {
+        "contacts_source_sha256_matches_public_vendor_source": true,
+        "schema": "scores-v1"
+      },
+      "walk.sqlite3": {
+        "schema": "walk-v1",
+        "source_sha256_matches_public_vendor_source": true
+      }
+    },
+    "or-05": {
+      "contacts.sqlite3": {
+        "schema": "contacts-v1",
+        "source_sha256_matches_public_vendor_source": true
+      },
+      "street.sqlite3": {
+        "schema_version": "1",
+        "source_sha256_matches_public_vendor_source": true
+      },
+      "scores.sqlite3": {
+        "contacts_source_sha256_matches_public_vendor_source": true,
+        "schema": "scores-v1"
+      },
+      "walk.sqlite3": {
+        "schema": "walk-v1",
+        "source_sha256_matches_public_vendor_source": true
+      }
+    },
+    "ct-01": {
+      "contacts.sqlite3": {
+        "schema": "contacts-v1",
+        "source_sha256_matches_public_vendor_source": true
+      },
+      "street.sqlite3": {
+        "schema_version": "1",
+        "source_sha256_matches_public_vendor_source": true
+      },
+      "scores.sqlite3": {
+        "contacts_source_sha256_matches_public_vendor_source": true,
+        "schema": "scores-v1"
+      },
+      "walk.sqlite3": {
+        "schema": "walk-v1",
+        "source_sha256_matches_public_vendor_source": true
+      }
+    }
+  },
+  "excluded": [
+    "accounts and access/device approvals",
+    "secrets, credentials and salts",
+    "sessions, Chromium state, logs and audit",
+    "locks, PIDs and migration state",
+    "backups and mirrors"
+  ],
+  "repository": "pjg93-222/Geo",
+  "release_tag": "district-testsets-2026-10-21",
+  "release_url": "https://github.com/pjg93-222/Geo/releases/tag/district-testsets-2026-10-21",
+  "distribution": {
+    "kind": "data_prerelease",
+    "make_latest": false,
+    "desktop_update_tag": false
+  },
+  "sqlite_storage_checks": {
+    "stores": 15,
+    "headers_valid": true,
+    "wal_mode_stores": 0
+  },
+  "runtime_roles": {
+    "co-05": {
+      "contacts.sqlite3": {
+        "path": "co-05/data/contacts.sqlite3",
+        "bytes": 217464832,
+        "sha256": "c6c796a18654b7b4f87802f0455758951b8dc20929a20261f8776b3de98f570f",
+        "asset": "terrier-testsets-co-05-2026-10-21.zip"
+      },
+      "roads.sqlite3": {
+        "path": "co-05/data/roads.sqlite3",
+        "bytes": 13991936,
+        "sha256": "2af303ccd381c3bcf1145025408798d4b4be4bddd36adc843e6b68e2145047af",
+        "asset": "terrier-testsets-co-05-2026-10-21.zip"
+      },
+      "scores.sqlite3": {
+        "path": "co-05/data/scores.sqlite3",
+        "bytes": 577916928,
+        "sha256": "358d89ec32c33ef4990375dc65170887ad996bbdfe41b959ff203c1f9cdbf89d",
+        "asset": "terrier-testsets-co-05-2026-10-21.zip"
+      },
+      "street.sqlite3": {
+        "path": "co-05/data/street.sqlite3",
+        "bytes": 748011520,
+        "sha256": "5377229d08bb938c14e0b8e3404d39c5801acffb78cefad3cfb40847cc16374c",
+        "asset": "terrier-testsets-co-05-2026-10-21.zip"
+      },
+      "walk.sqlite3": {
+        "path": "co-05/data/walk.sqlite3",
+        "bytes": 326139904,
+        "sha256": "589e73b9d2bd8beffc0ef7cad8c00bbf586bc94c6a79039e3f6ba4be864b58c0",
+        "asset": "terrier-testsets-co-05-2026-10-21.zip"
+      },
+      "density.json": {
+        "path": "co-05/data/density.json",
+        "bytes": 417139,
+        "sha256": "20147ce223d245c18fe7cdc9673d12e91055344e4f639ddc114cb922f9622200",
+        "asset": "terrier-testsets-co-05-2026-10-21.zip"
+      }
+    },
+    "or-05": {
+      "contacts.sqlite3": {
+        "path": "or-05/data/contacts.sqlite3",
+        "bytes": 247910400,
+        "sha256": "3ba1b050c1d2962e87d869dfc8f065133a77247c10e84157f432e79a829cb29c",
+        "asset": "terrier-testsets-or-05-2026-10-21.zip"
+      },
+      "roads.sqlite3": {
+        "path": "or-05/data/roads.sqlite3",
+        "bytes": 29675520,
+        "sha256": "cb28cd9075d8b68fc0b152efe3b702802e1b11767a56650329e036aa659b40f7",
+        "asset": "terrier-testsets-or-05-2026-10-21.zip"
+      },
+      "scores.sqlite3": {
+        "path": "or-05/data/scores.sqlite3",
+        "bytes": 688787456,
+        "sha256": "85de88f97df2f3c98dd3b40f10a139f36ce368784e6356a5ea76ee16706a21b9",
+        "asset": "terrier-testsets-or-05-2026-10-21.zip"
+      },
+      "street.sqlite3": {
+        "path": "or-05/data/street.sqlite3",
+        "bytes": 927756288,
+        "sha256": "04f48d9e83e8a27a8c453a0161278c2361507b83c5773b9a217a04328cc8787e",
+        "asset": "terrier-testsets-or-05-2026-10-21.zip"
+      },
+      "walk.sqlite3": {
+        "path": "or-05/data/walk.sqlite3",
+        "bytes": 408100864,
+        "sha256": "e0ab7d3fb758ef184c6217e822c14df96bb6a5eca71b7feb32f020aed719c289",
+        "asset": "terrier-testsets-or-05-2026-10-21.zip"
+      },
+      "density.json": {
+        "path": "or-05/data/density.json",
+        "bytes": 538908,
+        "sha256": "7d0320269494ba18cde9ec59ae678a7785be0e079d39748ef5b1df4e2e61c07d",
+        "asset": "terrier-testsets-or-05-2026-10-21.zip"
+      }
+    },
+    "ct-01": {
+      "contacts.sqlite3": {
+        "path": "ct-01/data/contacts.sqlite3",
+        "bytes": 199684096,
+        "sha256": "5e79a5335e1e04530243068dfc10b86c5ee78b9a65e0527794b20814351840fa",
+        "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+      },
+      "roads.sqlite3": {
+        "path": "ct-01/data/roads.sqlite3",
+        "bytes": 11538432,
+        "sha256": "f9396213f88d1b19ac7607c2e515d194e3c5eba68d63259adc75bccd28184bd1",
+        "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+      },
+      "scores.sqlite3": {
+        "path": "ct-01/data/scores.sqlite3",
+        "bytes": 586461184,
+        "sha256": "c768f7d5ae2622de3d0784a76692ae928f36cb2823efc9d662763626249e73cd",
+        "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+      },
+      "street.sqlite3": {
+        "path": "ct-01/data/street.sqlite3",
+        "bytes": 676511744,
+        "sha256": "1956d85ef0e2ff1d39764dd5ac85bd9b21460d731c4626d58f7f4bb96367d4a3",
+        "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+      },
+      "walk.sqlite3": {
+        "path": "ct-01/data/walk.sqlite3",
+        "bytes": 328224768,
+        "sha256": "bdcd47e6212c98f199937c25bcef2aa0da2a46ccabd1bae288e69f98471df102",
+        "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+      },
+      "density.json": {
+        "path": "ct-01/data/density.json",
+        "bytes": 373183,
+        "sha256": "bc3b5b721962f1f5445e98925f8ff6e0f57b9b82b376f7d67e35559a15f573fa",
+        "asset": "terrier-testsets-ct-01-2026-10-21.zip"
+      }
+    }
+  },
+  "catalogue_downloads": {
+    "manifest.json": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/manifest.json",
+    "geography-manifest.json": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/geography-manifest.json",
+    "README.md": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/README.md",
+    "SHA256SUMS": "https://github.com/pjg93-222/Geo/releases/download/district-testsets-2026-10-21/SHA256SUMS"
+  }
+}

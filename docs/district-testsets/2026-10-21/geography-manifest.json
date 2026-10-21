@@ -1,0 +1,324 @@
+{
+  "schema": "terrier-public-geography-inventory-v1",
+  "scope": "geography_only",
+  "districts": [
+    "co-05",
+    "or-05",
+    "ct-01"
+  ],
+  "files": [
+    {
+      "path": "DOWNLOADS_2026-10-07.json",
+      "bytes": 6519,
+      "sha256": "0b902c237c8394bffd0f72aa3ce55cb30c6af6db0f44388f58be6714c5168a7d",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "blocks.gpkg",
+      "bytes": 236601344,
+      "sha256": "ddd4341072c2f936078e6de94410807dc751cb61f46f6cbc4afcdcb0a9ebe2aa",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "blocks.zip",
+      "bytes": 130660852,
+      "sha256": "baca0b39f7490f67fdee3c5f0c71d7ba63adf8496a1b139c9b9589d7ce42e5d0",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/block_aliases.json",
+      "bytes": 364116,
+      "sha256": "dedb5a69a7892d2188d64dec5e352e8db199f110c2aecd5105eea0a80bedf0ba",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/blocks.gpkg",
+      "bytes": 20819968,
+      "sha256": "cf62a083ee3812c7d4563b26693dbb65d830f056a03a9dd445905cdf9e1c4f42",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/blocks.zip",
+      "bytes": 36451914,
+      "sha256": "5077691da597322484279f2ac055d1d303baadbaec2d58a5bfad28320bbd6658",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/district.geojson",
+      "bytes": 98135,
+      "sha256": "308526cd240adc92d60328b831136e497ddbebff53d31ce701b90ac9e101fe3b",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/districts.zip",
+      "bytes": 266604,
+      "sha256": "5e92903e98ed2536ba8f5c8dc21556ac4cdc394885a03111ee14b7a966066392",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/geography_receipt.json",
+      "bytes": 622,
+      "sha256": "fb77380b70f3ed69439b1abe2aa728ca21a6c2ffa14162ef490e7c4edd28ba62",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "ct-01/hierarchy/county.zip",
+      "bytes": 83989800,
+      "sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/hierarchy/state_house.zip",
+      "bytes": 1373192,
+      "sha256": "48b6e100bb3ba098fc666f28ce21d9996dcd2b4466e0eb034e7a69a59e51a4a1",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/hierarchy/state_senate.zip",
+      "bytes": 764833,
+      "sha256": "e26f9d6b914ac5958a4edf7ce036cef52458a283e02c33772bd6c68b40949fa7",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/ingest_receipt.json",
+      "bytes": 1559,
+      "sha256": "1bbd2b41c87eb8e90933549e88233b528ca327de5e2fb56d85c4cb9f25254151",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "ct-01/provenance.json",
+      "bytes": 1994,
+      "sha256": "f4a09baf11f057a16bfde8bf6ef812206d87fb09999a90171b8e51de4c0e039a",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "ct-01/roads/tl_2025_09110_roads.zip",
+      "bytes": 4979642,
+      "sha256": "c674860f36af7d8e2ee273b3659c586743e76ad40d2ce58032c4c24731bbcfdc",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/roads/tl_2025_09130_roads.zip",
+      "bytes": 2368466,
+      "sha256": "391fea49c6e8ade451899c99c34a1541da38184a1bc2b849ea3a8472875328a5",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/roads/tl_2025_09140_roads.zip",
+      "bytes": 2353092,
+      "sha256": "3cbc6e6836f9e71ab30300d61362925bcab4354efef28512ddd53c932bcd25b8",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/roads/tl_2025_09160_roads.zip",
+      "bytes": 2541399,
+      "sha256": "2787b6edba7d068c9a64cebaa0563e192580b0b6d68c59071e19e602c4072f45",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/streets.geojson",
+      "bytes": 8742040,
+      "sha256": "af787748f650dd898476eb89b1672a996532b9e4ca8cbf2e4a46127dc26a3329",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ct-01/zcta.geojson",
+      "bytes": 3853223,
+      "sha256": "6eaee266a97a75aa93d4e64fe2484d98c8df0917437d947e4f8d48ba2ba15892",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "district.geojson",
+      "bytes": 48555,
+      "sha256": "1778e823c953276db110c39151816473e7aad9cb7cdfcc1658b230a863db8af0",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "districts.zip",
+      "bytes": 640369,
+      "sha256": "cfe56e4190ab954484117e3a65bce57a53667e1442a438de8cf7c109c033071b",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "hierarchy/county.zip",
+      "bytes": 83989800,
+      "sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "hierarchy/state_house.zip",
+      "bytes": 1595027,
+      "sha256": "f78d43b9749f812e8a7ae065bd95b1c2fb8ecb33a4af0eb4c8a1b3b6a57c8745",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "hierarchy/state_senate.zip",
+      "bytes": 1126266,
+      "sha256": "c67dcd3646f400c5eabf84422d8fff299290654fa81efa05dc59647a2e0d974e",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "ingest_receipt.json",
+      "bytes": 1472,
+      "sha256": "cf34b59ba95cd1b74ec9e816b75dc4947044642594841016d24f46cf9a7cf334",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "or-05/blocks.gpkg",
+      "bytes": 28647424,
+      "sha256": "40ab091852ac42a9a8fdb46d0dcca5a15e2f3631734f9d57f59158d7e351c1cb",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/blocks.zip",
+      "bytes": 185923704,
+      "sha256": "eecc6ff7fa63f501ba1602a4181ce6e15f81bfb0897456e2fa4dad72004c6182",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/district.geojson",
+      "bytes": 475909,
+      "sha256": "a6b4ecc6fa44b4f8c5de01ec6eb5eecf23c61a95b61db71556f34b3a136f93ba",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/districts.zip",
+      "bytes": 853453,
+      "sha256": "264688a2c95768dcde1361db0dec03252df8f52c5a918ea1892a8bc320e6f33a",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/geography_receipt.json",
+      "bytes": 441,
+      "sha256": "70345134d6ab74e3f9fb3572250afac2bd12c6292f2b9b301ffa803379211fe2",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "or-05/hierarchy/county.zip",
+      "bytes": 83989800,
+      "sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/hierarchy/state_house.zip",
+      "bytes": 2155258,
+      "sha256": "33ac63274ebfb4705d6fe0a86ffcc24be9502b1580e2963a3b0886535888a9f0",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/hierarchy/state_senate.zip",
+      "bytes": 1571410,
+      "sha256": "01dc574e39f163b63f2b0c28fce2aadffc9653224b99719c2baccdca199a8306",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/ingest_receipt.json",
+      "bytes": 1553,
+      "sha256": "7c2063dcb00695e80117c3d583b7929b3afe2a2de6dcf7dcd3079c660f9c57d8",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "or-05/provenance.json",
+      "bytes": 2339,
+      "sha256": "094ea68a125877f5d206c93c38fdea199322e30b500cd4b3cf5935c2ca598400",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "or-05/roads/tl_2025_41005_roads.zip",
+      "bytes": 3915523,
+      "sha256": "65595b9ba38f4c01e5b8bec2dafd95dc409a17f3334e2f3f458a9b8b72af227a",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/roads/tl_2025_41017_roads.zip",
+      "bytes": 4277095,
+      "sha256": "e452aad7a8c3996a5b62ae35c1c569dc1dadbf4bc2741a649fc9f34bcba3c85a",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/roads/tl_2025_41031_roads.zip",
+      "bytes": 3462502,
+      "sha256": "af8748b52d2e285c77ad123ec2cee80ab25f9bb0f145ddcf38707801efc2b417",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/roads/tl_2025_41043_roads.zip",
+      "bytes": 3302669,
+      "sha256": "05dcf30e28f1d75ff1c178a989dc5f19358b4fe561c681c5c0771bd11d66f797",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/roads/tl_2025_41047_roads.zip",
+      "bytes": 2409744,
+      "sha256": "9a5b3d59a044227da5d62eb97cc96f710b2b0226f770a4a46722364beea6aa85",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/roads/tl_2025_41051_roads.zip",
+      "bytes": 2100943,
+      "sha256": "30ae0afe1a0bb6685da281b8ad97fc708876b61e9bfc7c1f0f96118d33d3cb92",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/streets.geojson",
+      "bytes": 22091315,
+      "sha256": "cb98478baebcab4d1b39e0b4d39850232d970694580de13ea20aef3a42620ea5",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "or-05/zcta.geojson",
+      "bytes": 16015144,
+      "sha256": "5ca9c3f2c3d96a504ddf2b282b012e176cd02d8cd1b8fff47cf75004dee274ae",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "provenance.json",
+      "bytes": 1333,
+      "sha256": "9c07f444a6841014f1c2320428fff8217c9f7d2153ebdbf888ae9b29fca7b863",
+      "category": "provenance_or_aggregate_diagnostic"
+    },
+    {
+      "path": "roads.zip",
+      "bytes": 5439733,
+      "sha256": "3feddc2d889257f918dc68135eae615f3d543652082290d4fde0fecc8026dcb1",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "streets.geojson",
+      "bytes": 13839421,
+      "sha256": "f57a05646f67b38d6453f7d52a2ed8797cfd38f10a160d09c29efe756d381bb6",
+      "category": "geographic_geometry_or_public_source"
+    },
+    {
+      "path": "zcta.geojson",
+      "bytes": 3787081,
+      "sha256": "71254efa55edbbedbdf6143d1ab2fc8280a2649c3f973e37b9ab39b1408e366f",
+      "category": "geographic_geometry_or_public_source"
+    }
+  ],
+  "input_files": 48,
+  "total_input_bytes": 1007904597,
+  "source_credits": [
+    {
+      "publisher": "U.S. Census Bureau",
+      "product": "TIGER/Line 2025 (2020 Census blocks, 119th Congressional districts, roads, counties and state legislative boundaries)",
+      "url": "https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html"
+    },
+    {
+      "publisher": "U.S. Census Bureau",
+      "product": "2020 ZIP Code Tabulation Areas via TIGERweb",
+      "url": "https://tigerweb.geo.census.gov/arcgis/rest/services/Census2020/tigerWMS_Census2020/MapServer/84"
+    }
+  ],
+  "source_url_receipts": [
+    "DOWNLOADS_2026-10-07.json",
+    "provenance.json",
+    "or-05/provenance.json",
+    "ct-01/provenance.json"
+  ],
+  "notes": [
+    "Census geometry and original Census archives; generated street polygons provide context, not authoritative street blocks.",
+    "Source/provenance receipts include aggregate diagnostics and source fingerprints; no person-level records are included.",
+    "No local databases, vendor CSVs, snapshot profile tables, accounts, credentials, salts, logs or writable application state."
+  ]
+}
