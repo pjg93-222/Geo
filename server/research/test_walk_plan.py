@@ -980,6 +980,8 @@ class WalkPlanTests(TestCase):
         self.assertEqual(named['query'], {'spans': '1,6', 'precinct': PRECINCT_W})
         self.assertEqual(json.dumps(self.plan(profile='all'), sort_keys=True), json.dumps(self.plan(), sort_keys=True))
         self.assertNotIn('profile', self.plan(profile='all'))
+        self.assertEqual(json.dumps(self.trimmed(doors='4', profile='all'), sort_keys=True),       # the door-count trim too
+                         json.dumps(self.trimmed(doors='4'), sort_keys=True))
 
     def test_the_coalition_list_holds_the_supporters_and_persuadables(self):
         shown = self.list(spans='1,6', profile='coalition')
@@ -1030,7 +1032,9 @@ class WalkPlanTests(TestCase):
             self.list(400, ss='010', profile=value)
             self.plan(400, profile=value)
         self.get('/api/v3/walk/list?ss=010&profile=all&profile=coalition', 400)
-        self.assertEqual(self.list(400, ss='010', profile='nope')['error'], V.PROFILE_NOT_OFFERED)
+        for value in ('nope', 'COALITION', 'coalition '):                      # every unknown key, not only a lower-case one
+            self.assertEqual(self.list(400, ss='010', profile=value)['error'], V.PROFILE_NOT_OFFERED, value)
+            self.assertEqual(self.plan(400, profile=value)['error'], V.PROFILE_NOT_OFFERED, value)
         self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '010', 'profile': 'nope'}, 'fingerprint': '0' * 64}, 400)
 
     def test_a_district_without_a_candidate_offers_only_all(self):
@@ -1044,6 +1048,13 @@ class WalkPlanTests(TestCase):
             self.assertEqual(self.list(ss='010', profile='all')['totals']['voters'], self.list(ss='010')['totals']['voters'])
         with mock.patch.object(V.PR, 'member_fn', return_value=lambda code, s: False):
             self.assertEqual(self.list(400, spans='1,6', precinct=PRECINCT_W, profile='coalition')['error'], V.PROFILE_EMPTY)
+
+    def test_a_block_with_nobody_in_the_profile_leaves_the_others_listed(self):
+        # only p07 (a Democrat with s 1.0, on span 1) is kept: span 6 has nobody in the profile, and the list is still built
+        with mock.patch.object(V.PR, 'member_fn', return_value=lambda code, s: code == 'D' and s is not None and s > 0.9):
+            self.assertEqual(self.voters(self.list(spans='1,6', profile='coalition')), set(self.ids('p07')))
+            self.assertEqual(self.voters(self.trimmed(doors='4', profile='coalition')), set(self.ids('p07')))
+            self.assertEqual(self.plan(preset='identify', profile='coalition')['matched']['people'], 1)   # one door: not ranked
 
     def test_a_saved_list_keeps_its_profile(self):
         query = {'spans': '1,6', 'precinct': PRECINCT_W, 'profile': 'coalition'}

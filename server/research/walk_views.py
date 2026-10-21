@@ -234,7 +234,7 @@ def parse_spans(text, ordered=False):
 def parse_profile(text):
     """The voter profile asked for (tools/profiles.py): 'all' when none is, refused when the district does not offer it (a
     district without a candidate offers 'all' alone)."""
-    key = 'all' if text is None else clean(text, r'[a-z]{1,16}')
+    key = 'all' if text is None else text          # matched against the offered keys alone: anything else is not offered
     if key not in PR.offered(settings.DISTRICT['party']):
         raise Refused(PROFILE_NOT_OFFERED)
     return key
