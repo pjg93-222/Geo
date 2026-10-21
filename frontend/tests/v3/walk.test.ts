@@ -722,7 +722,7 @@ test('upload identity: an answer for an earlier upload changes nothing (rematch 
 
 test('walk screen wiring: the unload guard, the startup plan, the rematch check and the CSV report use the helpers above', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
-  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'the unload guard asks the outbox, and while a refusal note is up or the list shown has a flagged mark');
+  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|optInWrites\.pending\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'the unload guard asks the outbox, saves in progress including opt-ins, and while a refusal note is up or the list shown has a flagged mark');
   assert.ok(/startPlan\(init\)/.test(src) && !/init\.picks\.length\)generate/.test(src), 'startup follows the plan, which includes an area alone');
   assert.ok(/const current=\(\)=>uploadRef\.current\?\.id===id/.test(src) && /if\(!current\(\)\)return;/.test(src), 'a rematch answer is dropped once its upload is gone');
   assert.ok(/pickerOf\(p\)/.test(src) && !/k in q/.test(src), 'a saved list restores the picker only through pickerOf');
@@ -1291,7 +1291,7 @@ test('walk screen wiring (round 2): re-knock losses told, refused marks describe
   assert.ok(/if\(q\.missing\)setActionNote\(\{text:missingText\(q\.missing\)/.test(src), 're-knock says how many voters it lost');
   assert.ok(/aria-describedby=\{p\.note\}/.test(src) && /<span id=\{note\} className="walk-unsaved"/.test(src), 'a refused mark is part of its group\'s description');
   assert.ok(/text\.length===1&&<div className="walk-find-pop walk-find-empty" role="status">Type at least 2 letters</.test(src), 'one letter asks for another');
-  assert.ok(/<table className="walk-table" role="table">/.test(src) && /<tr role="row"/.test(src) && /role="columnheader"/.test(src), 'roles survive the card layout');
+  assert.ok(/<table className=\{cx\('walk-table',p\.showOptIns&&'has-opt-ins'\)\} role="table">/.test(src) && /<tr role="row"/.test(src) && /role="columnheader"/.test(src), 'roles survive the card layout and the optional opt-in table class');
   const phone = css.slice(css.indexOf('@media(max-width:640px)'));
   assert.ok(/\.walk-res button\{[^}]*height:44px/.test(phone) && /\.walk-table-wrap\{overflow-x:visible\}/.test(phone), 'phone: 44 px buttons, no sideways table');
   assert.ok(!/@media[^{]*print/.test(css), 'the printed list is the PDF, not this stylesheet');

@@ -21,11 +21,12 @@
                                  with `missing`, the voters marked Not home that the voter data no longer has
   GET  /api/v3/walk/lists/<key>  a saved list as it was frozen, with each voter's latest result {code, on, list} refreshed
   POST /api/v3/walk/dispositions results of visits {list, on, entries}, appended; the newest entry of a person wins
+  POST /api/v3/walk/opt-ins      manually recorded donor/volunteer opt-ins {list, entries}; independent of visit results
 
 Every endpoint is local only (loopback owner, no proxy headers, not hosted), answers 403 in demo mode (lists carry real
 names and phones), is `no-store`, takes an exact list of query parameters and, for POST, a JSON object of at most 256 KB.
-Hosted (CU_DEPLOYMENT=hosted) there is no local owner (field_access.py). Three routes open to field staff (group field-staff):
-GET /walk/lists, GET /walk/lists/<key> and POST /walk/dispositions. Seven open to field managers (group field-manager, who are
+Hosted (CU_DEPLOYMENT=hosted) there is no local owner (field_access.py). Four routes open to field staff (group field-staff):
+GET /walk/lists, GET /walk/lists/<key>, POST /walk/dispositions and POST /walk/opt-ins. Seven open to field managers (group field-manager, who are
 not thereby field staff): options, streets, match, list, overview, plan and POST /walk/lists, so a list can be built and saved on
 the server. Each call leaves an AuditEvent (route only). Every other route here, scores included, answers 403. Django enforces
 CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded for a person on its
@@ -56,10 +57,11 @@ from . import field_access as FA
 from . import untapped as U
 from . import walk_context as C
 from . import walk_names as N
+from . import walk_opt_ins as O
 from . import walk_route
 from . import walk_store as W
 from . import walk_turf
-from .models import Disposition, WalkList
+from .models import Disposition, WalkList, WalkOptInRecord
 from .street_views import local_denied, local_only, local_only_post, response
 from .terrier_contacts import SourceStoreError
 from .v3_http import BadRequest, clean, params
@@ -534,7 +536,7 @@ def plan_payload(store, rows, query, *, preserve_unlocated=False):
 
 def fingerprint(payload, keys):
     """A digest of what a list shows (all of it but the day it was built and its saved details) and of the voter behind
-    each person id: two builds with the same fingerprint are the same list. Taken before `last` is attached."""
+    each person id: two builds with the same fingerprint are the same list. Taken before live result/opt-in overlays."""
     shown = {name: value for name, value in payload.items() if name not in ('generated_on', 'list', 'fingerprint')}
     return hashlib.sha256(json.dumps([shown, keys], sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
@@ -601,6 +603,7 @@ def attach_last(payload, keys):
         for door in run['doors']:
             for voter in door['voters']:
                 voter['last'] = last.get(keys.get(voter['person_id']))
+    O.attach(payload, keys)
 
 
 @manager_read
@@ -1021,3 +1024,40 @@ def dispositions(request):
         Disposition.objects.bulk_create(made)
         FA.audit(request, 'walk.disposition.write', list=saved.key, n=len(made), voter_keys=sorted({d.voter_key for d in made}))
     return response({'saved': len(made)})
+
+
+@field_write
+def opt_ins(request):
+    """Append only what was explicitly recorded, bound to the saved list's private roster."""
+    params(request, set())
+    body = json_body(request, {'list', 'entries'})
+    if set(body) != {'list', 'entries'}:
+        raise BadRequest('A saved list and entries are required')
+    saved = find_list(body['list'])
+    entries = body['entries']
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENTRIES:
+        raise Refused('Send between 1 and %d opt-in entries at a time.' % MAX_ENTRIES)
+    roster = saved.payload.get(PRIVATE) or {}
+    people, made = {}, []
+    for entry in entries:
+        if (not isinstance(entry, dict) or not {'person_id'} < set(entry)
+                or not set(entry) <= {'person_id', *O.KINDS}):
+            raise BadRequest('An entry needs person_id and at least one opt-in status')
+        person = entry['person_id']
+        if not isinstance(person, str) or person not in roster:
+            raise Refused('Some of those voters are not on this list.')
+        if person in people:
+            raise Refused('Send each person once per opt-in request.')
+        people[person] = roster[person]
+        for kind in O.KINDS:
+            if kind in entry:
+                status = entry[kind]
+                if not isinstance(status, str) or status not in O.STATUSES:
+                    raise Refused('Opt-in status must be unknown, opted_in or opted_out.')
+                made.append(WalkOptInRecord(walk_list=saved, person_id=person,
+                                           voter_key=roster[person], kind=kind, status=status))
+    with transaction.atomic():
+        WalkOptInRecord.objects.bulk_create(made)
+        FA.audit(request, 'walk.opt_in.write', list=saved.key, n=len(made), voter_keys=sorted(set(people.values())))
+        states = O.for_people(people)
+    return response({'saved': len(entries), 'opt_ins': states})

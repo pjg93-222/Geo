@@ -34,6 +34,7 @@ v3_routes = [
     path('api/v3/walk/overview', walk_views.overview), path('api/v3/walk/plan', walk_views.plan),
     path('api/v3/walk/scores', walk_views.voter_scores), path('api/v3/walk/lists', walk_views.lists),
     path('api/v3/walk/lists/<slug:key>', walk_views.saved_list), path('api/v3/walk/dispositions', walk_views.dispositions),
+    path('api/v3/walk/opt-ins', walk_views.opt_ins),
     re_path(r'^api/v3/.*$', lambda request: v3_error('Unknown v3 endpoint.', 404)),   # JSON, never the page shell
 ]
 quality_routes = [path('api/street-preload',street.preload),path('api/index-detail',v.index_detail),path('api/credit-quality', credit_quality), path('api/contacts',contacts), path('api/person',person), path('api/roads',roads), path('api/area-focus',area_focus)]

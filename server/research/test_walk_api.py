@@ -40,7 +40,7 @@ TOTAL_KEYS = {'streets', 'stops', 'doors', 'voters', 'walk_m'}
 RUN_KEYS = {'stop', 'street_id', 'street', 'side', 'precinct', 'from_house', 'to_house', 'walk_m', 'lr', 'path',
             'approach', 'doors'}
 DOOR_KEYS = {'seq', 'house', 'unit', 'placed_by', 'lon', 'lat', 'voters'}
-VOTER_KEYS = {'person_id', 'name', 'phone', 'pri', 'gen', 'abs', 'party', 'age', 'gender', 'reg_date', 'last'}
+VOTER_KEYS = {'person_id', 'name', 'phone', 'pri', 'gen', 'abs', 'party', 'age', 'gender', 'reg_date', 'last', 'opt_ins'}
 STREET_KEYS = {'id', 'label', 'city', 'zip', 'doors', 'people', 'even', 'odd'}
 
 
@@ -149,7 +149,8 @@ class WalkAccessTests(WalkCase):
                 ('post', '/api/v3/walk/match', {'rows': [{'street': 'Pine St'}]}),
                 ('post', '/api/v3/walk/lists', {'title': 'Again', 'query': {'ss': '010'}, 'fingerprint': ANY_FINGERPRINT}),
                 ('post', '/api/v3/walk/dispositions', {'list': key, 'on': '2026-10-01',
-                                                       'entries': [{'person_id': person, 'code': 'S'}]})]
+                                                       'entries': [{'person_id': person, 'code': 'S'}]}),
+                ('post', '/api/v3/walk/opt-ins', {'list': key, 'entries': [{'person_id': person, 'donor': 'opted_in'}]})]
 
     def call(self, client, method, url, body):
         if method == 'get':

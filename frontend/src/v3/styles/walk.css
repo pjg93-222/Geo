@@ -52,6 +52,9 @@
 .walk-sheet-picker select,.walk-address-sheets select{font:inherit;padding:5px;border:1px solid var(--control-line);border-radius:5px;background:var(--surface);color:var(--ink)}
 .walk-address-sheets h2{font-size:22px;font-weight:600}
 .walk-address-sheets h3{font-size:18px;font-weight:600;margin:18px 0 8px}
+.walk-paste{margin:14px 0}
+.walk-paste>label{display:block;margin-top:12px;font-weight:600}
+.walk-paste textarea{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:10px;resize:vertical;font:inherit;border:1px solid var(--control-line);border-radius:6px;background:var(--surface);color:var(--ink)}
 .walk-address-sheets input:not([type=checkbox]){font:inherit;padding:6px 8px;border:1px solid var(--control-line);border-radius:5px;background:var(--surface);color:var(--ink);max-width:100%;box-sizing:border-box}
 .walk-address-sheets .walk-actions>label{display:flex;flex-direction:column;gap:4px}
 .walk-address-sheets section[aria-label="Review street matches"] .walk-address-table-wrap{max-height:55vh;margin-bottom:12px}
@@ -306,3 +309,23 @@
   .walk-refused-bar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px calc(8px + env(safe-area-inset-bottom));background:#FFF0ED;border-top:1px solid #F0C9C2;box-shadow:0 -2px 8px rgba(42,36,73,.12);font-size:13px;font-weight:600;color:#8A3434}
   .walk-refused-bar button{flex:none;min-height:44px;padding:0 18px;border-radius:7px;background:#8A3434;color:#fff;font-size:13px;font-weight:600}
 }
+
+/* Explicit opt-in records: status text remains visible alongside the opt-in highlight. */
+.walk-table.has-opt-ins{min-width:1160px}
+.walk-table.has-opt-ins col:nth-child(2){width:280px}
+.walk-table.has-opt-ins td.walk-name{white-space:normal;pointer-events:auto;text-shadow:none;line-height:1.35}
+.walk-table tr.has-recorded-opt-in{background:#F1F6EE}
+.walk-table tr.has-recorded-opt-in td.walk-name{box-shadow:inset 3px 0 #527345}
+.walk-opt-ins{display:grid;gap:10px;margin-top:8px;font-size:11px;font-weight:400;white-space:normal}
+.walk-opt-in{display:grid;gap:3px}
+.walk-table .walk-opt-in-badge{display:inline-flex;width:fit-content;padding:2px 6px;border:1px solid var(--line);border-radius:4px;color:var(--muted);background:var(--surface);font-weight:600}
+.walk-table .walk-opt-in-badge.is-opted_in{color:#355729;border-color:#B4C7AA;background:#EDF5E8}
+.walk-table .walk-opt-in-badge.is-opted_out{color:#7D3E35;border-color:#D9BDB5;background:#FBF1EE}
+.walk-opt-in-source{color:var(--muted);font-size:10px;line-height:1.4}
+.walk-opt-in-edit{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:2px}
+.walk-opt-in-edit select{max-width:100%;font:inherit;padding:3px 5px;border:1px solid var(--control-line);border-radius:4px;background:var(--surface);color:var(--ink)}
+.walk-opt-in-edit select:disabled{opacity:.6}
+.walk-opt-in-error{color:#8A3434;font-size:11px;line-height:1.4}
+.walk-address-table .has-recorded-opt-in{background:#F1F6EE;border-left:3px solid #527345;padding:6px 8px}
+.walk-address-table .walk-opt-ins{min-width:180px}
+@media(max-width:900px){.walk-table.has-opt-ins{min-width:0}.walk-opt-ins{max-width:360px}.walk-table tr.has-recorded-opt-in td.walk-name{padding-left:8px}}
