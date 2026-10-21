@@ -1,0 +1,665 @@
+# Terrier desktop: unsigned Windows x64 installer built on a free standard GitHub-hosted runner, either a manual-install
+# PREVIEW or (RELEASE_PUBLISHER set) the unsigned INPUT of a signed release.
+# Repo path: .github/workflows/desktop-windows.yml on pjg93-222/Geo main.
+#
+# Signed-release input mode (Paul, 2026-10-16: self-signed certificate trusted only on his machines). RELEASE_PUBLISHER
+# is the certificate's exact SignerCertificate.Subject, a public value; the Package step bakes it in as
+# WINDOWS_PUBLISHER_NAME (package.json windowsPublisherName and app-update.yml publisherName), so the packaged updater
+# accepts only installers Windows reports Valid for that subject. No signing material exists here: the installer stays
+# NotSigned, the prerelease below stays an unsigned preview, and STABLE_TAG (desktop-v$VERSION, which must not exist
+# yet) is created later on Paul's PC, after he Authenticode-signs this run's artifact there (Sign-And-Publish-Release.ps1
+# and Melange ops/desktop/GITHUB_RELEASES.md). Empty RELEASE_PUBLISHER and STABLE_TAG = plain preview (pin null).
+#
+# Source binding: the Terrier source is always github.sha on refs/heads/main, and it may differ from the reviewed source
+# REVIEWED_BASE only by the CI files in CI_FILES. The desktop tooling (ops/desktop) is not in Geo: it is checked out from
+# the public pjg93-222/Melange at the pinned TOOLING_SHA. Rebuilding a later main or tooling means editing REVIEWED_BASE /
+# TOOLING_SHA here, and that edit is itself the trigger (paths filter).
+# Integration (two commits on main, the Melange T/Y procedure): first the reviewed source commit S, whose tree has NO
+#   .github/; then the CI commit that restores .github and sets REVIEWED_BASE = RELEASE_TARGET = S's full SHA. CI_FILES
+#   is therefore every file under .github. The prerelease and its tag target RELEASE_TARGET, not github.sha; provenance
+#   records both. Preflight refuses non-hex or unequal pins, S missing, or S carrying .github/workflows/.
+#
+# Jobs: preflight (API reads only) -> build (Windows, contents: read) -> release (gh/curl only, contents: write).
+# - preflight fails if a release or tag named RELEASE_TAG exists, unless it is this workflow's own DRAFT for this exact
+#   commit (then the build is skipped and release resumes it); and fails if another run of this workflow for the same
+#   commit is in progress or has succeeded.
+# - release drives every read and upload by release ID (never by tag name for a draft), uploads only missing assets,
+#   never overwrites, refuses any mismatch, verifies every asset's sha256, then publishes the prerelease.
+# Recovery: re-run failed jobs (`gh run rerun <run id> --failed`). The release job recomputes its own state from the
+#   releases API and never trusts preflight's mode: no release -> create the draft; exactly one DRAFT with the expected
+#   target -> resume (validate every present asset by sha256 against this build's SHA256SUMS, upload only missing ones,
+#   provenance included; never overwrite, never delete); anything else -> fail. Resuming needs the build artifact
+#   (7-day retention: the local signing step also downloads it). If it has expired the job fails; rebuilding is then a
+#   deliberate decision recorded in the build queue (delete the stale draft by hand, then dispatch).
+#
+# Actions are pinned to full commit SHAs, the same reviewed pins as release.yml (re-resolved 2026-10-16 with
+# `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`; trailing comment = floating tag and the exact patch tag).
+# No secrets beyond GITHUB_TOKEN; WINDOWS_PUBLISHER_NAME is set only from RELEASE_PUBLISHER (see above). Neither
+# desktop-preview-v* nor desktop-v* matches release.yml's 'v*' trigger. Nothing here installs or launches the packaged app.
+# Python dependencies: requirements.txt plus explicit pins, constrained by requirements.lock.txt. That lock is version-pinned
+# but NOT hash-locked.
+name: desktop-windows
+run-name: Terrier desktop ${{ github.sha }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/desktop-windows.yml
+      - .github/desktop/desktop-access-trust.public.json
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full 40-character SHA of the main commit to build; must equal the dispatched ref's head
+        required: true
+        type: string
+      publish:
+        description: Create (or resume) and publish the GitHub prerelease after a green build
+        required: true
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: desktop-windows-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  APP: terrier
+  PRODUCT: Terrier
+  VERSION: 1.0.12
+  RELEASE_TAG: desktop-preview-v1.0.12
+  # Signed-release input mode (header). Both empty = plain preview. The subject is byte-identical to Melange's
+  # (signing-common.ps1 and pjg93-222/Melange desktop-windows.yml).
+  RELEASE_PUBLISHER: 'CN=Melange Systems Desktop Release (self-signed)'
+  STABLE_TAG: desktop-v1.0.12
+  ARTIFACT: terrier-desktop-${{ github.sha }}
+  # Workflow-free source snapshot: Geo main owner fix plus the packaged source/owner regression gates.
+  REVIEWED_BASE: 74015489d3e2ea9f38a53c3b56f1ca8f07f56610
+  RELEASE_TARGET: 74015489d3e2ea9f38a53c3b56f1ca8f07f56610
+  # S has no .github, so every file under .github differs from it.
+  CI_FILES: >-
+    .github/workflows/desktop-windows.yml .github/workflows/desktop-installer-acceptance.yml
+    .github/workflows/release.yml .github/workflows/deps.yml .github/desktop/desktop-access-trust.public.json
+  TOOLING_REPOSITORY: pjg93-222/Melange
+  # Reviewed public Melange main: client 1.0.12, owner-launch regression and canonical Geo main source.
+  TOOLING_SHA: e655dbe260676206e56c73629a5cf4bc38d5398c
+  TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
+  TRUST_SHA256: b169ed5c01c32cc71469589144a84679901d8581d8eb487827456b278eadc92a
+  # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
+  DJANGO_GATE: >-
+    server.research.test_access server.research.test_hosted server.research.test_districts
+    server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
+    tools.test_image_gate tools.luna_district.test_rowfw tools.test_build_scores.DistrictInputTests
+    server.research.test_walk_address_api server.research.test_walk_address_list server.research.test_walk_image_api
+    server.research.test_walk_location_evidence server.research.test_walk_record_evidence server.research.test_walk_route
+    server.research.test_untapped_area_codes server.research.test_desktop_owner_no_password
+    server.research.test_desktop_password_lock_removed
+  # NOT RUN on the runner, explicitly (SKIP-NEEDS-DATA): they read the gitignored live bundle data/<live bundle>.zip.
+  DATA_DEPENDENT_SUITES: >-
+    server.research.test_measures server.research.test_area_indices server.research.test_summaries_csv
+    server.research.test_v3_people server.research.test_v3_static server.research.test_v3_support
+    server.research.test_v4_bundle server.research.tests.ApplicationTests server.research.test_bundle_districts
+    tools.test_build_scores.LoaderTests tools.test_build_scores.SupportLoaderTests
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # contents: write only because draft releases are listed solely to callers with push access (REST "List releases");
+    # this job runs gh api reads only (no checkout, no third-party code). actions: read for the run list.
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      mode: ${{ steps.check.outputs.mode }}
+    steps:
+      - name: Bind to main and the requested SHA
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::builds run only from refs/heads/main, not $GITHUB_REF"; exit 1; }
+          if [ "$EVENT" = workflow_dispatch ]; then
+            [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ && "$INPUT_SHA" = "$GITHUB_SHA" ]] \
+              || { echo "::error::source_sha '$INPUT_SHA' must be the full SHA of the dispatched main head $GITHUB_SHA"; exit 1; }
+          fi
+
+      - id: check
+        name: Existing release, tag and runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Source pins: one full SHA, an existing commit, whose tree has no .github/workflows/ (the T/Y procedure, header).
+          [[ "$REVIEWED_BASE" =~ ^[0-9a-f]{40}$ && "$RELEASE_TARGET" = "$REVIEWED_BASE" ]] \
+            || { echo "::error::REVIEWED_BASE '$REVIEWED_BASE' and RELEASE_TARGET '$RELEASE_TARGET' must be the same full SHA"; exit 1; }
+          [ "$(gh api "repos/$GH_REPO/commits/$RELEASE_TARGET" --jq .sha)" = "$RELEASE_TARGET" ] \
+            || { echo "::error::RELEASE_TARGET $RELEASE_TARGET is not a commit in $GH_REPO"; exit 1; }
+          if probe=$(gh api "repos/$GH_REPO/contents/.github/workflows?ref=$RELEASE_TARGET" 2>&1); then
+            echo "::error::RELEASE_TARGET $RELEASE_TARGET carries .github/workflows/; it must be the workflow-free source commit"; exit 1
+          fi
+          grep -q 'HTTP 404' <<<"$probe" || { echo "::error::could not establish that RELEASE_TARGET has no .github/workflows/: $probe"; exit 1; }
+          # Signed-release input: a CN= subject that is not a test identity, and a still-unused stable desktop-v tag.
+          if [ -n "$RELEASE_PUBLISHER" ] || [ -n "$STABLE_TAG" ]; then
+            [[ "$RELEASE_PUBLISHER" == CN=* && "$RELEASE_PUBLISHER" != *TEST* && "$STABLE_TAG" = "desktop-v$VERSION" ]] \
+              || { echo "::error::signed-release input needs RELEASE_PUBLISHER 'CN=...' (not a TEST subject) and STABLE_TAG desktop-v$VERSION"; exit 1; }
+            stable=$(gh api "repos/$GH_REPO/releases?per_page=100" --paginate | jq -s --arg t "$STABLE_TAG" '[add[] | select(.tag_name == $t)] | length')
+            [ "$stable" -eq 0 ] || { echo "::error::a release named $STABLE_TAG already exists; a signed release is never rebuilt"; exit 1; }
+            if gh api "repos/$GH_REPO/git/ref/tags/$STABLE_TAG" >/dev/null 2>&1; then echo "::error::tag $STABLE_TAG already exists"; exit 1; fi
+          fi
+          # Every release, drafts included, matched on tag_name.
+          gh api "repos/$GH_REPO/releases?per_page=100" --paginate | jq -s --arg t "$RELEASE_TAG" '[add[] | select(.tag_name == $t)]' > matches.json
+          tag_exists=no; gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1 && tag_exists=yes
+          count=$(jq length matches.json)
+          mode=build
+          if [ "$tag_exists" = yes ]; then echo "::error::tag $RELEASE_TAG already exists"; exit 1; fi
+          if [ "$count" -gt 1 ]; then echo "::error::$count releases are named $RELEASE_TAG"; exit 1; fi
+          if [ "$count" -eq 1 ]; then
+            jq -e --arg t "$RELEASE_TARGET" '.[0].draft == true and .[0].target_commitish == $t' matches.json >/dev/null \
+              || { echo "::error::$RELEASE_TAG exists and is not this workflow's draft for this commit"; exit 1; }
+            # A provenance asset, if one was uploaded before the failure, must name this commit.
+            asset_id=$(jq -r --arg n "$PRODUCT-$VERSION-provenance.json" '[.[0].assets[] | select(.name == $n)] | if length == 1 then .[0].id else empty end' matches.json)
+            if [ -n "$asset_id" ]; then
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/octet-stream' \
+                "$GITHUB_API_URL/repos/$GH_REPO/releases/assets/$asset_id" -o prov.json
+              jq -e --arg sha "$GITHUB_SHA" '.sourceCommit == $sha' prov.json >/dev/null \
+                || { echo "::error::draft provenance does not name $GITHUB_SHA"; exit 1; }
+            fi
+            mode=resume
+          fi
+          # Other runs of this workflow for this commit (this run excluded; a re-run keeps the same run ID).
+          gh run list --workflow desktop-windows.yml --commit "$GITHUB_SHA" --limit 100 --json status,conclusion,databaseId \
+            | jq --argjson me "$GITHUB_RUN_ID" '[.[] | select(.databaseId != $me)]' > runs.json
+          active=$(jq '[.[] | select(.status != "completed")] | length' runs.json)
+          succeeded=$(jq '[.[] | select(.conclusion == "success")] | length' runs.json)
+          [ "$active" -eq 0 ] || { echo "::error::another run for $GITHUB_SHA is in progress"; jq . runs.json; exit 1; }
+          if [ "$mode" = build ] && [ "$succeeded" -gt 0 ]; then echo "::error::a run for $GITHUB_SHA already succeeded"; jq . runs.json; exit 1; fi
+          echo "mode=$mode"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: windows-2022
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      DESKTOP_APP_ID: terrier
+      DESKTOP_UPDATE_PROVIDER: github
+      DESKTOP_GITHUB_REPOSITORY: pjg93-222/Geo
+      DESKTOP_ACCESS_TRUST: ${{ github.workspace }}\geo\.github\desktop\desktop-access-trust.public.json
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (= v4.4.0)
+        with:
+          path: geo
+          persist-credentials: false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (= v4.4.0)
+        with:
+          repository: ${{ env.TOOLING_REPOSITORY }}
+          ref: ${{ env.TOOLING_SHA }}
+          path: tooling
+          sparse-checkout: ops/desktop
+          persist-credentials: false
+
+      - name: Sources equal the reviewed commits
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $tool = git -C tooling rev-parse HEAD
+          if ($tool -cne $env:TOOLING_SHA) { throw "tooling HEAD $tool is not $env:TOOLING_SHA" }
+          git -C geo fetch --no-tags --depth=1 origin $env:REVIEWED_BASE
+          $changed = @(git -C geo diff --name-only --no-renames $env:REVIEWED_BASE HEAD)
+          $extra = @($changed | Where-Object { $_ -cnotin ($env:CI_FILES -split ' ') })
+          if ($extra.Count) { throw ("Commit differs from reviewed base in non-CI files: " + ($extra -join ', ')) }
+          "Diff vs ${env:REVIEWED_BASE}: " + ($changed -join ', ')
+          $hash = (Get-FileHash -LiteralPath $env:TRUST_FILE -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cne $env:TRUST_SHA256) { throw "Trust descriptor sha256 $hash is not the installed apps' descriptor; a change is a key transition" }
+
+      - name: Layout
+        run: |
+          $t = $env:RUNNER_TEMP
+          @("VENV=$t\venv", "DESKTOP_BUILD_ROOT=$t\build", "DESKTOP_RUNTIME_ROOT=$t\runtime", "DESKTOP_DIST_ROOT=$t\dist", "OUT=$t\out") |
+            Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          New-Item -ItemType Directory -Force "$t\out" | Out-Null
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | Out-String
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5 (= v5.6.0)
+        with:
+          python-version: '3.12.10'   # the interpreter of the installed 1.0.1 runtimes and of the reference test run
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (= v4.4.0)
+        with:
+          node-version: '24.18.0'     # the reference test run's Node (frontend .ts unit tests need native type stripping)
+
+      # One fresh venv serves the tests and the runtime (bundle_python.py copies it). requirements.txt omits modules
+      # runtime-manifest.json requires: pyarrow==24.0.0 (score producers), scipy/joblib (requirements.score.in) and
+      # cryptography (desktop credentials; the installed 1.0.1 runtime has 49.0.0). requirements.lock.txt constrains the
+      # rest; it is version-pinned, not hash-locked.
+      - name: Python build and test environment
+        working-directory: geo
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv $env:VENV
+          & "$env:VENV\Scripts\python.exe" -m pip install --disable-pip-version-check --no-input -r requirements.txt `
+            pyarrow==24.0.0 scipy==1.18.0 joblib==1.5.3 cryptography==49.0.0 -c requirements.lock.txt
+          & "$env:VENV\Scripts\python.exe" -m pip freeze --all | Set-Content -LiteralPath "$env:OUT\pip-freeze.txt" -Encoding utf8
+
+      - name: Gate - Django check and CI test subset (one step, build venv, never the bundled Python)
+        working-directory: geo
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:VENV\Scripts\python.exe" manage.py check
+          & "$env:VENV\Scripts\python.exe" manage.py test ($env:DJANGO_GATE -split ' ') 2>&1 | Tee-Object -FilePath "$env:OUT\django-gate.log"
+          "NOT RUN (SKIP-NEEDS-DATA, data/<live bundle>.zip absent): $env:DATA_DEPENDENT_SUITES"
+
+      - name: Gate - frontend unit tests and build
+        working-directory: geo/frontend
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm ci --no-audit --no-fund
+          npm run test:unit 2>&1 | Tee-Object -FilePath "$env:OUT\frontend-unit.log"
+          npm run build
+          if (-not (Test-Path -LiteralPath dist/brand/terrier-loading-hq.mp4)) { throw 'frontend/dist lacks brand/terrier-loading-hq.mp4' }
+
+      # The tooling's Terrier boundary tests against this Geo source: the real guarded Django stack, prepare_principal
+      # with the verified-backup migration, and the launcher's arguments. One module per process (each configures Django
+      # once); test_terrier_principal also serves the built frontend/dist, so it runs after the frontend build.
+      - name: Gate - Terrier desktop packaging tests (one module per process)
+        working-directory: tooling/ops/desktop/packaging
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:TERRIER_TEST_SOURCE = (Resolve-Path -LiteralPath "$env:GITHUB_WORKSPACE\geo").Path
+          foreach ($m in 'test_terrier_principal', 'test_desktop_backend') {
+            & "$env:VENV\Scripts\python.exe" -m unittest $m 2>&1 | Tee-Object -FilePath "$env:OUT\packaging-$m.log"
+            # A clean pass only: a bare OK line, and no skipped test.
+            $log = Get-Content -Raw -LiteralPath "$env:OUT\packaging-$m.log"
+            if ($log -notmatch '(?m)^OK\r?$' -or $log -match 'skipped=') { throw "$m did not report a clean OK (no skipped tests)" }
+          }
+
+      # The tests ran in the checkout; nothing they leave may enter the staged runtime.
+      - name: Gate - checkout unchanged except build outputs
+        working-directory: geo
+        shell: python
+        run: |
+          import subprocess
+          git = lambda *a: subprocess.run(['git', *a], check=True, capture_output=True, text=True).stdout.split('\n')
+          staged = ['server', 'tools', 'manage.py', 'data/criteria.json', 'data/field_dictionary.csv']
+          modified = [l for l in git('status', '--porcelain', '--untracked-files=no') if l]
+          untracked = [l for l in git('ls-files', '--others', '--exclude-standard', '--', *staged) if l]
+          ignored = [l for l in git('ls-files', '--others', '--ignored', '--exclude-standard', '--', *staged)
+                     if l and '__pycache__/' not in l and not l.endswith('.pyc')]
+          assert not (modified or untracked or ignored), {'modified': modified, 'untracked': untracked, 'ignored': ignored}
+          print('checkout clean for staging')
+
+      - name: Build private runtime
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:VENV\Scripts\python.exe" tooling/ops/desktop/packaging/build_runtime.py --app terrier --source geo --build-root $env:DESKTOP_BUILD_ROOT --runtime-root $env:DESKTOP_RUNTIME_ROOT
+
+      - name: Gate - native runtimes complete (Terrier declares none); add third-party notices
+        shell: python
+        run: |
+          import json, os, pathlib, shutil
+          runtime = pathlib.Path(os.environ['DESKTOP_RUNTIME_ROOT']) / 'terrier'
+          status = json.loads((runtime / 'runtime-status.json').read_text(encoding='utf-8'))
+          assert status['appId'] == 'terrier' and status['missingNativeRuntimes'] == [], status
+          ocr = 'frontend/dist/ocr/tesseract-6.0.1/'
+          for f in ('frontend/dist/index.html', 'frontend/dist/brand/terrier-loading-hq.mp4', 'data/criteria.json', 'data/field_dictionary.csv', 'manage.py',
+                    ocr + 'eng.traineddata.gz', ocr + 'asset-manifest.json', ocr + 'LICENSE-tessdata.txt', ocr + 'LICENSE-tesseract-core.txt',
+                    ocr + 'LICENSE-tesseract.js.txt', ocr + 'NOTICE.txt', 'server/research/location_evidence/southington-municipal-parcels-2026-10-17.json'):
+              assert (runtime / 'sources' / f).is_file(), f'{f} missing from staged sources'
+          # Python and package notices, from each bundled wheel's dist-info METADATA.
+          import email, re, sys
+          env = os.environ
+          sp = runtime / 'python' / 'Lib' / 'site-packages'
+          rows = []
+          for d in sorted(sp.glob('*.dist-info'), key=lambda p: p.name.lower()):
+              m = email.message_from_bytes((d / 'METADATA').read_bytes())
+              lic = (m.get('License-Expression') or '').strip()
+              if not lic:
+                  classifiers = [c.split('::')[-1].strip() for c in (m.get_all('Classifier') or []) if c.startswith('License ::')]
+                  text = (m.get('License') or '').strip()
+                  lic = '; '.join(classifiers) or (text.splitlines()[0][:100] if text else '')
+              files = sorted(p.relative_to(sp).as_posix() for p in d.rglob('*') if p.is_file() and re.search(r'LICEN[CS]E|COPYING|NOTICE|AUTHORS', p.name, re.I))
+              assert lic or files, f'{d.name}: no license metadata and no license file'
+              rows.append((m['Name'], m['Version'], lic or 'see license files', files))
+          pyver = '.'.join(map(str, sys.version_info[:3]))
+          lines = [f'# Python {pyver} and bundled packages ({env["PRODUCT"]} desktop)', '',
+                   f'- CPython {pyver} (64-bit Windows build from python.org via actions/setup-python), at `resources/runtime/{env["APP"]}/python/`.',
+                   '  License: Python Software Foundation License Version 2; full text with the third-party terms of bundled components (OpenSSL, libffi, SQLite, expat, zlib and others) in `python/LICENSE.txt`.',
+                   f'  Source: <https://www.python.org/ftp/python/{pyver}/Python-{pyver}.tar.xz>.',
+                   '- `python/vcruntime140.dll`, `python/vcruntime140_1.dll`: Microsoft Visual C++ runtime as shipped with the python.org CPython installer.',
+                   '', '| Package | Version | License (from METADATA) | License files in the package (under site-packages) | Source |', '|---|---|---|---|---|']
+          for name, ver, lic, files in rows:
+              lines.append(f"| {name} | {ver} | {lic.replace('|', '/')} | {'<br>'.join(files) or '-'} | <https://pypi.org/project/{name}/{ver}/#files> |")
+          notice = '\n'.join(lines) + '\n'
+          (runtime / 'THIRD-PARTY-NOTICES').mkdir()
+          (runtime / 'THIRD-PARTY-NOTICES' / 'Python-and-packages.md').write_text(notice, encoding='utf-8', newline='\n')
+          (pathlib.Path(env['OUT']) / 'Python-and-packages.md').write_text(notice, encoding='utf-8', newline='\n')
+          # JavaScript packages and the bundled OCR assets, deterministically from the lockfile and node_modules.
+          import subprocess
+          geo = pathlib.Path(env['GITHUB_WORKSPACE']) / 'geo'
+          javascript = runtime / 'THIRD-PARTY-NOTICES' / 'JavaScript-and-assets.md'
+          subprocess.run([sys.executable, str(geo / 'desktop' / 'js_notices.py'), '--frontend', str(geo / 'frontend'), '--output', str(javascript)], check=True)
+          shutil.copy2(javascript, pathlib.Path(env['OUT']) / 'JavaScript-and-assets.md')
+          (runtime / 'source-provenance.json').write_text(json.dumps({
+              'app': 'terrier', 'repository': os.environ['GITHUB_REPOSITORY'], 'commit': os.environ['GITHUB_SHA'],
+              'reviewedBase': os.environ['REVIEWED_BASE'], 'desktopTooling': {'repository': os.environ['TOOLING_REPOSITORY'], 'commit': os.environ['TOOLING_SHA']},
+              'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT']}, indent=2), encoding='utf-8')
+          shutil.rmtree(os.environ['DESKTOP_BUILD_ROOT'])
+          print(json.dumps(status, indent=2))
+
+      - name: Client install, tests and audit
+        working-directory: tooling/ops/desktop/client
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $v = node -p "require('./package.json').version"
+          if ($v -cne $env:VERSION) { throw "client version $v is not $env:VERSION" }
+          npm ci --no-fund
+          # Tests that generate TLS fixtures spawn DESKTOP_TEST_PYTHON (default: bare `python`, which has no cryptography).
+          # Use the fresh build venv (pinned cryptography 49.0.0), never the bundled runtime Python.
+          $env:DESKTOP_TEST_PYTHON = "$env:VENV\Scripts\python.exe"
+          & $env:DESKTOP_TEST_PYTHON -E -s -c "import cryptography, sys; print(sys.executable, 'cryptography', cryptography.__version__)"
+          npm test 2>&1 | Tee-Object -FilePath "$env:OUT\npm-test.log"
+          npm audit --omit=dev --audit-level=high
+
+      # No certificate is configured (CSC_IDENTITY_AUTO_DISCOVERY false, no CSC_LINK or certificateSha1), so electron-builder
+      # skips signing every binary; WINDOWS_PUBLISHER_NAME only bakes the public pin (Melange client/builder.cjs:24-25).
+      - name: Package (unsigned NSIS installer plus win-unpacked)
+        working-directory: tooling/ops/desktop/client
+        env:
+          WINDOWS_PUBLISHER_NAME: ${{ env.RELEASE_PUBLISHER }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm run build -- --publish never
+
+      - name: Collect outputs and read packaged configuration
+        working-directory: tooling/ops/desktop/client
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dist = Join-Path $env:DESKTOP_DIST_ROOT $env:APP
+          $exe = @(Get-ChildItem -LiteralPath $dist -Filter "$env:PRODUCT-$env:VERSION-*.exe" -File)
+          if ($exe.Count -ne 1) { throw "Expected one installer in $dist, found $($exe.Count)" }
+          $unpacked = Join-Path $dist 'win-unpacked'
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe[0].FullName
+          if ($sig.Status -ne 'NotSigned') { throw "Installer signature status $($sig.Status); this preview must be unsigned" }
+          Move-Item -LiteralPath $exe[0].FullName -Destination (Join-Path $env:OUT "$env:PRODUCT-$env:VERSION-win-x64-unsigned-installer.exe")
+          # Zip before the smoke run so no smoke-written .pyc reaches the zip.
+          7z a -tzip -mx=5 -bd (Join-Path $env:OUT "$env:PRODUCT-$env:VERSION-win-x64-unsigned-preview.zip") "$unpacked\*" | Out-Null
+          node -e "require('fs').writeFileSync(process.argv[2],require('@electron/asar').extractFile(process.argv[1],'package.json'))" (Join-Path $unpacked 'resources\app.asar') "$env:OUT\packaged-package.json"
+          "UNPACKED=$unpacked" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Gate - packaged configuration (trust, update source, fail-closed updater)
+        shell: python
+        run: |
+          import json, os
+          pkg = json.load(open(os.path.join(os.environ['OUT'], 'packaged-package.json'), encoding='utf-8-sig'))
+          cfg = pkg['desktopAppConfig']
+          trust = json.load(open(os.environ['DESKTOP_ACCESS_TRUST'], encoding='utf-8'))
+          assert pkg['version'] == os.environ['VERSION'], pkg['version']
+          assert cfg['appId'] == os.environ['APP'], cfg['appId']
+          assert cfg['desktopAccessTrust'] == trust, 'packaged access trust differs from the committed descriptor'
+          assert cfg['desktopUpdateSource'] == {'provider': 'github', 'repository': os.environ['DESKTOP_GITHUB_REPOSITORY'].lower()}, cfg['desktopUpdateSource']
+          # The pin: exactly RELEASE_PUBLISHER (null for a plain preview), in package.json and as the single app-update.yml
+          # publisherName that client/updater.cjs nativeTrust requires (electron-updater otherwise skips Authenticode).
+          publisher = os.environ['RELEASE_PUBLISHER'] or None
+          assert cfg['windowsPublisherName'] == publisher, (cfg['windowsPublisherName'], publisher)
+          yml = open(os.path.join(os.environ['UNPACKED'], 'resources', 'app-update.yml'), encoding='utf-8').read().splitlines()
+          i, names = (yml.index('publisherName:') + 1 if 'publisherName:' in yml else len(yml)), []
+          while i < len(yml) and yml[i].startswith('  - '):
+              names.append(yml[i][4:].strip().strip('\'"')); i += 1
+          assert names == ([publisher] if publisher else []) and sum(l.startswith('publisherName') for l in yml) == (1 if publisher else 0), yml
+          print('packaged config OK:', json.dumps({k: cfg[k] for k in ('appId', 'desktopUpdateSource', 'windowsPublisherName')}), 'app-update.yml publisherName:', names)
+
+      # In the FINAL packaged bytes (win-unpacked and the zip): the Python notices present, identical, and complete.
+      - name: Gate - third-party notices in the packaged bytes
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, zipfile
+          env = os.environ; out = pathlib.Path(env['OUT'])
+          p = 'resources/runtime/terrier/THIRD-PARTY-NOTICES/Python-and-packages.md'
+          want = hashlib.sha256((out / 'Python-and-packages.md').read_bytes()).hexdigest()
+          unpacked = pathlib.Path(env['UNPACKED'])
+          assert (unpacked / p).is_file() and hashlib.sha256((unpacked / p).read_bytes()).hexdigest() == want, 'win-unpacked notice mismatch'
+          dists = {q.name for q in (unpacked / 'resources/runtime/terrier/python/Lib/site-packages').glob('*.dist-info')}
+          assert len(dists) == (out / 'Python-and-packages.md').read_text(encoding='utf-8').count('<https://pypi.org/project/'), 'Python notices do not list every bundled package'
+          assert (unpacked / 'resources/runtime/terrier/python/LICENSE.txt').is_file(), 'python/LICENSE.txt missing'
+          with zipfile.ZipFile(out / f"{env['PRODUCT']}-{env['VERSION']}-win-x64-unsigned-preview.zip") as z:
+              names = {n.replace('\\', '/'): n for n in z.namelist()}
+              assert p in names and hashlib.sha256(z.read(names[p])).hexdigest() == want, 'zip notice mismatch'
+          print('Python notices identical in win-unpacked and zip;', len(dists), 'packages')
+          # The JavaScript notices: identical in both, one section per production lockfile package; the OCR licences ship too.
+          pj = 'resources/runtime/terrier/THIRD-PARTY-NOTICES/JavaScript-and-assets.md'
+          wantj = hashlib.sha256((out / 'JavaScript-and-assets.md').read_bytes()).hexdigest()
+          assert (unpacked / pj).is_file() and hashlib.sha256((unpacked / pj).read_bytes()).hexdigest() == wantj, 'win-unpacked JavaScript notice mismatch'
+          lock = json.load(open(pathlib.Path(env['GITHUB_WORKSPACE']) / 'geo' / 'frontend' / 'package-lock.json', encoding='utf-8'))
+          production = [k for k, v in lock['packages'].items() if k.startswith('node_modules/') and not v.get('dev') and not v.get('devOptional')]
+          assert f'Production packages: {len(production)}.' in (out / 'JavaScript-and-assets.md').read_text(encoding='utf-8'), 'JavaScript notices do not list every production package'
+          ocr = 'resources/runtime/terrier/sources/frontend/dist/ocr/tesseract-6.0.1/'
+          for name in ('LICENSE-tessdata.txt', 'LICENSE-tesseract-core.txt', 'LICENSE-tesseract.js.txt', 'NOTICE.txt', 'eng.traineddata.gz', 'asset-manifest.json'):
+              assert (unpacked / ocr / name).is_file(), f'{ocr}{name} missing from win-unpacked'
+          with zipfile.ZipFile(out / f"{env['PRODUCT']}-{env['VERSION']}-win-x64-unsigned-preview.zip") as z:
+              names = {n.replace('\\', '/'): n for n in z.namelist()}
+              assert pj in names and hashlib.sha256(z.read(names[pj])).hexdigest() == wantj, 'zip JavaScript notice mismatch'
+          print('JavaScript notices identical in win-unpacked and zip;', len(production), 'production packages; OCR licences present')
+
+      # The packaged sources must equal geo/desktop/package-expected.json: no silent omission (the desktop-preview-v1.0.6
+      # package lacked seven files) and no unexpected addition. Checked in the final win-unpacked bytes the zip is made from.
+      - name: Gate - packaged sources equal the expected list
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:VENV\Scripts\python.exe" -m unittest discover -s geo/desktop -t geo/desktop
+          & "$env:VENV\Scripts\python.exe" geo/desktop/check_package.py --geo geo --sources (Join-Path $env:UNPACKED 'resources\runtime\terrier\sources') 2>&1 | Tee-Object -FilePath "$env:OUT\package-check.log"
+
+      - name: Gate - packaged owner never requires a password
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:VENV\Scripts\python.exe" geo/desktop/verify_owner_runtime.py --runtime (Join-Path $env:UNPACKED 'resources\runtime\terrier') --output "$env:OUT\owner-runtime.json"
+
+      # Headless only: the packaged backend on empty scratch data, through the bundled Python (smoke_backend.py --runtime).
+      - name: Smoke - packaged backend
+        env:
+          # The Terrier backend refuses to start without an approved principal. The real client passes it in
+          # DESKTOP_ACCESS_PRINCIPAL (runtime.cjs:43); smoke_backend.py forwards DESKTOP_* variables and the backend's
+          # --district default is co-05. This is the synthetic recipient fixture of test_terrier_desktop_access.py:
+          # fixed test UUIDs, no real user, no secret. Scoped to this step; the binding it creates lives in the smoke's
+          # temporary state directory, which smoke_backend.py deletes.
+          DESKTOP_ACCESS_PRINCIPAL: '{"schemaVersion":1,"serverId":"11111111-1111-1111-1111-111111111111","deviceId":"22222222-2222-2222-2222-222222222222","principalId":"33333333-3333-3333-3333-333333333333","accountIdentity":"recipient_33333333333333333333333333333333","localAccountIdentity":"recipient_33333333333333333333333333333333","localUserId":null,"districtId":"co-05","role":"local_administrator","mode":"recipient"}'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:VENV\Scripts\python.exe" tooling/ops/desktop/packaging/smoke_backend.py --app terrier --runtime (Join-Path $env:UNPACKED 'resources\runtime\terrier') --output "$env:OUT\smoke-backend.json"
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | Out-String
+
+      - name: Provenance and SHA256SUMS
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, re, datetime
+          out = pathlib.Path(os.environ['OUT']); env = os.environ
+          def sha(p):
+              h = hashlib.sha256()
+              with open(p, 'rb') as f:
+                  for b in iter(lambda: f.read(1 << 20), b''): h.update(b)
+              return h.hexdigest()
+          def node_counts(name):
+              log = (out / name).read_text(encoding='utf-8', errors='replace')
+              c = {k: int(v) for k, v in re.findall(r'^(?:\S+ )?(tests|pass|fail|cancelled|skipped|todo) (\d+)\s*$', log, re.M)}
+              assert c.get('fail', 1) == 0 and c.get('pass', 0) > 0, (name, c)
+              return c
+          django = (out / 'django-gate.log').read_text(encoding='utf-8', errors='replace')
+          ran = re.search(r'^Ran (\d+) tests?', django, re.M); assert ran and re.search(r'^OK\b', django, re.M), 'Django gate did not report OK'
+          def packaging(m):
+              # The packaging gate step's own rule again: a bare OK line and no skipped test.
+              log = (out / f'packaging-{m}.log').read_text(encoding='utf-8', errors='replace')
+              ran = re.search(r'^Ran (\d+) tests?', log, re.M)
+              assert ran and re.search(r'^OK$', log, re.M) and 'skipped=' not in log, f'{m} did not report a clean OK'
+              return int(ran.group(1))
+          product, version = env['PRODUCT'], env['VERSION']
+          files = [f'{product}-{version}-win-x64-unsigned-installer.exe', f'{product}-{version}-win-x64-unsigned-preview.zip', 'Python-and-packages.md']
+          publisher = env['RELEASE_PUBLISHER'] or None
+          prov = {
+            'app': env['APP'], 'version': version, 'signed': False,
+            'channel': 'signed-release input (unsigned here; Authenticode-signed on the release owner PC)' if publisher else 'manual-install preview',
+            'stableTag': env['STABLE_TAG'] or None,
+            'repository': f"https://github.com/{env['GITHUB_REPOSITORY']}", 'sourceCommit': env['GITHUB_SHA'], 'releaseTarget': env['RELEASE_TARGET'],
+            'reviewedBase': env['REVIEWED_BASE'], 'ciOnlyFilesAboveBase': env['CI_FILES'].split(),
+            'desktopTooling': {'repository': f"https://github.com/{env['TOOLING_REPOSITORY']}", 'commit': env['TOOLING_SHA'], 'path': 'ops/desktop'},
+            'runId': env['GITHUB_RUN_ID'], 'runAttempt': env['GITHUB_RUN_ATTEMPT'],
+            'runUrl': f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}",
+            'event': env['GITHUB_EVENT_NAME'], 'runner': {'os': env.get('ImageOS'), 'image': env.get('ImageVersion'), 'label': 'windows-2022'},
+            'builtAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'toolchain': {'python': '3.12.10 (actions/setup-python, fresh venv: requirements.txt + pyarrow==24.0.0 scipy==1.18.0 joblib==1.5.3 cryptography==49.0.0, -c requirements.lock.txt; version-pinned, not hash-locked)',
+                          'node': os.popen('node -v').read().strip(), 'electron': '44.7.2', 'electronBuilder': '26.15.3',
+                          'pipFreeze': (out / 'pip-freeze.txt').read_text(encoding='utf-8').split()},
+            'environment': {k: env[k] for k in ('DESKTOP_APP_ID', 'DESKTOP_UPDATE_PROVIDER', 'DESKTOP_GITHUB_REPOSITORY', 'CSC_IDENTITY_AUTO_DISCOVERY')},
+            'windowsPublisherName': publisher, 'accessTrust': {'file': env['TRUST_FILE'].removeprefix('geo/'), 'sha256': env['TRUST_SHA256']},
+            'nativeRuntimes': {},
+            'verified': {'djangoCheck': 'no issues', 'djangoGate': {'labels': env['DJANGO_GATE'].split(), 'ran': int(ran.group(1)), 'result': 'OK'},
+                         'frontendUnit': node_counts('frontend-unit.log'), 'frontendBuild': 'tsc --noEmit && vite build: exit 0',
+                         'terrierPackagingTests': {m: packaging(m) for m in ('test_terrier_principal', 'test_desktop_backend')},
+                         'clientTests': node_counts('npm-test.log'), 'npmAudit': 'omit=dev, audit-level=high: pass',
+                         'nativeRuntimeGate': 'missingNativeRuntimes == []', 'checkoutCleanForStaging': True,
+                         'noticeGate': 'THIRD-PARTY-NOTICES/Python-and-packages.md and JavaScript-and-assets.md identical in win-unpacked and zip, list every bundled Python and production JavaScript package; OCR licences shipped',
+                         'packageExpected': (out / 'package-check.log').read_text(encoding='utf-8', errors='replace').strip().splitlines()[0],
+                         'packagedConfig': 'version, appId, access trust == committed descriptor, update source, publisher == RELEASE_PUBLISHER (package.json and app-update.yml)',
+                         'packagedOwnerAccess': json.loads((out / 'owner-runtime.json').read_text(encoding='utf-8')),
+                         'installerAuthenticode': 'NotSigned',
+                         'smokeBackend': json.loads((out / 'smoke-backend.json').read_text(encoding='utf-8')),
+                         'smokePrincipal': 'synthetic recipient fixture (test_terrier_desktop_access.py), district co-05, temporary state'},
+            'notRun': {'SKIP-NEEDS-DATA (data/<live bundle>.zip is gitignored and absent on the runner)': env['DATA_DEPENDENT_SUITES'].split(),
+                       'other': ['npm run test:e2e (Playwright)', 'verify-terrier.mjs / verify-actual-data.mjs / verify_v3_real.py (need a server or live data)',
+                                 'Test-TerrierDesktop.ps1 (restarts a server)']},
+            'notVerified': ['NSIS installation', 'packaged Electron/GUI launch', 'approved application functions behind the access gate',
+                            'update acceptance', 'code signing', 'real-data acceptance'],
+            'artifacts': {f: {'bytes': (out / f).stat().st_size, 'sha256': sha(out / f)} for f in files},
+          }
+          name = f'{product}-{version}-provenance.json'
+          (out / name).write_text(json.dumps(prov, indent=2), encoding='utf-8', newline='\n')
+          files.append(name)
+          (out / 'SHA256SUMS.txt').write_text(''.join(f'{sha(out / f)}  {f}\n' for f in files), encoding='utf-8', newline='\n')
+          print((out / 'SHA256SUMS.txt').read_text())
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (= v4.6.2)
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: |
+            ${{ runner.temp }}/out/Terrier-${{ env.VERSION }}-win-x64-unsigned-installer.exe
+            ${{ runner.temp }}/out/Terrier-${{ env.VERSION }}-win-x64-unsigned-preview.zip
+            ${{ runner.temp }}/out/Terrier-${{ env.VERSION }}-provenance.json
+            ${{ runner.temp }}/out/Python-and-packages.md
+            ${{ runner.temp }}/out/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  release:
+    needs: [preflight, build]
+    if: >-
+      always() && needs.preflight.result == 'success' &&
+      (needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.preflight.outputs.mode == 'resume')) &&
+      (github.event_name == 'push' || inputs.publish)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write   # create/upload/publish the release
+      actions: read     # download the build artifact (also from the original run when resuming)
+    steps:
+      - name: Create or resume the draft, upload missing assets, verify, publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          api="$GITHUB_API_URL/repos/$GH_REPO"
+          auth=(-H "Authorization: Bearer $GH_TOKEN")
+          # The build artifact: this run's (also across re-run attempts), else the newest unexpired one of this name.
+          if [ "$BUILD_RESULT" = success ]; then
+            build_run="$GITHUB_RUN_ID"
+          else
+            build_run=$(gh api "repos/$GH_REPO/actions/artifacts?name=$ARTIFACT&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          fi
+          gh run download "$build_run" -n "$ARTIFACT" -D release \
+            || { echo "::error::build artifact $ARTIFACT is unavailable (7-day retention expired?). Rebuilding is a deliberate decision: record it in the build queue, delete the stale draft by hand, then dispatch."; exit 1; }
+          cd release
+          sha256sum -c SHA256SUMS.txt
+          prov="$PRODUCT-$VERSION-provenance.json"
+          jq -e --arg sha "$GITHUB_SHA" --arg run "$build_run" --arg t "$RELEASE_TARGET" \
+            '.sourceCommit == $sha and .releaseTarget == $t and .reviewedBase == $t and .runId == $run and .signed == false' "$prov" >/dev/null
+          expected=("$PRODUCT-$VERSION-win-x64-unsigned-installer.exe" "$PRODUCT-$VERSION-win-x64-unsigned-preview.zip" "$prov" Python-and-packages.md SHA256SUMS.txt)
+          # Authoritative re-check of every release named RELEASE_TAG, drafts included.
+          gh api "repos/$GH_REPO/releases?per_page=100" --paginate | jq -s --arg t "$RELEASE_TAG" '[add[] | select(.tag_name == $t)]' > ../matches.json
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then echo "::error::tag $RELEASE_TAG exists"; exit 1; fi
+          if [ "$(jq length ../matches.json)" -eq 0 ]; then
+            if [ -n "$RELEASE_PUBLISHER" ]; then
+              update_note="- Unsigned INPUT of the signed release $STABLE_TAG. Its updater is pinned to the publisher subject $RELEASE_PUBLISHER and installs only signed desktop-v* releases that Windows reports Valid for exactly that subject; machines that do not trust that self-signed certificate never update. This prerelease's tag does not match the updater's release pattern."
+            else
+              update_note="- Automatic updates are not available for this build. Updates require a signed desktop-v* release, and the updater refuses unsigned installers. This prerelease's tag does not match the updater's release pattern, so no installed client treats it as an update."
+            fi
+            cat > ../notes.md <<EOF
+          Unsigned manual-install PREVIEW of $PRODUCT $VERSION for Windows x64. This is not a regular release.
+
+          **Source**
+          - $GITHUB_REPOSITORY main, commit $GITHUB_SHA: reviewed source $REVIEWED_BASE plus CI-only files ($CI_FILES). The release targets $RELEASE_TARGET.
+          - Desktop tooling: $TOOLING_REPOSITORY ops/desktop at $TOOLING_SHA.
+          - Built by GitHub Actions run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$build_run on a standard hosted windows-2022 runner.
+
+          **Read before installing**
+          - NOT CODE-SIGNED. Windows SmartScreen will warn you.
+          $update_note
+          - The installer REPLACES an existing $PRODUCT installation for the same Windows user. Back up first if you have one.
+          - Access requires an administrator approval from the Melange access server. New users who are not on the access server's LAN cannot enroll yet.
+
+          **What was verified on the runner**
+          - Django check and the CI test subset (release.yml's suites plus the pyarrow tests), frontend unit tests and build, client tests, npm audit (production, high), the native-runtime gate, the packaged configuration (access trust equals the installed apps' public descriptor; update source $GITHUB_REPOSITORY; publisher pin ${RELEASE_PUBLISHER:-none}), installer Authenticode NotSigned, and a packaged-runtime backend smoke on empty data with a synthetic test principal.
+
+          **Not run**: suites that need the gitignored live-data bundle (listed in the provenance file), Playwright e2e, and live-data verifiers.
+
+          **What was NOT verified**
+          - NSIS install, packaged GUI launch, approved application functions behind the access gate, update acceptance, code signing, and real-data acceptance.
+
+          **Third-party software**: CPython 3.12.10 and Python packages; licenses and sources are in Python-and-packages.md (attached, and inside the package).
+
+          **Files**: installer, preview zip (win-unpacked), provenance JSON, Python-and-packages.md, SHA256SUMS.txt.
+          EOF
+            jq -n --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_TARGET" --arg name "$PRODUCT $VERSION — unsigned manual-install preview" \
+              --rawfile body ../notes.md '{tag_name: $tag, target_commitish: $sha, name: $name, body: $body, draft: true, prerelease: true}' \
+              | gh api -X POST "repos/$GH_REPO/releases" --input - --jq .id > ../rid
+            rid=$(cat ../rid)
+          elif jq -e --arg t "$RELEASE_TARGET" 'length == 1 and .[0].draft == true and .[0].target_commitish == $t' ../matches.json >/dev/null; then
+            rid=$(jq -r '.[0].id' ../matches.json); echo "resuming draft $rid"
+          else
+            echo "::error::$RELEASE_TAG is published, duplicated or targets another commit"; jq '[.[] | {id, draft, target_commitish}]' ../matches.json; exit 1
+          fi
+          echo "release id $rid"
+          # Validate what is already attached (by release ID): names, sizes, sha256. Then upload only what is missing.
+          verify_assets() {
+            gh api "repos/$GH_REPO/releases/$rid" --jq '.assets[] | [.id, .name, .size] | @tsv' > ../assets.tsv
+            while IFS=$'\t' read -r aid name size; do
+              printf '%s\n' "${expected[@]}" | grep -qxF -- "$name" || { echo "::error::unexpected asset $name on draft $rid"; exit 1; }
+              [ "$size" = "$(stat -c %s "$name")" ] || { echo "::error::asset $name size $size differs from the build"; exit 1; }
+              curl -fsSL "${auth[@]}" -H 'Accept: application/octet-stream' "$api/releases/assets/$aid" -o "../check.bin"
+              [ "$(sha256sum ../check.bin | cut -d' ' -f1)" = "$(sha256sum "$name" | cut -d' ' -f1)" ] || { echo "::error::asset $name sha256 differs from the build"; exit 1; }
+              rm ../check.bin
+            done < ../assets.tsv
+          }
+          verify_assets
+          for f in "$prov" SHA256SUMS.txt Python-and-packages.md "${expected[0]}" "${expected[1]}"; do
+            if ! cut -f2 ../assets.tsv | grep -qxF -- "$f"; then
+              echo "uploading missing $f"
+              curl -fsS "${auth[@]}" -X POST -H 'Content-Type: application/octet-stream' -T "$f" \
+                "https://uploads.github.com/repos/$GH_REPO/releases/$rid/assets?name=$f" >/dev/null
+            fi
+          done
+          verify_assets
+          [ "$(wc -l < ../assets.tsv)" -eq "${#expected[@]}" ] || { echo "::error::draft $rid does not hold exactly the expected assets"; exit 1; }
+          gh api -X PATCH "repos/$GH_REPO/releases/$rid" -F draft=false -F prerelease=true --jq '{id, tag_name, draft, prerelease, target_commitish}'
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq .object.sha)" = "$RELEASE_TARGET"
