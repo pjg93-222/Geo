@@ -84,7 +84,7 @@ env:
     .github/workflows/release.yml .github/workflows/deps.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
   # Reviewed public Melange main: client 1.0.12, owner-launch regression and canonical Geo main source.
-  TOOLING_SHA: e655dbe260676206e56c73629a5cf4bc38d5398c
+  TOOLING_SHA: 3f3b84f0fd82d108d1c6e7127af5dc982efb7d54
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: b169ed5c01c32cc71469589144a84679901d8581d8eb487827456b278eadc92a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
@@ -277,7 +277,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $env:TERRIER_TEST_SOURCE = (Resolve-Path -LiteralPath "$env:GITHUB_WORKSPACE\geo").Path
-          foreach ($m in 'test_terrier_principal', 'test_desktop_backend') {
+          foreach ($m in 'test_staging', 'test_terrier_principal', 'test_desktop_backend') {
             & "$env:VENV\Scripts\python.exe" -m unittest $m 2>&1 | Tee-Object -FilePath "$env:OUT\packaging-$m.log"
             # A clean pass only: a bare OK line, and no skipped test.
             $log = Get-Content -Raw -LiteralPath "$env:OUT\packaging-$m.log"
@@ -523,7 +523,7 @@ jobs:
             'nativeRuntimes': {},
             'verified': {'djangoCheck': 'no issues', 'djangoGate': {'labels': env['DJANGO_GATE'].split(), 'ran': int(ran.group(1)), 'result': 'OK'},
                          'frontendUnit': node_counts('frontend-unit.log'), 'frontendBuild': 'tsc --noEmit && vite build: exit 0',
-                         'terrierPackagingTests': {m: packaging(m) for m in ('test_terrier_principal', 'test_desktop_backend')},
+                         'terrierPackagingTests': {m: packaging(m) for m in ('test_staging', 'test_terrier_principal', 'test_desktop_backend')},
                          'clientTests': node_counts('npm-test.log'), 'npmAudit': 'omit=dev, audit-level=high: pass',
                          'nativeRuntimeGate': 'missingNativeRuntimes == []', 'checkoutCleanForStaging': True,
                          'noticeGate': 'THIRD-PARTY-NOTICES/Python-and-packages.md and JavaScript-and-assets.md identical in win-unpacked and zip, list every bundled Python and production JavaScript package; OCR licences shipped',
