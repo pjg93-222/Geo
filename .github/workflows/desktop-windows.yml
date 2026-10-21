@@ -84,7 +84,7 @@ env:
     .github/workflows/release.yml .github/workflows/deps.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
   # Reviewed public Melange main: client 1.0.14; owner-only GitHub data, strict extraction and separate existing account roots.
-  TOOLING_SHA: d5f3b0b4a1318c76f2ca85e1a78cd1995d13778e
+  TOOLING_SHA: 423d38426391ea1805d43ffa6fc2c78f585fa128
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: b169ed5c01c32cc71469589144a84679901d8581d8eb487827456b278eadc92a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
