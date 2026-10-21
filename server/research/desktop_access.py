@@ -1,7 +1,10 @@
 """The native launcher boundary authorizes the exact approved administrator.
 
-Ordinary launches require sign-in. An explicit local owner preference permits
-request-only access without changing the account, password, or stored session.
+The approved existing desktop owner is never asked for a password: the signed
+native launch (token gate, direct loopback, exact account binding) is the
+verification, and access is request-only, without changing the account, its
+password, or any stored session. Approved recipient accounts still sign in with
+the password they chose. Hosted deployments never use the desktop boundary.
 The marker is an in-process object issued only by the token gate.
 """
 from ipaddress import ip_address
@@ -59,9 +62,9 @@ def request_principal(request):
 
 
 def password_lock_disabled(principal):
+    """True only for the bound existing owner behind the native boundary; the desktop client reads this flag."""
     return bool(principal and principal.mode == 'existing-owner' and not settings.HOSTED
-                and getattr(settings, 'DESKTOP_BOUNDARY', False)
-                and getattr(settings, 'DESKTOP_PASSWORD_LOCK_DISABLED', False))
+                and getattr(settings, 'DESKTOP_BOUNDARY', False))
 
 
 def account_authorized(request, user):
