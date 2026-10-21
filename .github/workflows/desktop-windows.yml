@@ -98,7 +98,7 @@ env:
     tools.test_image_gate tools.luna_district.test_rowfw tools.test_build_scores.DistrictInputTests
     server.research.test_walk_address_api server.research.test_walk_address_list server.research.test_walk_image_api
     server.research.test_walk_location_evidence server.research.test_walk_record_evidence server.research.test_walk_route
-    server.research.test_untapped_area_codes server.research.test_desktop_owner_password server.research.test_desktop_owner_store
+    server.research.test_untapped_area_codes server.research.test_desktop_owner_no_password
     server.research.test_desktop_password_lock_removed
   # NOT RUN on the runner, explicitly (SKIP-NEEDS-DATA): they read the gitignored live bundle data/<live bundle>.zip.
   DATA_DEPENDENT_SUITES: >-

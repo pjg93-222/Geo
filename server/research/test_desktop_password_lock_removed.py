@@ -1,7 +1,9 @@
 """The removed `.desktop-password-lock-disabled` switch has no effect anywhere.
 
-A flag file left in a district data directory by an earlier build is inert: the
-approved, bound desktop owner without a password is never signed in by it.
+A flag file left in a district data directory by an earlier build is inert. The
+approved, bound desktop owner is never asked for a password by design
+(test_desktop_owner_no_password.py), with or without that file; a recipient is
+never let in without its password because of it.
 """
 import importlib.util
 import json
@@ -45,19 +47,37 @@ class RemovedPasswordLockSwitchTests(TestCase):
         DesktopBoundary('co-05', 51234, self.principal).authorize_environment(request.META)
         return request, DesktopPrincipalMiddleware(who)(request)
 
-    def test_flag_in_data_directory_does_not_sign_in_the_passwordless_owner(self):
-        # Even the old setting name, forced on, is read by nothing.
+    def test_flag_in_data_directory_does_not_let_a_passwordless_recipient_in(self):
+        # Even the old setting name, forced on, is read by nothing: the recipient without a password stays out.
+        recipient = User.objects.create_user('recipient_' + '4' * 32, is_active=True, is_staff=True)   # no usable password
+        self.principal = Principal(self.principal.server_id, self.principal.device_id, '44444444-4444-4444-8444-444444444444',
+                                   recipient.username, recipient.username, 'co-05', 'recipient', None)
+        DesktopPrincipalBinding.objects.create(
+            server_id=self.principal.server_id, device_id=self.principal.device_id,
+            principal_id=self.principal.principal_id, account_identity=recipient.username,
+            local_username=recipient.username, district_id='co-05', mode='recipient', user=recipient)
         with self.settings(DATA_DIR=Path(self.data.name), DESKTOP_PASSWORD_LOCK_DISABLED=True):
             request, response = self.request()
             value = json.loads(response.content)
             self.assertEqual(response.status_code, 200)
             self.assertFalse(value['authenticated'])
             self.assertIsNone(value['username'])
-            self.assertNotIn('password_lock_disabled', value)
-            self.assertFalse(request.user.is_authenticated)
+            self.assertIs(value['password_lock_disabled'], False)
             self.assertFalse(administrator_authorized(request))
             _, protected = self.request('/api/snapshots')
             self.assertEqual(protected.status_code, 401)
+        recipient.refresh_from_db()
+        self.assertFalse(recipient.has_usable_password())
+
+    def test_the_owner_is_signed_in_the_same_with_or_without_the_flag(self):
+        for present in (True, False):
+            if not present:
+                Path(self.data.name, FLAG).unlink()
+            with self.settings(DATA_DIR=Path(self.data.name)):
+                request, response = self.request()
+                value = json.loads(response.content)
+                self.assertEqual((value['authenticated'], value['password_lock_disabled']), (True, True), present)
+                self.assertTrue(administrator_authorized(request))
         self.owner.refresh_from_db()
         self.assertFalse(self.owner.has_usable_password())
 
