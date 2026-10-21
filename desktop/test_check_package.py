@@ -43,6 +43,12 @@ class CheckPackageTests(unittest.TestCase):
                                     'packaged but not a source candidate: private.sqlite3', 'exclusion matches nothing (stale): tools/gone.json',
                                     'required but not packaged: server/needed.json'])
 
+    def test_cached_runtime_with_the_same_filenames_is_refused(self):
+        geo, sources = self.tree()
+        (sources / 'server/app.py').write_text('older password-required source', encoding='utf-8')
+        problems, _ = check(geo, sources, EXPECTED)
+        self.assertEqual(problems, ['packaged bytes differ from source: server/app.py'])
+
 
 if __name__ == '__main__':
     unittest.main()

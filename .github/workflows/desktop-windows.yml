@@ -68,29 +68,25 @@ concurrency:
 env:
   APP: terrier
   PRODUCT: Terrier
-  VERSION: 1.0.7
-  RELEASE_TAG: desktop-preview-v1.0.7
+  VERSION: 1.0.12
+  RELEASE_TAG: desktop-preview-v1.0.12
   # Signed-release input mode (header). Both empty = plain preview. The subject is byte-identical to Melange's
   # (signing-common.ps1 and pjg93-222/Melange desktop-windows.yml).
   RELEASE_PUBLISHER: 'CN=Melange Systems Desktop Release (self-signed)'
-  STABLE_TAG: desktop-v1.0.7
+  STABLE_TAG: desktop-v1.0.12
   ARTIFACT: terrier-desktop-${{ github.sha }}
-  # Both the full SHA of the workflow-free reviewed source commit S (header): Geo main 7d2dd104 + claude/walk-list
-  # 00c8b219, the password-bypass removal, the one owner password for every district, the verify-script input
-  # cleanup, the one-password sign-in copy and the security-review fixes (M1, L2, L3).
-  REVIEWED_BASE: 78c45b710b48edbce118cefcd977a11abf32d11f
-  RELEASE_TARGET: 78c45b710b48edbce118cefcd977a11abf32d11f
+  # Workflow-free source snapshot: Geo main owner fix plus the packaged source/owner regression gates.
+  REVIEWED_BASE: 74015489d3e2ea9f38a53c3b56f1ca8f07f56610
+  RELEASE_TARGET: 74015489d3e2ea9f38a53c3b56f1ca8f07f56610
   # S has no .github, so every file under .github differs from it.
   CI_FILES: >-
     .github/workflows/desktop-windows.yml .github/workflows/desktop-installer-acceptance.yml
     .github/workflows/release.yml .github/workflows/deps.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
-  # Melange tooling commit T4' for Terrier 1.0.7 (branch tooling/terrier-1.0.6: T3 8f44cb6a2 + the district-transition
-  # client, no password bypass, the owner password store, the seven Terrier staging exceptions, client 1.0.7,
-  # publication records). It must be on pjg93-222/Melange first. 1.0.6 (desktop-preview-v1.0.6) is published and kept.
-  TOOLING_SHA: 7931c32f2c6505c930a11609c1eae1953918916a
+  # Reviewed public Melange main: client 1.0.12, owner-launch regression and canonical Geo main source.
+  TOOLING_SHA: e655dbe260676206e56c73629a5cf4bc38d5398c
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
-  TRUST_SHA256: 081f44db43bac05d25e4cedc93891b7f31595b920f4deda7f6dc04a9f7548a3a
+  TRUST_SHA256: b169ed5c01c32cc71469589144a84679901d8581d8eb487827456b278eadc92a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
   DJANGO_GATE: >-
     server.research.test_access server.research.test_hosted server.research.test_districts
@@ -463,6 +459,11 @@ jobs:
           & "$env:VENV\Scripts\python.exe" -m unittest discover -s geo/desktop -t geo/desktop
           & "$env:VENV\Scripts\python.exe" geo/desktop/check_package.py --geo geo --sources (Join-Path $env:UNPACKED 'resources\runtime\terrier\sources') 2>&1 | Tee-Object -FilePath "$env:OUT\package-check.log"
 
+      - name: Gate - packaged owner never requires a password
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:VENV\Scripts\python.exe" geo/desktop/verify_owner_runtime.py --runtime (Join-Path $env:UNPACKED 'resources\runtime\terrier') --output "$env:OUT\owner-runtime.json"
+
       # Headless only: the packaged backend on empty scratch data, through the bundled Python (smoke_backend.py --runtime).
       - name: Smoke - packaged backend
         env:
@@ -528,6 +529,7 @@ jobs:
                          'noticeGate': 'THIRD-PARTY-NOTICES/Python-and-packages.md and JavaScript-and-assets.md identical in win-unpacked and zip, list every bundled Python and production JavaScript package; OCR licences shipped',
                          'packageExpected': (out / 'package-check.log').read_text(encoding='utf-8', errors='replace').strip().splitlines()[0],
                          'packagedConfig': 'version, appId, access trust == committed descriptor, update source, publisher == RELEASE_PUBLISHER (package.json and app-update.yml)',
+                         'packagedOwnerAccess': json.loads((out / 'owner-runtime.json').read_text(encoding='utf-8')),
                          'installerAuthenticode': 'NotSigned',
                          'smokeBackend': json.loads((out / 'smoke-backend.json').read_text(encoding='utf-8')),
                          'smokePrincipal': 'synthetic recipient fixture (test_terrier_desktop_access.py), district co-05, temporary state'},
