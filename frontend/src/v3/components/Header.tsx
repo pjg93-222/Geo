@@ -9,6 +9,9 @@ import {int,countLabel,areaLabel,districtHref,districtOptions,LEVELS,LEVEL_LABEL
 import {getAreas,getFeatures,localJson,searchPeople} from '../api/client';
 import {ALL_LAYERS,LAYER_NAME,industryChoices,raceBadge} from '../lib/overlay';
 import type {Features,Group,Meta,OverlayLayer} from '../types';
+import type {DesktopDataBridge} from '../api/desktopData';
+import {useDistrictDataSource} from './DistrictDataSource';
+import {districtDataSummary} from '../lib/desktopData';
 
 /** Every layer the Index control can show; the district's /api/v3/features lists the ones it offers. */
 export const INDEX_ITEMS:{id:OverlayLayer;label:string}[]=ALL_LAYERS.map(id=>({id,label:id==='lean'?'Registration':LAYER_NAME[id]}));
@@ -26,13 +29,18 @@ export function Link(p:{to:string;className?:string;children:React.ReactNode;tit
 }
 
 function Brand({busy=false}:{busy?:boolean}){
+  const {data}=useDistrictDataSource(useFeatures()?.district);
   return <Link to="/" className="brand">
     <span className="brand-mark"><TerrierMark busy={busy}/></span>
-    <span className="brand-copy"><span className="brand-text">Terrier</span><span className="demo-label">Local data</span></span>
+    <span className="brand-copy"><span className="brand-text">Terrier</span><span className="demo-label">{data?'GitHub data':'Local data'}</span></span>
   </Link>;
 }
+function DataSourceLink(){
+  const {data}=useDistrictDataSource(useFeatures()?.district);
+  return <Link to="/sources" className="data-context" title={data?districtDataSummary(data):undefined}>{data?'GitHub district data':'Local dataset'} <span>{data?.cached?'Verified cache · ':''}Data & sources ↗</span></Link>;
+}
 
-declare global {interface Window {desktop?:{districts:()=>Promise<DistrictList>;switchDistrict:(id:string)=>Promise<boolean>;rendererReady?:()=>Promise<void>}}}
+declare global {interface Window {desktop?:DesktopDataBridge&{districts:()=>Promise<DistrictList>;switchDistrict:(id:string)=>Promise<boolean>;rendererReady?:()=>Promise<void>}}}
 // Desktop uses its verified native district mapping. Browser deployments retain their separate server addresses.
 // It stays hidden when the call fails or only one district exists.
 let districtList:Promise<DistrictList|null>|null=null;
@@ -167,7 +175,7 @@ export function MapHeader(p:{meta:Meta|null;busy?:boolean;index:OverlayLayer|nul
   const industryLabel=p.features?.industries.find(i=>i.id===p.industry)?.label;
   const items=INDEX_ITEMS.filter(i=>p.layers.includes(i.id)).map(i=>i.id==='cua'&&industryLabel?{...i,label:industryLabel}:i);
   return <header className="topbar map">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><RaceBadge/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><DataSourceLink/><DistrictSelect/><RaceBadge/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active="map"/>
     <div className="map-toolbar">
       <div className="seg-slot index"><Segmented<OverlayLayer|''> variant="index" label="Index" items={items} value={p.index??''} onChange={v=>{if(v)p.onIndex(v);}}/></div>
@@ -211,7 +219,7 @@ function SectionNav({active}:{active:Section}){
 }
 export function PageHeader(p:{meta:Meta|null;busy?:boolean;active:Section}){
   return <header className="topbar page">
-    <div className="masthead"><Brand busy={p.busy}/><Link to="/sources" className="data-context">Local dataset <span>Data & sources ↗</span></Link><DistrictSelect/><RaceBadge/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
+    <div className="masthead"><Brand busy={p.busy}/><DataSourceLink/><DistrictSelect/><RaceBadge/><div className="topbar-right"><SearchBox meta={p.meta}/></div></div>
     <SectionNav active={p.active}/>
   </header>;
 }
