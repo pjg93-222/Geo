@@ -10,6 +10,7 @@ packaged. Rules are exact paths, or globs (fnmatch, `*` crosses `/`) where the r
 """
 import argparse
 import fnmatch
+import hashlib
 import json
 import subprocess
 import sys
@@ -34,6 +35,11 @@ def check(geo, sources, expected):
     problems += [f'exclusion matches nothing (stale): {r["path"]}' for r in rules
                  if not any(fnmatch.fnmatchcase(path, r['path']) for path in candidates)]
     problems += [f'required but not packaged: {p}' for p in expected['required'] if p not in packaged]
+    # Names alone cannot detect a cached runtime from an older source commit.
+    # Terrier staging preserves source bytes, including frontend build outputs.
+    problems += [f'packaged bytes differ from source: {p}' for p in sorted((candidates - excluded) & packaged)
+                 if hashlib.sha256((geo / p).read_bytes()).digest()
+                 != hashlib.sha256((sources / p).read_bytes()).digest()]
     return problems, {'candidates': len(candidates), 'packaged': len(packaged), 'excluded': len(excluded)}
 
 
