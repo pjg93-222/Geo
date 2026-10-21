@@ -52,6 +52,12 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(member('D', 0.5) and member('D', THIRD) and not member('D', 0.9) and not member('D', 0.1))
         self.assertTrue(all(member(code, 0.0) for code in ('U', 'L', 'G', 'W', 'O', '', None)))
 
+    def test_a_candidate_of_another_party_is_refused_by_name(self):
+        for party in ('L', 'G', ''):
+            with self.assertRaisesRegex(ValueError, 'candidate party is %r' % party):
+                P.member_fn('coalition', party)
+        self.assertIsNone(P.member_fn('all', 'L'))          # 'all' filters nobody, whatever the party
+
     def test_offered(self):
         self.assertEqual(P.offered(None), ['all'])
         self.assertEqual(P.offered('D'), ['all', 'coalition'])

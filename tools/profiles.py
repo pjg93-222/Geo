@@ -22,6 +22,8 @@ def _everyone(party):
 
 
 def _coalition(party):
+    if party not in OTHER:
+        raise ValueError("The coalition profile needs a D or R candidate; this district's candidate party is %r." % (party,))
     own, other = party, OTHER[party]
 
     def member(code, s):
