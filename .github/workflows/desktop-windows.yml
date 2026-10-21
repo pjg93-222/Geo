@@ -68,23 +68,23 @@ concurrency:
 env:
   APP: terrier
   PRODUCT: Terrier
-  VERSION: 1.0.13
-  RELEASE_TAG: desktop-preview-v1.0.13
+  VERSION: 1.0.14
+  RELEASE_TAG: desktop-preview-v1.0.14
   # Signed-release input mode (header). Both empty = plain preview. The subject is byte-identical to Melange's
   # (signing-common.ps1 and pjg93-222/Melange desktop-windows.yml).
   RELEASE_PUBLISHER: 'CN=Melange Systems Desktop Release (self-signed)'
-  STABLE_TAG: desktop-v1.0.13
+  STABLE_TAG: desktop-v1.0.14
   ARTIFACT: terrier-desktop-${{ github.sha }}
-  # Workflow-free source snapshot: pasted walk lists, recorded opt-ins and password-free owner access.
-  REVIEWED_BASE: 63e15ce8f561bbaed7488d705a4186e29522d2ac
-  RELEASE_TARGET: 63e15ce8f561bbaed7488d705a4186e29522d2ac
+  # Workflow-free source snapshot: verified GitHub district data, source status, walk lists and password-free owner access.
+  REVIEWED_BASE: b58e7c50deb0da57838106faa2cfdd236b526cf9
+  RELEASE_TARGET: b58e7c50deb0da57838106faa2cfdd236b526cf9
   # S has no .github, so every file under .github differs from it.
   CI_FILES: >-
     .github/workflows/desktop-windows.yml .github/workflows/desktop-installer-acceptance.yml
     .github/workflows/release.yml .github/workflows/deps.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
-  # Reviewed public Melange main: client 1.0.13; dependency graph and source selection unchanged.
-  TOOLING_SHA: 468e763bce1dd2eecb122094ff17ba4a5f6dfacf
+  # Reviewed public Melange main: client 1.0.14; owner-only GitHub data, strict extraction and separate existing account roots.
+  TOOLING_SHA: ecc47b787d151aa29aaccd8e5a71fd1227f3af80
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: b169ed5c01c32cc71469589144a84679901d8581d8eb487827456b278eadc92a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
@@ -279,7 +279,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $env:TERRIER_TEST_SOURCE = (Resolve-Path -LiteralPath "$env:GITHUB_WORKSPACE\geo").Path
-          foreach ($m in 'test_staging', 'test_terrier_principal', 'test_desktop_backend') {
+          foreach ($m in 'test_staging', 'test_terrier_principal', 'test_desktop_backend', 'test_terrier_district', 'test_terrier_owner', 'test_native_access_state', 'test_prepare_github_district_catalogue') {
             & "$env:VENV\Scripts\python.exe" -m unittest $m 2>&1 | Tee-Object -FilePath "$env:OUT\packaging-$m.log"
             # A clean pass only: a bare OK line, and no skipped test.
             $log = Get-Content -Raw -LiteralPath "$env:OUT\packaging-$m.log"
@@ -512,6 +512,7 @@ jobs:
           assert walk['passed'] is True and walk['sourceCompilation'] is False and walk['fixturesOnly'] is True
           assert walk['version'] == env['VERSION'] and all(walk['checks'].values()), walk
           assert walk['checks']['paste'] and walk['checks']['optIns']
+          assert all(walk['checks'].get(flag) is True for flag in ('githubDataSourceUi', 'githubDataSourceRefresh', 'githubDataSourceProgress', 'githubDataSourceCacheOffline', 'githubDataSourceBoundary'))
           product, version = env['PRODUCT'], env['VERSION']
           files = [f'{product}-{version}-win-x64-unsigned-installer.exe', f'{product}-{version}-win-x64-unsigned-preview.zip', 'Python-and-packages.md']
           publisher = env['RELEASE_PUBLISHER'] or None
@@ -534,7 +535,7 @@ jobs:
             'nativeRuntimes': {},
             'verified': {'djangoCheck': 'no issues', 'djangoGate': {'labels': env['DJANGO_GATE'].split(), 'ran': int(ran.group(1)), 'result': 'OK'},
                          'frontendUnit': node_counts('frontend-unit.log'), 'frontendBuild': 'tsc --noEmit && vite build: exit 0',
-                         'terrierPackagingTests': {m: packaging(m) for m in ('test_staging', 'test_terrier_principal', 'test_desktop_backend')},
+                         'terrierPackagingTests': {m: packaging(m) for m in ('test_staging', 'test_terrier_principal', 'test_desktop_backend', 'test_terrier_district', 'test_terrier_owner', 'test_native_access_state', 'test_prepare_github_district_catalogue')},
                          'clientTests': node_counts('npm-test.log'), 'npmAudit': 'omit=dev, audit-level=high: pass',
                          'nativeRuntimeGate': 'missingNativeRuntimes == []', 'checkoutCleanForStaging': True,
                          'noticeGate': 'THIRD-PARTY-NOTICES/Python-and-packages.md and JavaScript-and-assets.md identical in win-unpacked and zip, list every bundled Python and production JavaScript package; OCR licences shipped',

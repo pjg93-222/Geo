@@ -37,7 +37,8 @@ const report={schemaVersion:1,schema:'terrier-walklist-bundle-check-1',version:o
   startedAt:new Date().toISOString(),frontendCatalogueSha256:distSha256,distPath:dist,dist:{sha256:distSha256,fileCount:files.length,files},
   fixturesOnly:true,sourceCompilation:false,checks:{paste:false,optIns:false,authenticatedOwnerSessionWithoutPasswordForm:false,inlinePasteReviewBuild:false,
     recordedOptInsDisplay:false,importedOptInsReadOnly:false,manualOptInWrite:false,singleKindWrite:false,savedRosterBeforeWrite:false,
-    permissionFailurePreservesState:false,noUnhandledPageErrors:false,noUnexpectedApiOrExternalRequests:false,distBytesUnchanged:false},
+    permissionFailurePreservesState:false,githubDataSourceUi:false,githubDataSourceRefresh:false,githubDataSourceProgress:false,
+    githubDataSourceCacheOffline:false,githubDataSourceBoundary:false,noUnhandledPageErrors:false,noUnexpectedApiOrExternalRequests:false,distBytesUnchanged:false},
   browser:null,passed:false,error:null};
 const snapshot='a'.repeat(64),district='co-05';
 const unknown=()=>({status:'unknown',recorded_at:null,source:null});
@@ -67,7 +68,7 @@ const contentTypes={'.html':'text/html','.js':'text/javascript','.css':'text/css
 const server=createServer(async(request,response)=>{
   try{
     const url=new URL(request.url,'http://bundle'),pathname=decodeURIComponent(url.pathname);
-    const file=resolve(dist,'.'+(pathname==='/walk'||pathname==='/'?'/index.html':pathname));
+    const file=resolve(dist,'.'+(pathname==='/walk'||pathname==='/sources'||pathname==='/'?'/index.html':pathname));
     const rel=relative(dist,file);
     if(rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel)){response.writeHead(403);response.end();return;}
     const bytes=await readFile(file);response.setHeader('Content-Type',contentTypes[extname(file)]??'application/octet-stream');
@@ -82,6 +83,17 @@ try{
   browser=await chromium.launch({...(channel==='chromium'?{}:{channel}),headless:true,args:['--enable-unsafe-swiftshader']});
   report.browser={channel,version:browser.version()};
   const context=await browser.newContext({viewport:{width:1600,height:1000},reducedMotion:'reduce'});
+  await context.addInitScript(()=>{
+    const listeners=new Set();
+    let state={provider:'github',repository:'pjg93-222/Geo',district:'co-05',phase:'ready',cached:true,canRefresh:true,
+      releaseTag:'district-testsets-2026-10-21',catalogueSequence:1,checkedAt:'2026-10-21T18:00:00Z',verifiedAt:'2026-10-21T17:59:00Z'};
+    window.__districtRefreshCount=0;window.__districtRefreshFailure=false;
+    window.__pushDistrictData=value=>{state=value;for(const listener of listeners)listener(structuredClone(value));};
+    window.desktop={districts:async()=>({schema:'desktop-districts-1',current:'co-05',districts:[]}),switchDistrict:async()=>false,rendererReady:async()=>{},
+      districtData:async()=>structuredClone(state),onDistrictData:callback=>{listeners.add(callback);return()=>listeners.delete(callback);},
+      refreshDistrictData:async()=>{window.__districtRefreshCount++;if(window.__districtRefreshFailure)throw new Error('C:\\private-fixture\\do-not-display');
+        window.__pushDistrictData({...state,phase:'checking'});return structuredClone(state);}};
+  });
   const page=await context.newPage();page.setDefaultTimeout(30000);
   const pageErrors=[],unexpected=[],writes=[],events=[],matches=[];let deny=false;
   let latest={donor:recorded('opted_in'),volunteer:unknown()};
@@ -98,6 +110,7 @@ try{
       district_rate:{ovr:50,cua:50,part:50,soi:50},share_breaks:[],lean_cuts:[-.3,.3],measured_breaks:[],household_breaks:[],weights:{cua:.4,part:.3,soi:.3},levels:[],bbox:[-104.81,38.79,-104.78,38.81]};
     else if(path==='/api/v3/features')body={schema:'v3-features-1',district,industries:[],industry:'',candidate:null,party_codes:{},overlay:{layers:['ovr','cua','part','soi','lean'],density:false},roi:null};
     else if(path==='/api/v3/districts')body={schema:'districts-1',current:district,districts:[]};
+    else if(path==='/api/v3/workspace')body={mode:'local',source_sha256:snapshot,people:2,households:2,snapshot,basis:'registration',availableSnapshots:1,fields:[],layers:[],stores:[]};
     else if(path==='/api/v3/walk/options')body={level:url.searchParams.get('level'),options:[]};
     else if(path==='/api/v3/walk/lists'&&route.request().method()==='GET')body={lists:[]};
     else if(path==='/api/v3/walk/address-match'){
@@ -170,6 +183,40 @@ try{
   await page.getByRole('alert').filter({hasText:'Not saved: Synthetic account cannot record field results.'}).waitFor();
   assert.equal(await donor.inputValue(),'opted_in');assert.equal(await page.locator('tr.has-recorded-opt-in').count(),1);
   report.checks.permissionFailurePreservesState=true;
+  await page.goto(base+'/sources',{waitUntil:'domcontentloaded'});
+  await page.getByRole('heading',{name:'GitHub district data',exact:true}).waitFor();
+  await page.getByText('Using a verified local cache of the GitHub dataset.',{exact:true}).waitFor();
+  assert.equal(await page.locator('.district-data-source [datetime="2026-10-21T18:00:00.000Z"]').count(),1);
+  assert.equal(await page.locator('.district-data-source [datetime="2026-10-21T17:59:00.000Z"]').count(),1);
+  assert.match(await page.locator('.district-data-source').innerText(),/Queries use verified files on this computer/);
+  report.checks.githubDataSourceUi=true;
+  await page.getByRole('button',{name:'Check GitHub now',exact:true}).click();
+  await page.locator('.district-data-source[data-phase="checking"]').waitFor();
+  assert.equal(await page.evaluate(()=>window.__districtRefreshCount),1);
+  assert.ok(await page.locator('.district-data-source button').isDisabled());report.checks.githubDataSourceRefresh=true;
+  const source={provider:'github',repository:'pjg93-222/Geo',district:'co-05',cached:true,canRefresh:true,
+    releaseTag:'district-testsets-2026-10-21',catalogueSequence:1,checkedAt:'2026-10-21T18:00:00Z',verifiedAt:'2026-10-21T17:59:00Z'};
+  await page.evaluate(value=>window.__pushDistrictData(value),{...source,phase:'downloading',receivedBytes:1048576,totalBytes:2097152});
+  const progress=page.getByRole('progressbar',{name:'GitHub district data download',exact:true});await progress.waitFor();
+  assert.equal(await progress.getAttribute('value'),'1048576');assert.equal(await progress.getAttribute('max'),'2097152');
+  assert.ok(await page.locator('.district-data-source button').isDisabled());
+  await page.evaluate(value=>window.__pushDistrictData(value),{...source,phase:'update-ready',updateAvailable:true});
+  await page.getByText(/Save your work, then reopen this district or Terrier to apply it/).waitFor();
+  assert.equal(new URL(page.url()).pathname,'/sources','a staged dataset must not navigate away from current work');report.checks.githubDataSourceProgress=true;
+  await page.evaluate(value=>window.__pushDistrictData(value),{...source,phase:'offline'});
+  await page.getByText('GitHub check unavailable. Using the verified local cache.',{exact:true}).waitFor();report.checks.githubDataSourceCacheOffline=true;
+  await page.evaluate(value=>window.__pushDistrictData(value),{...source,district:'or-05',phase:'ready'});
+  assert.equal(await page.locator('.district-data-source').getAttribute('data-district'),'co-05','foreign district events are ignored');
+  await page.evaluate(value=>window.__pushDistrictData(value),{...source,phase:'offline',message:'C:\\private-fixture\\do-not-display',settings:{credential:'never-display-credential'}});
+  assert.ok(!/do-not-display|never-display-credential/.test(await page.locator('.district-data-source').innerText()));
+  await page.evaluate(()=>{window.__districtRefreshFailure=true;});
+  await page.getByRole('button',{name:'Check GitHub now',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'The GitHub check could not be started. Try again.'}).waitFor();
+  assert.ok(!/do-not-display/.test(await page.locator('.district-data-source').innerText()));
+  await page.evaluate(()=>window.__pushDistrictData(null));
+  await page.getByRole('link',{name:'Local dataset Data & sources ↗',exact:true}).waitFor();
+  assert.equal(await page.locator('.district-data-source').count(),0,'hosted/recipient null state retains the local-source presentation');
+  report.checks.githubDataSourceBoundary=true;
   assert.deepEqual(pageErrors,[]);report.checks.noUnhandledPageErrors=true;
   assert.deepEqual(unexpected,[]);report.checks.noUnexpectedApiOrExternalRequests=true;
   assert.equal(sha256(catalogueBytes(await inventory(dist))),distSha256);report.checks.distBytesUnchanged=true;
