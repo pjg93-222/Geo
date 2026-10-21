@@ -41,7 +41,9 @@ credential or device token is sent to GitHub.
    not initialize a publisher, export keys, upload files, or modify app releases.
 4. Review and commit the resulting public envelope as
    `docs/district-testsets/current.json` on `main`. The next check discovers it;
-   replacing local files by hand or releasing a new application is unnecessary.
+   compatible district revisions need no manual local-file replacement or new
+   application release. A revision with a new source identity also needs updated
+   packaged district definitions; the existing source checks remain enforced.
 
 Application release sequences and district catalogue sequences are independent.
 The initial district catalogue is sequence 1 for the 2026-10-21 release.
