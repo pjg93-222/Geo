@@ -45,7 +45,7 @@ jobs:
         run: >
           python manage.py test
           server.research.test_access server.research.test_hosted server.research.test_districts
-          server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
+          server.research.test_walk_api server.research.test_walk_opt_ins server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
           tools.test_image_gate
       - name: Deploy checks with a dummy hosted environment
         env:

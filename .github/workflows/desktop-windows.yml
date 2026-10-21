@@ -68,29 +68,29 @@ concurrency:
 env:
   APP: terrier
   PRODUCT: Terrier
-  VERSION: 1.0.12
-  RELEASE_TAG: desktop-preview-v1.0.12
+  VERSION: 1.0.13
+  RELEASE_TAG: desktop-preview-v1.0.13
   # Signed-release input mode (header). Both empty = plain preview. The subject is byte-identical to Melange's
   # (signing-common.ps1 and pjg93-222/Melange desktop-windows.yml).
   RELEASE_PUBLISHER: 'CN=Melange Systems Desktop Release (self-signed)'
-  STABLE_TAG: desktop-v1.0.12
+  STABLE_TAG: desktop-v1.0.13
   ARTIFACT: terrier-desktop-${{ github.sha }}
-  # Workflow-free source snapshot: Geo main owner fix plus the packaged source/owner regression gates.
-  REVIEWED_BASE: 74015489d3e2ea9f38a53c3b56f1ca8f07f56610
-  RELEASE_TARGET: 74015489d3e2ea9f38a53c3b56f1ca8f07f56610
+  # Workflow-free source snapshot: pasted walk lists, recorded opt-ins and password-free owner access.
+  REVIEWED_BASE: 63e15ce8f561bbaed7488d705a4186e29522d2ac
+  RELEASE_TARGET: 63e15ce8f561bbaed7488d705a4186e29522d2ac
   # S has no .github, so every file under .github differs from it.
   CI_FILES: >-
     .github/workflows/desktop-windows.yml .github/workflows/desktop-installer-acceptance.yml
     .github/workflows/release.yml .github/workflows/deps.yml .github/desktop/desktop-access-trust.public.json
   TOOLING_REPOSITORY: pjg93-222/Melange
-  # Reviewed public Melange main: client 1.0.12, owner-launch regression and canonical Geo main source.
-  TOOLING_SHA: 3f3b84f0fd82d108d1c6e7127af5dc982efb7d54
+  # Reviewed public Melange main: client 1.0.13; dependency graph and source selection unchanged.
+  TOOLING_SHA: 468e763bce1dd2eecb122094ff17ba4a5f6dfacf
   TRUST_FILE: geo/.github/desktop/desktop-access-trust.public.json
   TRUST_SHA256: b169ed5c01c32cc71469589144a84679901d8581d8eb487827456b278eadc92a
   # The CI-required Django gate: release.yml's test subset plus the pyarrow-dependent tests.
   DJANGO_GATE: >-
     server.research.test_access server.research.test_hosted server.research.test_districts
-    server.research.test_walk_api server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
+    server.research.test_walk_api server.research.test_walk_opt_ins server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
     tools.test_image_gate tools.luna_district.test_rowfw tools.test_build_scores.DistrictInputTests
     server.research.test_walk_address_api server.research.test_walk_address_list server.research.test_walk_image_api
     server.research.test_walk_location_evidence server.research.test_walk_record_evidence server.research.test_walk_route
@@ -268,6 +268,8 @@ jobs:
           npm run test:unit 2>&1 | Tee-Object -FilePath "$env:OUT\frontend-unit.log"
           npm run build
           if (-not (Test-Path -LiteralPath dist/brand/terrier-loading-hq.mp4)) { throw 'frontend/dist lacks brand/terrier-loading-hq.mp4' }
+          # Install the browser revision from the locked build/test dependency; it is not shipped in the app.
+          & .\node_modules\.bin\playwright.cmd install chromium
 
       # The tooling's Terrier boundary tests against this Geo source: the real guarded Django stack, prepare_principal
       # with the verified-backup migration, and the launcher's arguments. One module per process (each configures Django
@@ -459,6 +461,11 @@ jobs:
           & "$env:VENV\Scripts\python.exe" -m unittest discover -s geo/desktop -t geo/desktop
           & "$env:VENV\Scripts\python.exe" geo/desktop/check_package.py --geo geo --sources (Join-Path $env:UNPACKED 'resources\runtime\terrier\sources') 2>&1 | Tee-Object -FilePath "$env:OUT\package-check.log"
 
+      - name: Gate - actual packaged walk-list interface
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node geo/desktop/verify_walklist_bundle.mjs --dist (Join-Path $env:UNPACKED 'resources\runtime\terrier\sources\frontend\dist') --output "$env:OUT\walklist-bundle.json" --version $env:VERSION --browser-channel chromium
+
       - name: Gate - packaged owner never requires a password
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -501,6 +508,10 @@ jobs:
               ran = re.search(r'^Ran (\d+) tests?', log, re.M)
               assert ran and re.search(r'^OK$', log, re.M) and 'skipped=' not in log, f'{m} did not report a clean OK'
               return int(ran.group(1))
+          walk = json.loads((out / 'walklist-bundle.json').read_text(encoding='utf-8'))
+          assert walk['passed'] is True and walk['sourceCompilation'] is False and walk['fixturesOnly'] is True
+          assert walk['version'] == env['VERSION'] and all(walk['checks'].values()), walk
+          assert walk['checks']['paste'] and walk['checks']['optIns']
           product, version = env['PRODUCT'], env['VERSION']
           files = [f'{product}-{version}-win-x64-unsigned-installer.exe', f'{product}-{version}-win-x64-unsigned-preview.zip', 'Python-and-packages.md']
           publisher = env['RELEASE_PUBLISHER'] or None
@@ -530,6 +541,7 @@ jobs:
                          'packageExpected': (out / 'package-check.log').read_text(encoding='utf-8', errors='replace').strip().splitlines()[0],
                          'packagedConfig': 'version, appId, access trust == committed descriptor, update source, publisher == RELEASE_PUBLISHER (package.json and app-update.yml)',
                          'packagedOwnerAccess': json.loads((out / 'owner-runtime.json').read_text(encoding='utf-8')),
+                         'packagedWalkList': json.loads((out / 'walklist-bundle.json').read_text(encoding='utf-8')),
                          'installerAuthenticode': 'NotSigned',
                          'smokeBackend': json.loads((out / 'smoke-backend.json').read_text(encoding='utf-8')),
                          'smokePrincipal': 'synthetic recipient fixture (test_terrier_desktop_access.py), district co-05, temporary state'},
