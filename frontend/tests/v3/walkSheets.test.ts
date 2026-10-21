@@ -128,3 +128,11 @@ test('local imported groups have stable letters across even and odd and capped p
     'Odd/A - Southington Section 1 - Odd','Even/B - Southington Section 2 - Even','Odd/B - Southington Section 2 - Odd',
   ]);
 });
+
+test('the summary names the voter profile in a last column, and has no such column without one',()=>{
+  const sheets=splitWalkSheets({...payload,query:{precinct:'5101521412',profile:'coalition'}},null);
+  assert.doesNotMatch(walkSummaryCsv(sheets),/Voter profile/);
+  const named=walkSummaryCsv(sheets,undefined,'Supporters and persuadables').trimEnd().split('\r\n');
+  assert.match(named[0],/"Street names","Voter profile"$/);
+  assert.ok(named.slice(1).every(row=>row.endsWith('"Supporters and persuadables"')));
+});

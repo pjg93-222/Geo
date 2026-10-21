@@ -38,7 +38,7 @@ export type WalkMatchStatus = 'matched' | 'pick' | 'none';
 export interface WalkMatchRow { row: number; input: string; side: WalkSidePick; status: WalkMatchStatus; candidates: WalkStreet[]; suggestions: string[] }
 export interface WalkMatchPayload { rows: WalkMatchRow[] }
 
-// GET /api/v3/walk/list?streets=12:even,15:both&ss=&sh=&precinct=&spans=&fresh=1&doors=&wp=&wi= (`fresh` leaves out the people at doors with a recorded result;
+// GET /api/v3/walk/list?streets=12:even,15:both&ss=&sh=&precinct=&spans=&fresh=1&doors=&wp=&wi=&profile= (`profile`, omitted for 'all', limits the list to a voter profile; `fresh` leaves out the people at doors with a recorded result;
 // `doors`, with `wp` and `wi`, needs `spans` and `fresh`: the blocks are taken in the order given and the last one is cut to reach that many doors)
 export interface WalkListTrim { doors: number; wp?: string; wi?: string }
 export interface WalkTally { voted: number; eligible: number }
@@ -121,9 +121,11 @@ export interface WalkPlan {
   race_mode: 'general' | 'primary'; spans: WalkPlanSpan[]; not_ranked: { spans: number; people: number };
   matched?: { people: number; scored: number };   // people in the area, and how many of them have a score
   potential?: { wp: number; wi: number }; knocked?: { people: number; doors: number }; turf?: WalkTurf;   // walk-plan-2
+  profile?: string;   // only when not 'all'
 }
 // `wp` and `wi` are the balance and influence weights as text (weightsQuery); `doors` asks for a turf and needs a precinct.
-export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number; wp?: string; wi?: string; doors?: number }
+// `profile` limits the sums to a voter profile (omitted for 'all'); the plan then says which one it counted.
+export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number; wp?: string; wi?: string; doors?: number; profile?: string }
 
 // POST /api/v3/walk/scores {ids} -> {scores}; `sup` and `push` (Needs a push) only in candidate districts. Whole numbers, for the printed list.
 export interface WalkScores { scores: Record<string, { ovr: number; part: number; sup?: number; push?: number }> }

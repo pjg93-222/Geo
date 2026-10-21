@@ -6,7 +6,7 @@ import {buildWalkPdf} from './walkPdf';
 import {ZipBundle,downloadZip,yieldExport,checkZipFileCount} from './walkZip';
 import {walkExportNames,walkSummaryCsv} from './walkExportNames';
 
-export interface WalkZipOptions{area:string;scores?:WalkScoreMap;watermark?:string;includeCsv:boolean;results:WalkResults;history:WalkHistory;unsaved:ReadonlySet<string>;provenance?:Record<string,unknown>;notes?:string[];originalLayout?:boolean}
+export interface WalkZipOptions{area:string;profile?:string;scores?:WalkScoreMap;watermark?:string;includeCsv:boolean;results:WalkResults;history:WalkHistory;unsaved:ReadonlySet<string>;provenance?:Record<string,unknown>;notes?:string[];originalLayout?:boolean}
 
 export async function buildWalkZip(sheets:WalkListPayload[],opts:WalkZipOptions):Promise<Uint8Array<ArrayBuffer>>{
   if(!sheets.length)throw new Error('No walk lists to export.');
@@ -16,13 +16,13 @@ export async function buildWalkZip(sheets:WalkListPayload[],opts:WalkZipOptions)
     await yieldExport();
     const {stem}=names[i];
     const originalLayout=opts.originalLayout??sheet.query.imported==='1';
-    const {doc}=await buildWalkPdf(originalLayout?{...sheet,list:{...sheet.list,title:'Walk list'}}:sheet,{area:originalLayout?'':`${opts.area} · List ${i+1} of ${sheets.length}`,scores:opts.scores,watermark:opts.watermark});
+    const {doc}=await buildWalkPdf(originalLayout?{...sheet,list:{...sheet.list,title:'Walk list'}}:sheet,{area:originalLayout?'':`${opts.area} · List ${i+1} of ${sheets.length}`,scores:opts.scores,watermark:opts.watermark,profile:opts.profile});
     bundle.add({name:`${stem}.pdf`,data:new Uint8Array(doc.output('arraybuffer'))});
     if(opts.includeCsv)bundle.add({name:`${stem}.csv`,data:buildWalkCsv(sheet,opts.results,opts.history,opts.unsaved,opts.scores)});
   }
   if(opts.includeCsv){
     bundle.add({name:'all-lists.csv',data:buildWalkSheetsCsv(sheets,opts.results,opts.history,opts.unsaved,opts.scores)});
-    bundle.add({name:'Summary.csv',data:walkSummaryCsv(sheets,names)});
+    bundle.add({name:'Summary.csv',data:walkSummaryCsv(sheets,names,opts.profile)});
   }
   const doors=sheets.reduce((n,s)=>n+s.totals.doors,0),voters=sheets.reduce((n,s)=>n+s.totals.voters,0);
   bundle.add({name:'manifest.json',data:JSON.stringify({...opts.provenance,format:'terrier-walk-lists-1',area:opts.area,date:sheets[0].generated_on,doors,voters,splitEvenOdd:sheets[0].query.split_sides!=='0',lists:sheets.map((s,i)=>({list:i+1,label:names[i].list,side:names[i].side,precinct:names[i].precinct,file:`${names[i].stem}.pdf`,doors:s.totals.doors,voters:s.totals.voters}))},null,2)+'\n'});
