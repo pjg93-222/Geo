@@ -1056,6 +1056,36 @@ class WalkPlanTests(TestCase):
             self.assertEqual(self.voters(self.trimmed(doors='4', profile='coalition')), set(self.ids('p07')))
             self.assertEqual(self.plan(preset='identify', profile='coalition')['matched']['people'], 1)   # one door: not ranked
 
+    def test_a_block_keeps_its_street_name_whatever_the_profile(self):
+        # two of chd1's seven doors are moved to another street: the block is named for the five, even when the profile keeps
+        # only the people at the two
+        with W.walk_store() as store:
+            store.attach_scores()
+            rows, blocks = store.span_plan({'precinct': PRECINCT_W})
+            rows = [dict(row) for row in rows if row['span_id'] == 1]
+            names = store.directory().by_id
+            own = rows[0]['street_id']
+            other = next(street for street in names if names[street].display != names[own].display)
+            moved = sorted({(row['stop_id'], row['unit']) for row in rows})[:2]
+            for row in rows:
+                if (row['stop_id'], row['unit']) in moved:
+                    row['street_id'] = other
+            nobody = SimpleNamespace(doors=frozenset())
+            everyone, _ = V.fold_plan(store, rows, blocks, V.U.terms(), nobody, 0.5, 0.5)
+            profiled, _ = V.fold_plan(store, rows, blocks, V.U.terms(), nobody, 0.5, 0.5,
+                                      keep=lambda row: (row['stop_id'], row['unit']) in moved)
+        self.assertEqual(everyone[1]['street'], V.street_label(names, own))
+        self.assertEqual(profiled[1]['street'], everyone[1]['street'])
+        self.assertEqual(profiled[1]['doors'], 2)
+        self.assertEqual(profiled[1]['people'], sum((row['stop_id'], row['unit']) in moved for row in rows))
+
+    def test_a_profile_list_past_the_ceiling_is_refused_without_counting_the_area(self):
+        with mock.patch.object(V, 'MAX_VOTERS', 3), mock.patch.object(W.Store, 'count_voters', side_effect=AssertionError('counted')):
+            self.assertEqual(self.list(400, spans='1,6', profile='coalition')['error'],
+                             'That is more than 3 voters, too large to build in one list. Choose a smaller area or fewer streets.')
+        with mock.patch.object(V, 'MAX_VOTERS', 3):          # without a profile the fast count still says how many
+            self.assertIn('That is 20 voters', self.list(400, spans='1,6')['error'])
+
     def test_a_saved_list_keeps_its_profile(self):
         query = {'spans': '1,6', 'precinct': PRECINCT_W, 'profile': 'coalition'}
         shown = self.list(**query)

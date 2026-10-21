@@ -579,8 +579,7 @@ def left_out_to_fit(store, spans, area, query, knocked):
     if not (store.attach_scores() and store.support):
         raise Refused(SUPPORT_NOT_BUILT, 503)
     keep = profile_keep(store, query.get('profile', 'all'))
-    rows = store.span_people(area, spans)
-    folded, _ = fold_plan(store, rows if keep is None else [r for r in rows if keep(r)], {}, U.terms(), knocked, wp, wi, by_door=True)
+    folded, _ = fold_plan(store, store.span_people(area, spans), {}, U.terms(), knocked, wp, wi, by_door=True, keep=keep)
     out, held = set(), 0
     for span in spans:
         parts = folded[span]['parts'] if span in folded else {}
@@ -600,8 +599,11 @@ def standard_payload(store, picks, spans, area, query):
     keep = profile_keep(store, query.get('profile', 'all'))       # only the people of a voter profile, if one is asked
     rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut, keep)
     if len(rows) > MAX_VOTERS:
+        if keep is not None:          # a profile is judged person by person: not counted past the ceiling
+            raise Refused('That is more than %s voters, too large to build in one list. Choose a smaller area or fewer streets.'
+                          % '{:,}'.format(MAX_VOTERS))
         raise Refused('That is %s voters, too large to build in one list (at most %s). Choose a smaller area or fewer streets.'
-                      % ('{:,}'.format(store.count_voters(picks, area, spans, skip, cut, keep)), '{:,}'.format(MAX_VOTERS)))
+                      % ('{:,}'.format(store.count_voters(picks, area, spans, skip, cut)), '{:,}'.format(MAX_VOTERS)))
     if not rows:
         if skip and store.voters(picks, area, 1, spans, keep=keep):
             raise Refused('Everyone on those blocks already has a recorded result.')
@@ -713,7 +715,7 @@ def percentile(values):
             for key, v in values.items() if v is not None}
 
 
-def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
+def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False, keep=None):
     """({span id: sums over its people, a, b, len_m, street label, commonest block}, {'people', 'doors'} left out) from the
     Store.span_plan rows, with the untapped terms (untapped.terms()) and the doors that have a recorded result (untapped.
     knocked()). Those doors are left out of every sum and counted in the second answer. A person with a score row adds to
@@ -721,7 +723,9 @@ def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
     and supporter s (1 - t), unweighted; identify: s in the middle third, no support counting as 0.5) and to the means of s
     and t; one without adds to identify alone. The label is the street with most doors on the block, then the first by name
     (as the overview), counting every door, so a block keeps its name as results come in. With `by_door` a block also holds
-    'parts', {door: [people, undecided, supporter]} over its doors that are not left out (walk_turf.best_doors cuts by them)."""
+    'parts', {door: [people, undecided, supporter]} over its doors that are not left out (walk_turf.best_doors cuts by them).
+    `keep` (profile_keep): only the rows it passes add to the sums; every row still names its block, so a block keeps its
+    name whatever the voter profile."""
     names = store.directory().by_id
     pos = np.array([row['pos'] or 0 for row in rows], dtype=np.int64)
     at = np.maximum(pos - 1, 0)
@@ -733,12 +737,14 @@ def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
     spans, doors, streets, gone_people, gone_doors = {}, {}, {}, 0, set()
     for k, row in enumerate(rows):
         door = row['stop_id'], row['unit']
+        streets.setdefault((row['span_id'], row['street_id']), set()).add(door)
+        if keep is not None and not keep(row):
+            continue
         span = spans.get(row['span_id'])
         if span is None:
             span = spans[row['span_id']] = {**dict.fromkeys(SUMS, 0), 'len_m': row['len_m'], 'a': row['a'], 'b': row['b'],
                                             'block': blocks.get(row['span_id']), 'parts': {}}
             doors[row['span_id']] = set()
-        streets.setdefault((row['span_id'], row['street_id']), set()).add(door)
         if door in knocked.doors:
             gone_people += 1
             gone_doors.add(door)
@@ -853,9 +859,7 @@ def plan(request):
             raise Refused(SUPPORT_NOT_BUILT, 503)
         rows, blocks = store.span_plan(area)
         keep = profile_keep(store, profile)           # the sums count only the people of the voter profile
-        if keep is not None:
-            rows = [r for r in rows if keep(r)]
-        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi, by_door=bool(asked))
+        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi, by_door=bool(asked), keep=keep)
         if len(spans) > MAX_SPANS:
             raise Refused('That area has %s blocks; choose a house district or a precinct to rank them.' % '{:,}'.format(len(spans)))
         xy = store.node_xy({node for s in spans.values() for node in (s['a'], s['b'])}) if asked else None

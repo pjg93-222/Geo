@@ -409,10 +409,10 @@ class Store:
                             [*spans, *args, *left_out_args], max(limit - len(rows), 0), (skip or frozenset()) | span_skip if span_skip else skip))
         return rows
 
-    def count_voters(self, picks, area, spans=None, skip=None, span_skip=None, keep=None):
+    def count_voters(self, picks, area, spans=None, skip=None, span_skip=None):
         """How many people `voters` would list (without a limit); with `skip`, the doors it leaves out are not counted."""
-        if skip is not None or keep is not None:      # person by person: the doors left out are not in the combo table
-            return len(self.voters(picks, area, sys.maxsize, spans, skip, span_skip, keep))
+        if skip is not None:                  # person by person: the doors left out are not in the combo table
+            return len(self.voters(picks, area, sys.maxsize, spans, skip, span_skip))
         clause, args = _area(area, 'p')
         if not picks and not spans:
             plain, plain_args = _area(area)
