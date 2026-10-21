@@ -79,7 +79,8 @@ class FeaturesTests(TestCase):
             self.assertEqual([p['label'] for p in roi['presets']],
                              ['Needs a push', 'Mixed-support streets', 'Supporter turnout', 'Voter identification'])
             self.assertTrue(all(p['formula'] for p in roi['presets']))
-            self.assertEqual({k: v for k, v in roi.items() if k != 'presets'}, {
+            self.assertEqual(roi['profiles'], [{'key': 'all', 'label': 'Everyone'}, {'key': 'coalition', 'label': 'Supporters and persuadables'}])
+            self.assertEqual({k: v for k, v in roi.items() if k not in ('presets', 'profiles')}, {
                 'preset': 'push', 'p': 'turnout', 'weights': {'value': 1.0, 'pop_density': 0.0, 'voter_density': 0.0},
                 'min_doors': 5, 'min_length_m': 50, 'potential': {'wp': 0.5, 'wi': 0.5}, 'turf': {'doors': 60, 'jump_m': 400.0}})
 
