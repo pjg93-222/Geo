@@ -32,21 +32,34 @@ Registration codes in that file (whole-file row counts, read 2026-10-22; raw cod
   - the primary ballot party.
 
   Missing signals drop out of the mean. The walk store already reads it (`server/research/walk_store.py:516-518`).
-- **Bands:** thirds of `sup_score / 100`, matching Terrier's existing "middle third, edges included" rule (`walk_views.py:653`):
-  - Leans toward the candidate: s above 2/3;
-  - Persuadable: s in the middle third, edges included (label per D4);
-  - Leans away: s below 1/3;
-  - No score: the person has no support row.
+- **Control (D5 below):** a two-handle spectrum slider over `sup_score`, not band chips. "Persuadable" is the middle-third preset, the same group the existing "Voter identification" and "Mixed-support streets" presets use (`tools/field_labels.py:94-98`), with edges included as in `walk_views.py:653`.
+- **Label (D4 below):** the UI says "Persuadable" for the middle-third preset.
 
-  "Persuadable" is the middle third, the same group the existing "Voter identification" and "Mixed-support streets" presets use (`tools/field_labels.py:94-98`).
-- **Label (D4 below):** the UI says "Persuadable" for the middle third.
+**D5. Support control: two-handle spectrum slider (2026-10-22).** The owner chose a slider over band chips.
+
+- **Scale:** one horizontal track over `sup_score`, 0 to 100, colored with Terrier's existing lean ramp (`--strong-r` through `--strong-d`). The end labels come from the district candidate's party: for a Democratic candidate such as OR-05's, 0 is "Republican-leaning" and 100 is "Democratic-leaning", with "Middle" at the center. The ends are never labeled with spectrum words (section 1.1); the score measures party support, not ideology.
+- **Handles:** two handles set an inclusive range [low, high]. A voter is included on this dimension when low <= `sup_score` <= high. The handles cannot cross, and keyboard arrows move each handle by 1.
+- **Presets:** four buttons set both handles. The button matching the current range is shown as selected.
+
+  | Preset | Range |
+  |---|---|
+  | Leans R | 0 to 100/3 |
+  | Persuadable | 100/3 to 200/3 |
+  | Leans D | 200/3 to 100 |
+  | Everyone | 0 to 100 |
+
+  Presets use exact thirds internally and display as 33 and 67. For a Republican candidate, the first and third preset names swap so they still describe party lean.
+- **No score:** a checkbox, "Include voters with no score", decides whether voters without a `support` row count as included on this dimension. It is off by default, except that "Everyone" with the box on means the support dimension filters nothing.
+- **Combining:** the slider range is an include condition. It is AND-ed with the registration include chips, and registration exclude chips still win at the door (section 2.2). The slider has no exclude mode; narrowing the range does that job.
+- **Recompute:** dragging updates the matching-door count and regroups after the same debounce as other filter changes (section 3.2). The basis line states the range in words, for example "Support Persuadable (33 to 67)" or "Support 20 to 45, plus no score".
+- **Help text:** "Terrier support score: mean of vendor partisan and presidential support scores, registration and primary ballot. A ranking aid, not a measured belief."
 
 **D4. Label rule amended for "Persuadable" (2026-10-22).** The owner decided the UI should say "Persuadable" for the middle third of support. Today `ADVISORY_PATTERN` (`field_labels.py:145-147`) bans `persuad|persuasion`. It is enforced at import by `self_check` (`field_labels.py:198-209`) and mirrored by `frontend/tests/v3/copy.test.ts:8`. The build must amend the rule as follows:
 
-- **Allow one label:** permit exactly the label "Persuadable" for the support band. Do this by exempting that one string, not by deleting `persuad` from the pattern, so "persuasion", "persuade" and the other advisory words stay banned everywhere else.
+- **Allow one label:** permit exactly the label "Persuadable" for the middle-third preset button. Do this by exempting that one string, not by deleting `persuad` from the pattern, so "persuasion", "persuade" and the other advisory words stay banned everywhere else.
 - **Change both checks together:** amend the Python pattern or `self_check` and the frontend copy test in the same change, so they keep agreeing.
 - **Help text:** the label gets a tooltip or help line that says what it means: "Middle third of Terrier's support score; not a measured belief."
-- **Other bands:** these stay neutral: "Leans toward", "Leans away" and "No score".
+- **Other presets:** "Leans R", "Leans D" and "Everyone" (D5).
 - **Existing labels:** the presets' existing labels ("Voter identification", "Mixed-support streets") stay as they are. Only the audience filter uses the new word.
 - **Not the far-right columns:** the last eleven columns of the OR-05 file (`sei_dem_pct_*`, `sei_pvi_*`, `sei_party_trust_range`, `sei_dem_avg_metric*`, `sei_dem_direction_*`) are undocumented in Terrier and excluded in `data/field_dictionary.csv`. Their names suggest area-level vote share and partisan index rather than a person's support, but that is unverified (Q11).
 - **Accuracy:** the support score has no validation against vote choice (`research/systems/terrier-canvass.md:82`), and vendor partisan tags scored AUC 0.58 (`HANDOFF_2026-10-01.md:97`). Bands are a ranking aid, not a measured belief.
@@ -97,7 +110,7 @@ Result: of the eleven labels, three are honestly supportable (Green, Libertarian
 
 - **Registration party: the basis (D1).** Same data the walk list already returns per voter (`walk_store.py:321-324` includes `party`), so the count query needs no join to another store. Choices: Democrat, Republican, Unaffiliated, Green, Libertarian, Working Families, Other, plus T once labeled (Q3).
 - **Canvass result:** proposed as an optional second dimension for "Undecided", which registration cannot express. Not covered by D1; needs an owner yes and a staleness rule (Q5).
-- **Support for the candidate: second dimension (D3).** Thirds of Terrier's support score: Leans toward, Persuadable (D4), Leans away, No score.
+- **Support for the candidate: second dimension (D3).** A two-handle spectrum slider over Terrier's support score, with presets Leans R, Persuadable (D4), Leans D and Everyone, plus a no-score checkbox (D5).
 - **Vendor Outlook, ideology scores and the raw vendor party columns: not used directly (D1).** Partisan and presidential support reach the filter only through the support score (D3).
 - **Modeled lean: not used (D1).** The repo also says it is not a belief measure and is not used for filtering.
 
@@ -186,7 +199,7 @@ The two bases must be impossible to confuse:
 - **Export file names** carry the basis (`street-groups-voter-file.zip` vs `street-groups-public-estimate.zip`).
 - **Registration wording:** choices read "Registered Green", "Registered Unaffiliated" and so on, never a spectrum word, so the label says what the data is.
 
-All new label strings must pass `ADVISORY_PATTERN` (`field_labels.py:145-147`), enforced at import by `self_check` (`field_labels.py:198-209`). That rules out words such as target, priority, best, recommend, should, worth, persuasion, convert. Note the pattern is word-bounded, so "persuadable" would not trip `\bpersuad\b`; the one exception is the "Persuadable" band label, allowed by the amendment in D4. The filter's own name stays "Audience filter" with "Include"/"Exclude" controls.
+All new label strings must pass `ADVISORY_PATTERN` (`field_labels.py:145-147`), enforced at import by `self_check` (`field_labels.py:198-209`). That rules out words such as target, priority, best, recommend, should, worth, persuasion, convert. Note the pattern is word-bounded, so "persuadable" would not trip `\bpersuad\b`; the one exception is the "Persuadable" preset label, allowed by the amendment in D4. The filter's own name stays "Audience filter" with "Include"/"Exclude" controls.
 
 ## 4. Governance gates
 
