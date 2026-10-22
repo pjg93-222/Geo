@@ -6,6 +6,7 @@ import {Check,ChevronDown,Route as RouteIcon,Search,Upload,X} from 'lucide-react
 import {PageHeader,useFeatures} from './Header';
 import {StreetPlan} from './StreetPlan';
 import {WalkAddressSheets} from './WalkAddressSheets';
+import {AreaStreetDiscovery} from './AreaStreetDiscovery';
 import {useStartupReady} from './StartupFrame';
 import {Segmented,cx} from './ui';
 import type {WalkShade} from './WalkMap';
@@ -356,7 +357,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [hosted,setHosted]=useState(false);   // a hosted server: no CSV download and no scores (the server refuses them), and the PDF is watermarked
   useEffect(()=>{getSession().then(s=>setHosted(s.hosted===true)).catch(()=>{});},[]);
   const [upload,setUpload]=useState<Upload|null>(null);const uploadRef=useRef<Upload|null>(null);const uploadSeq=useRef(0);const uploadAbort=useRef<AbortController|null>(null);
-  const [uploadError,setUploadError]=useState('');const [skipped,setSkipped]=useState<WalkCsvProblem[]>([]);const [matching,setMatching]=useState(false);
+  const [uploadError,setUploadError]=useState(''),[uploadWarning,setUploadWarning]=useState('');const [skipped,setSkipped]=useState<WalkCsvProblem[]>([]);const [matching,setMatching]=useState(false);
   const [payload,setPayload]=useState<WalkListPayload|null>(null);const payloadRef=useRef<WalkListPayload|null>(null);
   const [listKey,setListKey]=useState(init.list);
   const [loading,setLoading]=useState(false);const [loadError,setLoadError]=useState<{message:string;retry:()=>void}|null>(null);
@@ -489,7 +490,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       setArea(from.area);
       const next=parseStreetsParam(from.streets).map((s):WalkPick=>({...s,label:names.get(s.id)??'',city:''}));picksRef.current=next;setPicks(next);
       putSpans(parseSpansParam(from.spans),!!from.fresh,from.trim??null);
-      putUpload(null);setSkipped([]);
+      putUpload(null);setSkipped([]);setUploadWarning('');
     }else{
       const next=picksRef.current.map(s=>s.label?s:{...s,label:names.get(s.id)??''});picksRef.current=next;setPicks(next);
     }
@@ -548,7 +549,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       got.cut=trimFor(plan.turf,asked,q);   // the list is cut to the doors asked for, with the weights the blocks were picked by (a server that cannot cut sends no trim)
       return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides);
     },p=>{
-      picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);   // the list is the planned blocks alone
+      picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);setUploadWarning('');   // the list is the planned blocks alone
       putSpans(got.turf?.spans??[],true,got.cut??null);show(p,false);setTurf(got.turf??null);
     });
   }
@@ -672,11 +673,11 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     // The file chosen last is the only one whose answer is wanted: choosing another, clearing the upload, opening a saved list that
     // restores the picker or leaving the screen makes this one stale, and a stale answer changes nothing.
     const job=matchJobs.start();setMatching(false);
-    setUploadError('');setSkipped([]);setNote('');
+    setUploadError('');setUploadWarning('');setSkipped([]);setNote('');
     let read:WalkCsvRead;
     try{read=readWalkCsv(await file.text());}catch(e){if(job.live()){job.end();setUploadError(e instanceof Error?e.message:'That file could not be read.');}return;}
     if(!job.live())return;
-    setSkipped(read.problems);   // rows with a value the server would refuse are reported and left out; the rest go on
+    setUploadWarning(read.warning??'');setSkipped(read.problems);   // rows with a value the server would refuse are reported and left out; the rest go on
     const inputs=read.rows;
     if(!inputs.length){job.end();if(!read.problems.length)setUploadError('No streets found in that file. Add a column named street.');return;}
     setMatching(true);
@@ -751,6 +752,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         <p className="walk-sub">Build from streets or import an address or street file.</p>
 
         <div className="walk-source"><Segmented variant="index" label="Walk list source" items={[{id:'streets',label:'Streets'},{id:'addresses',label:'Address file'}]} value={source} onChange={setSource}/></div>
+        <AreaStreetDiscovery/>
         <label className="walk-check"><input type="checkbox" checked={splitSides} onChange={e=>setSplitSides(e.target.checked)}/> Split even and odd</label>
         <label className="walk-doors"><span>Maximum doors per list</span><input type="number" min={1} max={10000} step={1} inputMode="numeric" placeholder="No cap" value={capText} onChange={e=>{setCapText(e.target.value);setSheetIndex(0);}} aria-describedby="walk-cap-hint"/></label>
         <p id="walk-cap-hint" className="walk-hint">Creates as many lists as needed to cover every door. Blank means no cap. Even and odd stay on separate lists when enabled. Downloads include all lists.</p>
@@ -774,9 +776,11 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         <div className="walk-upload">
           <input ref={fileInput} type="file" accept=".csv,text/csv" hidden aria-label="Upload a CSV of streets" onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void onFile(f);}}/>
           <button type="button" className="walk-button" onClick={()=>fileInput.current?.click()} disabled={matching}><Upload size={15} strokeWidth={1.75} aria-hidden="true"/>{matching?'Matching…':'Upload street CSV'}</button>
-          {upload&&<span className="walk-file">{upload.name} · {countText(upload.count,'row')} <button type="button" className="walk-link" onClick={()=>{putUpload(null);setSkipped([]);}}>Clear</button></span>}
+          {upload&&<span className="walk-file">{upload.name} · {countText(upload.count,'row')} <button type="button" className="walk-link" onClick={()=>{putUpload(null);setSkipped([]);setUploadWarning('');}}>Clear</button></span>}
         </div>
         {uploadError&&<p className="walk-note" role="alert">{uploadError}</p>}
+        {/* always mounted: a live region announces a change of its text, not its own arrival */}
+        <p className={uploadWarning?'walk-note':'walk-sr'} role="status">{uploadWarning&&`${uploadWarning} Door counts will be voter-based.`}</p>
         {leftOut&&<div className="walk-note" role="alert"><p>{leftOut.headline}</p><ul>{leftOut.reasons.map(t=><li key={t}>{t}</li>)}</ul></div>}
         {upload&&<UploadReport upload={upload} picks={picks} onChoose={choose} onSkip={skip} onRematch={(i,t)=>void rematch(i,t)}/>}
 
