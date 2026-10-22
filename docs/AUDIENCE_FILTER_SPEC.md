@@ -34,12 +34,20 @@ Registration codes in that file (whole-file row counts, read 2026-10-22; raw cod
   Missing signals drop out of the mean. The walk store already reads it (`server/research/walk_store.py:516-518`).
 - **Bands:** thirds of `sup_score / 100`, matching Terrier's existing "middle third, edges included" rule (`walk_views.py:653`):
   - Leans toward the candidate: s above 2/3;
-  - Mixed support: s in the middle third, edges included;
+  - Persuadable: s in the middle third, edges included (label per D4);
   - Leans away: s below 1/3;
   - No score: the person has no support row.
 
-  "Persuadable" maps to **Mixed support**, the same group the existing "Voter identification" and "Mixed-support streets" presets use (`tools/field_labels.py:94-98`).
-- **Label:** the UI says "Mixed support", not "Persuadable". `ADVISORY_PATTERN` (`field_labels.py:145-147`) bans `persuad`/`persuasion`, and `frontend/tests/v3/copy.test.ts:8` mirrors that rule. Using the word would mean changing the rule, which is the owner's call (Q10).
+  "Persuadable" is the middle third, the same group the existing "Voter identification" and "Mixed-support streets" presets use (`tools/field_labels.py:94-98`).
+- **Label (D4 below):** the UI says "Persuadable" for the middle third.
+
+**D4. Label rule amended for "Persuadable" (2026-10-22).** The owner decided the UI should say "Persuadable" for the middle third of support. Today `ADVISORY_PATTERN` (`field_labels.py:145-147`) bans `persuad|persuasion`. It is enforced at import by `self_check` (`field_labels.py:198-209`) and mirrored by `frontend/tests/v3/copy.test.ts:8`. The build must amend the rule as follows:
+
+- **Allow one label:** permit exactly the label "Persuadable" for the support band. Do this by exempting that one string, not by deleting `persuad` from the pattern, so "persuasion", "persuade" and the other advisory words stay banned everywhere else.
+- **Change both checks together:** amend the Python pattern or `self_check` and the frontend copy test in the same change, so they keep agreeing.
+- **Help text:** the label gets a tooltip or help line that says what it means: "Middle third of Terrier's support score; not a measured belief."
+- **Other bands:** these stay neutral: "Leans toward", "Leans away" and "No score".
+- **Existing labels:** the presets' existing labels ("Voter identification", "Mixed-support streets") stay as they are. Only the audience filter uses the new word.
 - **Not the far-right columns:** the last eleven columns of the OR-05 file (`sei_dem_pct_*`, `sei_pvi_*`, `sei_party_trust_range`, `sei_dem_avg_metric*`, `sei_dem_direction_*`) are undocumented in Terrier and excluded in `data/field_dictionary.csv`. Their names suggest area-level vote share and partisan index rather than a person's support, but that is unverified (Q11).
 - **Accuracy:** the support score has no validation against vote choice (`research/systems/terrier-canvass.md:82`), and vendor partisan tags scored AUC 0.58 (`HANDOFF_2026-10-01.md:97`). Bands are a ranking aid, not a measured belief.
 - **Coverage:** `support` rows are written only for candidate districts (`scores_writer.py:177-183`). Whether OR-05 has them in the current build is unverified (Q12). Without them every voter is "No score".
@@ -89,7 +97,7 @@ Result: of the eleven labels, three are honestly supportable (Green, Libertarian
 
 - **Registration party: the basis (D1).** Same data the walk list already returns per voter (`walk_store.py:321-324` includes `party`), so the count query needs no join to another store. Choices: Democrat, Republican, Unaffiliated, Green, Libertarian, Working Families, Other, plus T once labeled (Q3).
 - **Canvass result:** proposed as an optional second dimension for "Undecided", which registration cannot express. Not covered by D1; needs an owner yes and a staleness rule (Q5).
-- **Support for the candidate: second dimension (D3).** Thirds of Terrier's support score: Leans toward, Mixed support, Leans away, No score.
+- **Support for the candidate: second dimension (D3).** Thirds of Terrier's support score: Leans toward, Persuadable (D4), Leans away, No score.
 - **Vendor Outlook, ideology scores and the raw vendor party columns: not used directly (D1).** Partisan and presidential support reach the filter only through the support score (D3).
 - **Modeled lean: not used (D1).** The repo also says it is not a belief measure and is not used for filtering.
 
@@ -178,7 +186,7 @@ The two bases must be impossible to confuse:
 - **Export file names** carry the basis (`street-groups-voter-file.zip` vs `street-groups-public-estimate.zip`).
 - **Registration wording:** choices read "Registered Green", "Registered Unaffiliated" and so on, never a spectrum word, so the label says what the data is.
 
-All new label strings must pass `ADVISORY_PATTERN` (`field_labels.py:145-147`), enforced at import by `self_check` (`field_labels.py:198-209`). That rules out words such as target, priority, best, recommend, should, worth, persuasion, convert. Note the pattern is word-bounded, so "persuadable" would not trip `\bpersuad\b`; the intent of the rule still forbids it, and the filter's own name stays "Audience filter" with "Include"/"Exclude" controls.
+All new label strings must pass `ADVISORY_PATTERN` (`field_labels.py:145-147`), enforced at import by `self_check` (`field_labels.py:198-209`). That rules out words such as target, priority, best, recommend, should, worth, persuasion, convert. Note the pattern is word-bounded, so "persuadable" would not trip `\bpersuad\b`; the one exception is the "Persuadable" band label, allowed by the amendment in D4. The filter's own name stays "Audience filter" with "Include"/"Exclude" controls.
 
 ## 4. Governance gates
 
@@ -222,7 +230,7 @@ Proposed: each voter-basis count request logs action `walk.audience.count` with 
 
 ### G5. Label rule
 
-All labels pass `ADVISORY_PATTERN` and the spectrum words in section 1.1 are not used. This is a build rule, not an owner decision, listed so reviewers check it.
+All labels pass `ADVISORY_PATTERN`, amended per D4 to allow the single label "Persuadable", and the spectrum words in section 1.1 are not used. This is a build rule, not an owner decision, listed so reviewers check it.
 
 ## 5. Open questions for the owner
 
@@ -237,6 +245,6 @@ Answered 2026-10-22: Outlook and other modeled leanings are out (D1); no indepen
 7. **Small counts:** suppress or round per-street matching-door counts below a floor (for example 5)? If yes, suppressed streets still group but show "fewer than 5".
 8. **Exports:** voter-basis groups export as street-name CSVs like the public basis, or only as Terrier walk lists (which enforce the stop-level boundary that a street-name CSV cannot, per `PUBLIC_SCOPE_WARNING`)?
 9. **Audit locally (G4):** add local audit for this feature?
-10. **"Persuadable" wording:** keep the UI label "Mixed support" (proposed), or amend `ADVISORY_PATTERN` and its copy test to allow "Persuadable"?
+10. **"Persuadable" wording:** answered by D4 (amend the rule to allow that one label).
 11. **Far-right `sei_*` columns:** confirm whether they are person-level or area-level and what `sei_party_trust_range` encodes, before any use.
 12. **Support coverage for OR-05:** does the current OR-05 build write `support` rows? If not, D3 needs a support build for OR-05 first.
