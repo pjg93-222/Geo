@@ -49,7 +49,7 @@ Registration codes in that file (whole-file row counts, read 2026-10-22; raw cod
   | Everyone | 0 to 100 |
 
   Presets use exact thirds internally and display as 33 and 67. For a Republican candidate, the first and third preset names swap so they still describe party lean.
-- **No score:** a checkbox, "Include voters with no score", decides whether voters without a `support` row count as included on this dimension. It is off by default, except that "Everyone" with the box on means the support dimension filters nothing.
+- **No score:** a checkbox, "Include voters with no score", decides whether voters without a `support` row count as included on this dimension. The default state is "Everyone" with the box on, which means the support dimension filters nothing until the user moves a handle or picks a preset.
 - **Combining:** the slider range is an include condition. It is AND-ed with the registration include chips, and registration exclude chips still win at the door (section 2.2). The slider has no exclude mode; narrowing the range does that job.
 - **Recompute:** dragging updates the matching-door count and regroups after the same debounce as other filter changes (section 3.2). The basis line states the range in words, for example "Support Persuadable (33 to 67)" or "Support 20 to 45, plus no score".
 - **Help text:** "Terrier support score: mean of vendor partisan and presidential support scores, registration and primary ballot. A ranking aid, not a measured belief."
