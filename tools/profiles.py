@@ -39,8 +39,8 @@ PROFILES = {'all': ('Everyone', _everyone), 'coalition': ('Supporters and persua
 
 
 def offered(party):
-    """The profile keys a district whose candidate is of `party` (None: no candidate) offers: only 'all' without one."""
-    return list(PROFILES) if party else ['all']
+    """The profile keys a district whose candidate is of `party` (None: no candidate) offers: only 'all' without a D or R one."""
+    return list(PROFILES) if party in OTHER else ['all']
 
 
 def listing(party):

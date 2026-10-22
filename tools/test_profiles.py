@@ -61,6 +61,7 @@ class ProfileTests(unittest.TestCase):
     def test_offered(self):
         self.assertEqual(P.offered(None), ['all'])
         self.assertEqual(P.offered('D'), ['all', 'coalition'])
+        self.assertEqual(P.offered('L'), ['all'])
         self.assertEqual(P.listing('R'), [{'key': 'all', 'label': 'Everyone'},
                                           {'key': 'coalition', 'label': 'Supporters and persuadables'}])
         self.assertEqual(P.listing(None), [{'key': 'all', 'label': 'Everyone'}])
