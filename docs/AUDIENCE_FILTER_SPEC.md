@@ -23,6 +23,27 @@ Registration codes in that file (whole-file row counts, read 2026-10-22; raw cod
 
 **D2. Review.** The owner states: "We are trust, don't need independent review." No independent or counsel review is required before building or sharing this feature. This supersedes the counsel item in `HANDOFF_2026-10-01.md:98` for this feature, in the same way `WALK_LIST_HANDOFF_2026-10-02.md:108` recorded a waiver for walk lists. It is recorded as the owner's decision, not as a legal finding.
 
+**D3. Second dimension: support for the candidate (added later on 2026-10-22).** The owner asked for "persuadable" voters, using the vendor's degrees of support for either party. This narrows D1: registration remains the party basis, and a support dimension is added beside it.
+
+- **Source:** Terrier's existing per-voter support score, not raw vendor columns. `support.sup_score` (0..100, `tools/scores_schema.py:58-61`) is built by `tools/support.py:68-76` as the equal-weight mean of the available signals:
+  - the vendor partisan score `sai_partisan_score`;
+  - presidential support from `sai_harris_support_score` and `sai_trump_support_score` (`support.py:44-46`);
+  - registration;
+  - the primary ballot party.
+
+  Missing signals drop out of the mean. The walk store already reads it (`server/research/walk_store.py:516-518`).
+- **Bands:** thirds of `sup_score / 100`, matching Terrier's existing "middle third, edges included" rule (`walk_views.py:653`):
+  - Leans toward the candidate: s above 2/3;
+  - Mixed support: s in the middle third, edges included;
+  - Leans away: s below 1/3;
+  - No score: the person has no support row.
+
+  "Persuadable" maps to **Mixed support**, the same group the existing "Voter identification" and "Mixed-support streets" presets use (`tools/field_labels.py:94-98`).
+- **Label:** the UI says "Mixed support", not "Persuadable". `ADVISORY_PATTERN` (`field_labels.py:145-147`) bans `persuad`/`persuasion`, and `frontend/tests/v3/copy.test.ts:8` mirrors that rule. Using the word would mean changing the rule, which is the owner's call (Q10).
+- **Not the far-right columns:** the last eleven columns of the OR-05 file (`sei_dem_pct_*`, `sei_pvi_*`, `sei_party_trust_range`, `sei_dem_avg_metric*`, `sei_dem_direction_*`) are undocumented in Terrier and excluded in `data/field_dictionary.csv`. Their names suggest area-level vote share and partisan index rather than a person's support, but that is unverified (Q11).
+- **Accuracy:** the support score has no validation against vote choice (`research/systems/terrier-canvass.md:82`), and vendor partisan tags scored AUC 0.58 (`HANDOFF_2026-10-01.md:97`). Bands are a ranking aid, not a measured belief.
+- **Coverage:** `support` rows are written only for candidate districts (`scores_writer.py:177-183`). Whether OR-05 has them in the current build is unverified (Q12). Without them every voter is "No score".
+
 ## 0. Context and scope
 
 The Walk-list panel on `feat/area-street-estimates` lets a manager draw a polygon, finds the streets inside it from an installed public address-point catalog, and splits them into groups of 100–150 estimated doors. That basis is deliberately person-free: `server/research/area_street_views.py:3-5` says the module "never opens voter stores", and its export README says "door counts will be voter-based, not these estimates" (`frontend/src/v3/lib/publicStreetGroups.ts:110`).
@@ -68,7 +89,8 @@ Result: of the eleven labels, three are honestly supportable (Green, Libertarian
 
 - **Registration party: the basis (D1).** Same data the walk list already returns per voter (`walk_store.py:321-324` includes `party`), so the count query needs no join to another store. Choices: Democrat, Republican, Unaffiliated, Green, Libertarian, Working Families, Other, plus T once labeled (Q3).
 - **Canvass result:** proposed as an optional second dimension for "Undecided", which registration cannot express. Not covered by D1; needs an owner yes and a staleness rule (Q5).
-- **Vendor Outlook and other modeled leanings: not used (D1).**
+- **Support for the candidate: second dimension (D3).** Thirds of Terrier's support score: Leans toward, Mixed support, Leans away, No score.
+- **Vendor Outlook, ideology scores and the raw vendor party columns: not used directly (D1).** Partisan and presidential support reach the filter only through the support score (D3).
 - **Modeled lean: not used (D1).** The repo also says it is not a belief measure and is not used for filtering.
 
 ### 1.3 Combining selections
@@ -215,3 +237,6 @@ Answered 2026-10-22: Outlook and other modeled leanings are out (D1); no indepen
 7. **Small counts:** suppress or round per-street matching-door counts below a floor (for example 5)? If yes, suppressed streets still group but show "fewer than 5".
 8. **Exports:** voter-basis groups export as street-name CSVs like the public basis, or only as Terrier walk lists (which enforce the stop-level boundary that a street-name CSV cannot, per `PUBLIC_SCOPE_WARNING`)?
 9. **Audit locally (G4):** add local audit for this feature?
+10. **"Persuadable" wording:** keep the UI label "Mixed support" (proposed), or amend `ADVISORY_PATTERN` and its copy test to allow "Persuadable"?
+11. **Far-right `sei_*` columns:** confirm whether they are person-level or area-level and what `sei_party_trust_range` encodes, before any use.
+12. **Support coverage for OR-05:** does the current OR-05 build write `support` rows? If not, D3 needs a support build for OR-05 first.
