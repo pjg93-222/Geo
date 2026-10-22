@@ -13,8 +13,9 @@ import {box4,boxesHit,cleanLine,clipLine,doorPoints,fitFrame,growBounds,inArea,i
 import type {Fit,Frame,XY} from './walkGeo';
 
 /** `scores`: the Print scores toggle (off by default, which leaves the pages as they were): adds a SCORES group of Ovr, Sup (candidate districts) and Part columns. */
+/** `profile`: the name of the voter profile the list was limited to (left out for everyone), told on the cover. */
 /** `watermark`: who printed the list and when (hosted servers; walk.ts watermarkText), written on every page and faintly across it. Without it the pages are exactly as before. */
-export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap;watermark?:string;sheets?:WalkListPayload[]}
+export interface WalkPdfOptions{area?:string;fileName?:string;scores?:WalkScoreMap;watermark?:string;sheets?:WalkListPayload[];profile?:string}
 
 type RGB=[number,number,number];
 type Box=Frame;
@@ -561,7 +562,8 @@ export async function buildWalkPdf(payload:WalkListPayload,opts:WalkPdfOptions={
   doc.setProperties({title:safe(`${payload.list?.title||'Walk list'}${area?` - ${area}`:''}`),subject:'Walk list',creator:'Terrier'});
   const sheets=opts.sheets?.length?opts.sheets:[payload];
   const recovered=sheets.some(hasRecovery),flagged=sheets.some(hasFlag);
-  const map=drawCover(doc,payload,sheets.length>1?[area,'Full route map and distance'].filter(Boolean).join(' · '):area,opts.scores);
+  const shown=[area,opts.profile&&`Voter profile: ${opts.profile}`].filter(Boolean).join(' · ');
+  const map=drawCover(doc,payload,sheets.length>1?[shown,'Full route map and distance'].filter(Boolean).join(' · '):shown,opts.scores);
   const pageSheets:number[]=[0,0];
   for(const [i,sheet] of sheets.entries()){
     const first=doc.getNumberOfPages()+1;

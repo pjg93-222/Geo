@@ -12,11 +12,11 @@ import {DEFAULTS_NOTE,clampWeights,weightsQuery} from '../lib/untapped';
 import type {UntappedWeights} from '../lib/untapped';
 
 const TWO=new Intl.NumberFormat('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const areaKey=(a:WalkArea)=>[a.ss,a.sh,a.precinct].join('|');
+const areaKey=(a:WalkArea,profile:string)=>[a.ss,a.sh,a.precinct,profile].join('|');   // a plan ranked for another area or voter profile is not shown
 const WEIGHTS=[['value','Value per 100 m'],['pop','Population density'],['voter','Voter density']] as const;
 const percent=(x:number)=>Math.round(x*100);
 
-export function StreetPlan(p:{area:Required<WalkArea>;roi:FeatureRoi;race:string;density:boolean;busy:boolean;
+export function StreetPlan(p:{area:Required<WalkArea>;roi:FeatureRoi;profile:string;race:string;density:boolean;busy:boolean;
   weights:UntappedWeights;defaults:UntappedWeights;onWeights:(w:UntappedWeights)=>void;doors:number;onWalk:(ids:number[])=>void}){
   const {roi,weights,defaults}=p;
   const [preset,setPreset]=useState(roi.preset);
@@ -28,7 +28,7 @@ export function StreetPlan(p:{area:Required<WalkArea>;roi:FeatureRoi;race:string
   useEffect(()=>()=>job.current?.abort(),[]);
 
   const noArea=!p.area.ss&&!p.area.sh&&!p.area.precinct;
-  const plan=result?.key===areaKey(p.area)?result.plan:null;   // a plan ranked for another area is not shown
+  const plan=result?.key===areaKey(p.area,p.profile)?result.plan:null;   // a plan ranked for another area is not shown
   const picked=plan?plan.spans.filter(s=>checked.has(s.span)):[];
   const people=picked.reduce((n,s)=>n+s.people,0);
   const over=picked.length>MAX_PLAN_SPANS||people>MAX_LIST_PEOPLE;
@@ -36,10 +36,10 @@ export function StreetPlan(p:{area:Required<WalkArea>;roi:FeatureRoi;race:string
 
   async function rank(){
     job.current?.abort();const ac=job.current=new AbortController();
-    const key=areaKey(p.area);
+    const key=areaKey(p.area,p.profile);
     setState({loading:true,error:''});
     try{
-      const options={...planOptions(preset,{...w,pop:p.density?w.pop:'0'}),...weightsQuery(weights),...p.area.precinct?{doors:p.doors}:{}};   // doors: the blocks Plan walk list picks (a precinct only)
+      const options={...planOptions(preset,{...w,pop:p.density?w.pop:'0'}),...weightsQuery(weights),...p.area.precinct?{doors:p.doors}:{},...p.profile!=='all'?{profile:p.profile}:{}};   // doors: the blocks Plan walk list picks (a precinct only)
       const next=await getWalkPlan(p.area,options,ac.signal);
       if(ac.signal.aborted)return;
       setResult({key,plan:next});setChecked(new Set(next.turf?.spans.length?next.turf.spans:pickUnderCap(next.spans)));setState({loading:false,error:''});

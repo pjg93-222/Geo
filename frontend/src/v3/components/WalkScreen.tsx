@@ -18,7 +18,7 @@ import {getWalkList,getWalkLists,getWalkOptions,getWalkPlan,getWalkSavedList,get
 import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkTurf,WalkVoter} from '../api/walkTypes';
 import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
-  lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
+  lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,profileLabel,readWalkAddress,readWalkCsv,
   doorsByPerson,flaggedOnList,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,watermarkText,
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,turfLines,
   type HeldList,type RefusalNote,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkScoreMap,type WalkVisit,
@@ -345,6 +345,9 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const kept=next.length>0&&left?cut:null;trimRef.current=kept;setTrim(kept);
   };
   const features=useFeatures();
+  // The voter profile (roi.profiles): 'all' is everyone and is left out of every request and of the page address. A profile the district does not offer counts as 'all' once the settings are here.
+  const [profileChoice,setProfileChoice]=useState(init.profile??'all');
+  const profile=features&&!features.roi?.profiles?.some(x=>x.key===profileChoice)?'all':profileChoice;
   // One click (Plan walk list) and the sliders and doors it uses. A server without these settings gets the agent defaults.
   const roi=features?.roi??null;
   const turfCfg=turfOf(roi),defaults=potentialOf(roi);
@@ -527,7 +530,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
     const from=adopt?pickerOf(p):null;   // a re-knock list (either query shape) and a list with no picker settings leave the picker as it is
     if(from){
-      setArea(from.area);
+      setArea(from.area);setProfileChoice(from.profile??'all');
       const next=parseStreetsParam(from.streets).map((s):WalkPick=>({...s,label:names.get(s.id)??'',city:''}));picksRef.current=next;setPicks(next);
       putSpans(parseSpansParam(from.spans),!!from.fresh,from.trim??null);
       putUpload(null);setSkipped([]);
@@ -573,7 +576,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }
     if(!picks.length&&!planned.length&&noArea(area)){setNote('Pick an area or add a street first.');return;}
     const streets=streetsParam(picks),where={...area},left=freshRef.current,cut=trimRef.current??undefined;
-    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides),p=>show(p,false));
+    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides,profile),p=>show(p,false));
   }
   function walkPlanned(ids:number[]){putSpans(ids,true);generate(ids);}   // the checked blocks of the block plan, whole (no doors); their counts leave out doors with a recorded result
   const commitDoors=():number=>{setDoorsText(String(doorsNow));if(features)writeDoors(features.district,doorsNow);return doorsNow;};
@@ -583,12 +586,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(!area.precinct){setNote('Pick a precinct first.');return;}
     const where={...area},asked=commitDoors(),q=weightsQuery(weights),got:{turf?:WalkTurf;cut?:WalkListTrim|null}={};
     void load(async sig=>{
-      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked},sig);
+      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked,profile},sig);
       got.turf=plan.turf;
       if(!plan.turf)throw new ApiError(NO_TURF,400,true);
       if(!plan.turf.spans.length)throw new ApiError(NO_DOORS,400,true);
       got.cut=trimFor(plan.turf,asked,q);   // the list is cut to the doors asked for, with the weights the blocks were picked by (a server that cannot cut sends no trim)
-      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides);
+      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides,profile);
     },p=>{
       picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);   // the list is the planned blocks alone
       putSpans(got.turf?.spans??[],true,got.cut??null);show(p,false);setTurf(got.turf??null);
@@ -641,7 +644,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       const session=await getSession();   // hosted: every page says who printed the list and when; no identity, no PDF
       if(session.hosted&&!session.email)throw new Error('no identity');
       const watermark=session.hosted&&session.email?watermarkText(session.email):undefined;
-      await exportWalkPdf(p,{area:listLabel(p),scores,watermark,sheets:splitWalkSheets(p,cap)});
+      await exportWalkPdf(p,{area:listLabel(p),scores,watermark,sheets:splitWalkSheets(p,cap),profile:profileLabel(p.query,roi?.profiles)});
     }catch{setActionNote({text:'The PDF could not be created. Try again.',alert:true});}
     finally{setBusy('');}
   }
@@ -660,7 +663,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       const session=await getSession();
       if(session.hosted&&!session.email)throw new Error('Sign in again before exporting.');
       const {exportWalkZip}=await import('../lib/walkRouteExport');
-      await exportWalkZip(parts,{area:listLabel(p),scores,watermark:session.hosted&&session.email?watermarkText(session.email):undefined,includeCsv:!session.hosted,
+      await exportWalkZip(parts,{area:listLabel(p),profile:profileLabel(p.query,roi?.profiles),scores,watermark:session.hosted&&session.email?watermarkText(session.email):undefined,includeCsv:!session.hosted,
         results:{...resultsRef.current},history:{...historyRef.current},unsaved:new Set(unsavedRef.current)});
     }catch(e){setActionNote({text:e instanceof Error?e.message:'The ZIP could not be created. Try again.',alert:true});}
     finally{setBusy('');}
@@ -736,8 +739,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
   const setLevel=(level:WalkLevel,v:string)=>{setNote('');putSpans([]);setArea(a=>level==='ss'?{ss:v,sh:'',precinct:''}:level==='sh'?{...a,sh:v,precinct:''}:{...a,precinct:v});};
   useEffect(()=>{
-    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,plan:null,list:listKey||null});
-  },[area,picks,spans,fresh,trim,listKey,splitSides,capText]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
+    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,profile:profile==='all'?null:profile,plan:null,list:listKey||null});
+  },[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
   const started=useRef(false);
   useEffect(()=>{
     if(started.current)return;started.current=true;
@@ -824,7 +827,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         {leftOut&&<div className="walk-note" role="alert"><p>{leftOut.headline}</p><ul>{leftOut.reasons.map(t=><li key={t}>{t}</li>)}</ul></div>}
         {upload&&<UploadReport upload={upload} picks={picks} onChoose={choose} onSkip={skip} onRematch={(i,t)=>void rematch(i,t)}/>}
 
-        {features?.roi&&<StreetPlan area={area} roi={features.roi} race={features.candidate?raceWords(features.candidate.race_mode):''} density={features.overlay.density} busy={loading}
+        {(features?.roi?.profiles?.length??0)>1&&<label className="select walk-select"><span className="select-text" aria-hidden="true"><span className="walk-k">Voter profile:</span> {features?.roi?.profiles?.find(x=>x.key===profile)?.label??profile}</span>
+          <ChevronDown className="select-chev" strokeWidth={1.75} aria-hidden="true"/>
+          <select aria-label="Voter profile" value={profile} onChange={e=>setProfileChoice(e.target.value)}>
+            {features?.roi?.profiles?.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}
+          </select></label>}
+        {features?.roi&&<StreetPlan area={area} roi={features.roi} profile={profile} race={features.candidate?raceWords(features.candidate.race_mode):''} density={features.overlay.density} busy={loading}
           weights={weights} defaults={defaults} onWeights={changeWeights} doors={doorsNow} onWalk={walkPlanned}/>}
 
         <button type="button" className="walk-generate" onClick={()=>generate()} disabled={loading} aria-busy={loading}>{loading?'Building…':'Generate walk list'}</button>
@@ -865,7 +873,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           </div>}
           {replaced&&<p className="walk-note" role="status">{LIST_REPLACED}</p>}
           <div className="walk-summary-row">
-            <p className="walk-summary">{totalsLine(payload.totals)}</p>
+            <p className="walk-summary">{totalsLine(payload.totals)}{profileLabel(payload.query,roi?.profiles)&&` · Voter profile: ${profileLabel(payload.query,roi?.profiles)}`}</p>
             {payload.runs.length>0&&<div className="walk-seg"><Segmented variant="index" label="Map shading" items={[{id:'doors',label:'Doors'},{id:'party',label:'Party'}]} value={shade} onChange={setShade}/></div>}
           </div>
           {turf&&<div className="walk-turf" role="status">{turfLines(turf,payload.totals,turfCfg.jump_m).map(t=><p key={t}>{t}</p>)}</div>}

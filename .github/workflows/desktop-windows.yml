@@ -91,7 +91,7 @@ env:
   DJANGO_GATE: >-
     server.research.test_access server.research.test_hosted server.research.test_districts
     server.research.test_walk_api server.research.test_walk_opt_ins server.research.tests.LocalAdministratorTests tools.test_districts tools.test_compute
-    tools.test_image_gate tools.luna_district.test_rowfw tools.test_build_scores.DistrictInputTests
+    tools.test_image_gate tools.test_profiles tools.luna_district.test_rowfw tools.test_build_scores.DistrictInputTests
     server.research.test_walk_address_api server.research.test_walk_address_list server.research.test_walk_image_api
     server.research.test_walk_location_evidence server.research.test_walk_record_evidence server.research.test_walk_route
     server.research.test_untapped_area_codes server.research.test_desktop_owner_no_password

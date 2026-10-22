@@ -103,7 +103,7 @@ test('wording: no screen calls the chance of voting a plain mean of turnout scor
 
 test('block plan screen: ranks only on request, shows nothing it did not rank for this area, and the walk button needs a list that fits', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/StreetPlan.tsx'), 'utf8');
-  assert.ok(/result\?\.key===areaKey\(p\.area\)\?result\.plan:null/.test(src), 'a plan ranked for another area is not shown');
+  assert.ok(/result\?\.key===areaKey\(p\.area,p\.profile\)\?result\.plan:null/.test(src), 'a plan ranked for another area or voter profile is not shown');
   assert.ok(/disabled=\{!picked\.length\|\|over\|\|p\.busy\}/.test(src) && /onClick=\{\(\)=>p\.onWalk\(picked\.map\(s=>s\.span\)\)\}/.test(src), 'only checked blocks that fit go on');
   assert.ok(/pop:p\.density\?w\.pop:'0'/.test(src), 'population density is never asked for before it is built');
   assert.ok(/aria-label="Ranked blocks"/.test(src) && /role="columnheader"/.test(src) && /aria-label=\{`Walk \$\{s\.street\}, rank \$\{s\.rank\}`\}/.test(src), 'a labelled table with a labelled checkbox on every block');
@@ -143,7 +143,7 @@ test('the plan request carries the weights as text, and the walk list request ca
   assert.deepEqual(weightsQuery({wp: 0.5, wi: 1}), {wp: '0.50', wi: '1.00'});
   assert.deepEqual({preset: 'push', ...weightsQuery({wp: 0.3, wi: 0.25}), doors: 80}, {preset: 'push', wp: '0.30', wi: '0.25', doors: 80});
   const api = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/walk.ts'), 'utf8');
-  assert.ok(/spans\?:number\[\],fresh\?:boolean,trim\?:WalkListTrim,splitSides=true\)/.test(api) && /fresh:fresh\?1:undefined/.test(api), 'fresh is sent as fresh=1, and left out otherwise');
+  assert.ok(/spans\?:number\[\],fresh\?:boolean,trim\?:WalkListTrim,splitSides=true,profile='all'\)/.test(api) && /fresh:fresh\?1:undefined/.test(api), 'fresh is sent as fresh=1, and left out otherwise');
   assert.ok(/doors:trim\?\.doors,wp:trim\?\.wp,wi:trim\?\.wi/.test(api), 'doors, wp and wi go on the list request, and only from a trim');
   const types = readFileSync(path.join(import.meta.dirname, '../../src/v3/api/walkTypes.ts'), 'utf8');
   assert.ok(/t_mean\?: number \| null/.test(types) && !/p_mean/.test(types), 'rows carry t_mean, the mean chance of voting');

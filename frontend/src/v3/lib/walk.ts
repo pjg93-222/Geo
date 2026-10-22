@@ -587,13 +587,21 @@ export function parseStreetsParam(text:string|null|undefined):PickKey[]{
 }
 
 const addressText=(v:string|null):string=>(v??'').trim().slice(0,40);
-export interface WalkAddress{area:Required<WalkArea>;picks:WalkPick[];list:string;spans?:number[];plan:boolean;fresh:boolean;trim?:WalkListTrim}
+/** The voter profile key of a page address or a saved list's query: lower-case letters as the server reads them, else 'all' (everyone). */
+export const profileKey=(v:string|null|undefined):string=>/^[a-z]{1,16}$/.test(v??'')?v!:'all';
+/** The name of the voter profile a list was built with (its query carries `profile` only when it is not 'all'): '' for everyone. A key the district no longer offers shows as the key. */
+export function profileLabel(query:Record<string,string>|undefined,profiles?:readonly {key:string;label:string}[]):string{
+  const key=profileKey(query?.profile);
+  return key==='all'?'':profiles?.find(x=>x.key===key)?.label??key;
+}
+export interface WalkAddress{area:Required<WalkArea>;picks:WalkPick[];list:string;spans?:number[];plan:boolean;fresh:boolean;trim?:WalkListTrim;profile?:string}
 /** The picker settings and the saved list key the page address carries (ss, sh, precinct, streets, spans, list), and the two flags: `plan` (plan=1, from the
  *  map: plan one click in the precinct) and `fresh` (fresh=1: the list leaves out doors with a recorded result). `spans` (planned blocks, in pick order) is
  *  there only when the address has some. `trim` (doors, wp, wi: the one-click list cut to that many doors) is there only with spans and fresh, as the server wants. */
 export function readWalkAddress(q:URLSearchParams):WalkAddress{
   const list=(q.get('list')??'').trim(),spans=parseSpansParam(q.get('spans')),fresh=q.get('fresh')==='1';
   const trim=spans.length&&fresh?parseTrim(q.get('doors'),q.get('wp'),q.get('wi')):null;
+  const profile=profileKey(q.get('profile'));
   return {
     area:{ss:addressText(q.get('ss')),sh:addressText(q.get('sh')),precinct:addressText(q.get('precinct'))},
     picks:parseStreetsParam(q.get('streets')).map((p):WalkPick=>({...p,label:'',city:''})),
@@ -602,6 +610,7 @@ export function readWalkAddress(q:URLSearchParams):WalkAddress{
     plan:q.get('plan')==='1',
     fresh,
     ...trim?{trim}:{},
+    ...profile!=='all'?{profile}:{},
   };
 }
 /** What a page that has just opened builds: the saved list its address names, else (plan=1 and a precinct) the one-click turf, else a list from the streets, planned blocks and area in the address (an area alone is enough, the server builds a list from one), else nothing. */
@@ -629,13 +638,13 @@ const queryText=(p:Pick<WalkListPayload,'query'>,key:string):string=>{const v=(p
 export const reknockParent=(p:Pick<WalkListPayload,'query'>):string=>queryText(p,'from');
 /** A re-knock list: its kind says so, or its query names the list it came from. */
 export const isReknock=(p:ListKey):boolean=>p.list?.kind==='reknock'||reknockParent(p)!=='';
-export interface PickerState{area:Required<WalkArea>;streets:string;spans?:string;fresh?:boolean;trim?:WalkListTrim}
+export interface PickerState{area:Required<WalkArea>;streets:string;spans?:string;fresh?:boolean;trim?:WalkListTrim;profile?:string}
 /** The area, streets and planned blocks (`spans`, only when the list has some) a list was built from, `fresh` (only when it left out doors with a recorded result) and `trim` (doors, wp, wi: only when it was cut to a door count, which needs spans and fresh), to put back in the picker. Null when it carries none, and always for a re-knock list: its doors come from another list, whatever its query holds. */
 export function pickerOf(p:ListKey):PickerState|null{
   const q=p.query??{};
   if(isReknock(p)||!['ss','sh','precinct','streets','spans'].some(k=>Object.hasOwn(q,k)))return null;
   const spans=queryText(p,'spans'),fresh=queryText(p,'fresh')==='1',trim=spans&&fresh?parseTrim(queryText(p,'doors'),queryText(p,'wp'),queryText(p,'wi')):null;
-  return {area:{ss:queryText(p,'ss'),sh:queryText(p,'sh'),precinct:queryText(p,'precinct')},streets:queryText(p,'streets'),...spans?{spans}:{},...fresh?{fresh:true}:{},...trim?{trim}:{}};
+  return {area:{ss:queryText(p,'ss'),sh:queryText(p,'sh'),precinct:queryText(p,'precinct')},streets:queryText(p,'streets'),...spans?{spans}:{},...fresh?{fresh:true}:{},...trim?{trim}:{},...profileKey(queryText(p,'profile'))!=='all'?{profile:queryText(p,'profile')}:{}};
 }
 
 // --- the note after a one-click build ------------------------------------------------------------------------------------

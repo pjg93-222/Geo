@@ -322,6 +322,8 @@ VOTER_SQL = ('SELECT p.person_id, p.stop_id, p.unit, p.precinct, p.party, p.age,
              'p.pri_elig, p.gen_voted, p.gen_elig, p.abs_voted, p.abs_elig, p.voter_key, p.street_id, s.house, '
              's.house_int, s.parity, s.span_id, s.pos_m, s.side_lr, s.placed_by, s.lon, s.lat '
              'FROM person p JOIN stop s ON s.id = p.stop_id')
+VOTER_PROFILE_SQL = (VOTER_SQL.replace(' FROM person p', ', sc.pos FROM person p', 1)       # the same rows with their score row, for a voter profile
+                     + ' LEFT JOIN scores.person sc ON sc.person_id = p.person_id')
 PARITY = {'even': ' AND s.parity=0', 'odd': ' AND s.parity=1', 'both': ''}
 
 
@@ -329,6 +331,7 @@ class Store:
     def __init__(self, connection, info):
         self.conn, self.info = connection, info
         self.support = False                    # set by attach_scores()
+        self.attached = None                    # attach_scores() answer once given: it attaches once per store
 
     def directory(self):
         global _directory
@@ -377,28 +380,32 @@ class Store:
                     count['odd'] += doors
         return out
 
-    def voters(self, picks, area, limit, spans=None, skip=None, span_skip=None):
+    def voters(self, picks, area, limit, spans=None, skip=None, span_skip=None, keep=None):
         """Rows of the people at the picked street sides ([(street id, 'even'|'odd'|'both')]) and on the picked road
         spans (ids from the street plan) or, with neither, of everyone in `area` who has a stop: at most `limit`. `skip`:
         doors ({(stop id, unit '')}) whose people are left out; they do not count towards the limit. `span_skip`: more
-        doors left out of what the spans add alone (the street picks keep their people whole)."""
+        doors left out of what the spans add alone (the street picks keep their people whole). `keep`: a function of a row
+        (with its score row `pos` too, attach_scores first) that the people listed must pass (a voter profile); they do not
+        count towards the limit either."""
         clause, args = _area(area, 'p')
+        base = VOTER_SQL if keep is None else VOTER_PROFILE_SQL
 
         def run(sql, sql_args, room, left_out=skip):
-            if left_out is None:
+            if left_out is None and keep is None:
                 return self.conn.execute(sql + ' LIMIT ?', [*sql_args, room]).fetchall()
-            return list(islice((r for r in self.conn.execute(sql, sql_args) if (r['stop_id'], r['unit'] or '') not in left_out), room))
+            return list(islice((r for r in self.conn.execute(sql, sql_args)
+                                if (left_out is None or (r['stop_id'], r['unit'] or '') not in left_out) and (keep is None or keep(r))), room))
 
         if not picks and not spans:
-            return run(VOTER_SQL + ' WHERE 1=1' + clause, args, limit)
+            return run(base + ' WHERE 1=1' + clause, args, limit)
         rows = []
         for street, side in picks:
-            rows.extend(run(VOTER_SQL + ' WHERE p.street_id=?' + PARITY[side] + clause, [street, *args], limit - len(rows)))
+            rows.extend(run(base + ' WHERE p.street_id=?' + PARITY[side] + clause, [street, *args], limit - len(rows)))
             if len(rows) >= limit:
                 break
         if spans:
             left_out, left_out_args = _picked(picks)
-            rows.extend(run(VOTER_SQL + ' WHERE s.span_id IN (%s)%s%s' % (','.join('?' * len(spans)), clause, left_out),
+            rows.extend(run(base + ' WHERE s.span_id IN (%s)%s%s' % (','.join('?' * len(spans)), clause, left_out),
                             [*spans, *args, *left_out_args], max(limit - len(rows), 0), (skip or frozenset()) | span_skip if span_skip else skip))
         return rows
 
@@ -465,27 +472,31 @@ class Store:
         """Attach scores.sqlite3 read-only as `scores`, once per store: False when it is not built; else True, and
         `support` tells whether it holds the candidate-support table. 409 when it was built from another source file
         than the walk store."""
+        if self.attached is not None:
+            return self.attached
         path = self.info.path.parent / 'scores.sqlite3'
         if not path.is_file():
+            self.attached = False
             return False
         self.conn.execute('ATTACH DATABASE ? AS scores', (_uri(path),))
         row = self.conn.execute("SELECT value FROM scores.metadata WHERE key = 'contacts_source_sha256'").fetchone()
         if row is None or json.loads(row[0]) != self.info.source_sha256:
             raise SourceStoreError('The score store was built from a different source file than the walk list data.', 409)
         self.support = self.conn.execute("SELECT 1 FROM scores.sqlite_master WHERE type = 'table' AND name = 'support'").fetchone() is not None
+        self.attached = True
         return True
 
     def span_people(self, area, spans=None):
         """One row per person at a placed block in `area` (attach_scores first), by block then person id: span_id,
-        street_id, len_m, a, b (the block's end nodes), stop_id, unit ('' for none) and pos (the score store's row; None
-        when the person has no score row). The sums the street plan needs are taken over these rows (walk_views.fold_plan).
+        street_id, len_m, a, b (the block's end nodes), stop_id, unit ('' for none), party (the registration code on file)
+        and pos (the score store's row; None when the person has no score row). The sums the street plan needs are taken over these rows (walk_views.fold_plan).
         `spans`: only the blocks with these ids."""
         clause, args = _area(area, 'p')
         if spans is not None:
             clause += ' AND s.span_id IN (%s)' % ','.join('?' * len(spans))
             args = [*args, *spans]
         return self.conn.execute(
-            "SELECT s.span_id, p.street_id, r.len_m, r.a, r.b, p.stop_id, IFNULL(p.unit, '') AS unit, sc.pos "
+            "SELECT s.span_id, p.street_id, r.len_m, r.a, r.b, p.stop_id, IFNULL(p.unit, '') AS unit, p.party, sc.pos "
             "FROM person p JOIN stop s ON s.id = p.stop_id JOIN road_span r ON r.id = s.span_id "
             "LEFT JOIN scores.person sc ON sc.person_id = p.person_id "
             "WHERE s.span_id IS NOT NULL%s ORDER BY s.span_id, p.person_id" % clause, args).fetchall()

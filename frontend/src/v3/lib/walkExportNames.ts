@@ -29,9 +29,10 @@ export function walkExportNames(sheets:WalkListPayload[]):WalkExportName[]{
   });
 }
 
-export function walkSummaryCsv(sheets:WalkListPayload[],names=walkExportNames(sheets)):string{
-  const rows:unknown[][]=[['List','Side','Precinct','Streets','Doors','Voters','File','Street names']];
+/** `profile`: the name of the voter profile the lists were limited to; it adds a Voter profile column, and nothing when it is left out. */
+export function walkSummaryCsv(sheets:WalkListPayload[],names=walkExportNames(sheets),profile=''):string{
+  const rows:unknown[][]=[['List','Side','Precinct','Streets','Doors','Voters','File','Street names',...profile?['Voter profile']:[]]];
   sheets.forEach((sheet,i)=>rows.push([names[i].list,names[i].side,names[i].precinct,sheet.totals.streets,sheet.totals.doors,sheet.totals.voters,
-    `${names[i].stem}.pdf`,[...new Set(sheet.runs.map(run=>run.street))].sort((a,b)=>a.localeCompare(b)).join('; ')]));
+    `${names[i].stem}.pdf`,[...new Set(sheet.runs.map(run=>run.street))].sort((a,b)=>a.localeCompare(b)).join('; '),...profile?[profile]:[]]));
   return '\uFEFF'+rows.map(row=>row.map(value=>'"'+csvValue(value).replace(/[\r\n]+/g,' ').replace(/"/g,'""')+'"').join(',')).join('\r\n')+'\r\n';
 }

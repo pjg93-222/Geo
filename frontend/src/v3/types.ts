@@ -129,6 +129,8 @@ export interface FeatureRoi{
   weights:Record<'value'|'pop_density'|'voter_density',number>;min_doors:number;min_length_m:number;
   /** Default weights of the Untapped formula and the one-click walk list. Older servers omit both; the screens then use 0.5/0.5 and 60 doors, 400 m. */
   potential:{wp:number;wi:number};turf:{doors:number;jump_m:number};
+  /** The voter profiles a walk list can be limited to ('all' and, with a candidate, 'coalition'). Older servers omit it. */
+  profiles?:{key:string;label:string}[];
 }
 /** `candidate` and `roi` are null for Colorado. `layers` lists `sup` once the score store holds support and the density layers once density.json is built. */
 export interface Features{
