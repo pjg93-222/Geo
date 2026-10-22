@@ -1,6 +1,27 @@
 # Audience filter for area street groups: design spec
 
-Status: **design only, not approved for build.** Written 2026-10-22. No code changes accompany this file.
+Status: **design only, not yet built.** Written 2026-10-22. No code changes accompany this file. Owner decisions D1 and D2 (section 0.1) settle the basis and the review question; the remaining open items are in section 5.
+
+## 0.1 Owner decisions (2026-10-22)
+
+**D1. Basis: Terrier's registration party.** The audience filter selects voters by the party recorded in Terrier's walk store (`person.party`), which `tools/build_walk.py:319, 329` loads unchanged from the source file's `svi_party_registration` column. The source file for OR-05 (`statara_or_cd005_20260904.csv`, 622 columns) also carries modeled political leanings: `svi_party_modeled_rollup`, `svi_party_combined_rollup`, `sai_ideology_score`, `sai_ideology_enhanced_score`, the `sci_ct_political_partyaff_*` and `sci_ct_political_outlk_*` flags, and `sei_party_trust_range`. None of these is used as the filter basis, and neither is Terrier's legacy lean.
+
+Registration codes in that file (whole-file row counts, read 2026-10-22; raw code, vendor rollup):
+
+| Raw `svi_party_registration` | Vendor rollup | Rows | Terrier label (`PARTY_CODES`) |
+|---|---|---:|---|
+| U | U | 201,555 | Unaffiliated |
+| D | D | 168,983 | Democrat |
+| R | R | 149,477 | Republican |
+| U | O | 30,984 | Unaffiliated (rollup disagrees, see Q2) |
+| O | O | 4,835 | Other |
+| L | O | 3,660 | Libertarian |
+| W | O | 1,241 | Working Families |
+| G | O | 1,222 | Green |
+| T | O | 605 | *none: T is not in `PARTY_CODES`* (see Q3) |
+| U | (blank) | 1 | Unaffiliated |
+
+**D2. Review.** The owner states: "We are trust, don't need independent review." No independent or counsel review is required before building or sharing this feature. This supersedes the counsel item in `HANDOFF_2026-10-01.md:98` for this feature, in the same way `WALK_LIST_HANDOFF_2026-10-02.md:108` recorded a waiver for walk lists. It is recorded as the owner's decision, not as a legal finding.
 
 ## 0. Context and scope
 
@@ -33,7 +54,7 @@ The feature shows each dimension's **own** labels. The requested words are mappe
 | Left | Outlook = Somewhat liberal | **No** as a belief label, for the same reason. Registration D is not "left" either. |
 | Lean left | Lean band Lean D | **No.** Legacy lean is documented as not a validated belief measure, and its bands are party-named (Lean D), not left/right. |
 | Centrist | Outlook = Middle outlook | **No** as a belief label. |
-| Independent | Registration U (Unaffiliated) | **Partly.** Supported as "Unaffiliated registration". Not supported as "independent" in the ideological sense; the vendor `partyaff_ind` tag (`field_labels.py:61-63`) falls under the AUC 0.58 finding. |
+| Independent | Registration U (Unaffiliated) | **Partly.** Supported as "Unaffiliated registration". Not supported as "independent" in the ideological sense. Oregon also has a registered Independent Party; whether its members are the 30,984 rows coded U but rolled up to O is unverified (Q2). |
 | Green | Registration G | **Yes**, as registration. |
 | Libertarian | Registration L | **Yes**, as registration. |
 | Undecided | Canvass result U | **Yes**, for people a canvasser recorded as Undecided. Absent for everyone not yet knocked. |
@@ -43,19 +64,19 @@ The feature shows each dimension's **own** labels. The requested words are mappe
 
 Result: of the eleven labels, three are honestly supportable (Green, Libertarian, Undecided) and one partly (Independent, as Unaffiliated). The six spectrum positions have no field that measures them. The UI must not show the words far left, left, lean left, centrist, lean right, right or far right.
 
-### 1.2 Recommended scope by dimension
+### 1.2 Scope by dimension
 
-- **Registration party:** offer. Same data the walk list already returns per voter (`walk_store.py:321-324` includes `party`).
-- **Canvass result:** offer. Terrier's own observations. Needs a staleness rule (open question Q6).
-- **Vendor Outlook:** offer only if the owner passes gate G1 and accepts the accuracy caveat. Outlook is not in the walk store; it lives in the scores store and is joined by voter key. It is individual political inference, the category the review held back (section 4.1).
-- **Modeled lean:** do not offer. The repo itself says it is not a belief measure and is not used for filtering.
+- **Registration party: the basis (D1).** Same data the walk list already returns per voter (`walk_store.py:321-324` includes `party`), so the count query needs no join to another store. Choices: Democrat, Republican, Unaffiliated, Green, Libertarian, Working Families, Other, plus T once labeled (Q3).
+- **Canvass result:** proposed as an optional second dimension for "Undecided", which registration cannot express. Not covered by D1; needs an owner yes and a staleness rule (Q5).
+- **Vendor Outlook and other modeled leanings: not used (D1).**
+- **Modeled lean: not used (D1).** The repo also says it is not a belief measure and is not used for filtering.
 
 ### 1.3 Combining selections
 
 - Within one dimension, selected values are OR-ed (Registration G **or** L).
 - Across dimensions, include selections are AND-ed (Registration U **and** Canvass U).
 - Exclude selections are OR-ed: a person matching any exclude value is an excluded person.
-- Unknown values never match an include value. Outlook Unknown (-3) and Multiple (3) are shown as their own choices, so a user can include or exclude them explicitly. A person with no canvass result matches only an explicit "No result yet" choice.
+- Unknown values never match an include value. A blank registration code is shown as its own "No party code" choice, so a user can include or exclude it explicitly. A person with no canvass result matches only an explicit "No result yet" choice.
 - With no include selections, every voter is included (the filter then only subtracts).
 
 ## 2. Door rule
@@ -73,7 +94,7 @@ A door is counted when:
 
 Rationale: a door is knocked once, whoever answers. If the user excluded a group, knocking a door where that group lives contradicts the exclusion; if they included a group, one matching resident is enough reason to knock.
 
-Cost of exclude-wins: in a mixed household it drops included residents along with the excluded one. The panel therefore reports, per area, the number of doors removed only because of an exclude match in a mixed household, so the effect is visible. Whether to instead drop only the excluded person and keep the door is open question Q3.
+Cost of exclude-wins: in a mixed household it drops included residents along with the excluded one. The panel therefore reports, per area, the number of doors removed only because of an exclude match in a mixed household, so the effect is visible. Whether to instead drop only the excluded person and keep the door is open question Q1.
 
 ### 2.3 Clipping to the polygon
 
@@ -96,13 +117,13 @@ WHERE any_in = 1 AND any_out = 0
 GROUP BY street_id
 ```
 
-Predicates are built from a fixed whitelist of dimension/value pairs, never from free text. Outlook and canvass result are joined server-side by voter key; neither leaves the server per person.
+Predicates are built from a fixed whitelist of dimension/value pairs, never from free text. Registration is already on `person`; canvass result, if approved, is joined server-side by voter key and never leaves the server per person.
 
 ### 2.4 What reaches the browser
 
 Per street only: `street_id`, label, matching doors, total voter doors in the polygon, doors dropped by exclude-wins, and a center point for grouping. No person rows, voter keys, party, Outlook or canvass values per person or per door.
 
-Small counts can still identify a household (one matching Green door on a short street). Whether to suppress or round street counts below a floor is open question Q5. `HANDOFF_2026-10-01.md:98` already notes that "The no-floor table is local-only".
+Small counts can still identify a household (one matching Green door on a short street). Whether to suppress or round street counts below a floor is open question Q7. `HANDOFF_2026-10-01.md:98` already notes that "The no-floor table is local-only".
 
 ## 3. Grouping
 
@@ -133,15 +154,17 @@ The two bases must be impossible to confuse:
 - **Basis line** on the summary, groups and every exported file: "Basis: voter file, doors with ≥1 registered voter matching the filter below, clipped to the drawn area" plus the filter in words, e.g. "Include registration Green or Libertarian; exclude canvass result Opposed". Public basis keeps its `count_basis` line and `PUBLIC_SCOPE_WARNING` (`publicStreetGroups.ts:4`).
 - **Colour/badge:** a distinct badge on voter-basis groups so a screenshot is unambiguous.
 - **Export file names** carry the basis (`street-groups-voter-file.zip` vs `street-groups-public-estimate.zip`).
-- **Outlook caveat**, when Outlook is used: "Outlook is a vendor marketing segment. Its accuracy is unmeasured; related vendor party tags scored AUC 0.58."
+- **Registration wording:** choices read "Registered Green", "Registered Unaffiliated" and so on, never a spectrum word, so the label says what the data is.
 
 All new label strings must pass `ADVISORY_PATTERN` (`field_labels.py:145-147`), enforced at import by `self_check` (`field_labels.py:198-209`). That rules out words such as target, priority, best, recommend, should, worth, persuasion, convert. Note the pattern is word-bounded, so "persuadable" would not trip `\bpersuad\b`; the intent of the rule still forbids it, and the filter's own name stays "Audience filter" with "Include"/"Exclude" controls.
 
 ## 4. Governance gates
 
-None of these is decided by this spec. Each needs an explicit owner decision, recorded with a date, before any build.
+G1 and G2 are settled by D1 and D2. G3 and G4 are build requirements with one owner choice each. G5 is a build rule.
 
-### G1. Person-level political profiling
+### G1. Person-level political profiling: settled by D1
+
+Because the basis is registration only, the filter makes no individual political inference. The background below is kept for the record.
 
 `REVIEW_HANDOFF_2026-10-01.md:16` records that inferred individual political lean and household political summaries were not completed or validated. Line 43 lists "Person-level or household political profiling implementation and validation" as left out. Lines 56-57 recommend aggregate geographic reporting "with no individual political inference" and continuing review "without developing the sensitive profiling functions".
 
@@ -153,11 +176,11 @@ How the dimensions sit against that line:
 - Vendor Outlook is individual political inference. Filtering doors by it is the profiling the review held back, even if only counts reach the browser.
 - Modeled lean: excluded (section 1.2).
 
-Decision needed: is Outlook in scope at all, and if so on what written basis?
+Outcome: Outlook is out of scope (D1).
 
-### G2. Counsel check
+### G2. Counsel check: waived by D2
 
-`HANDOFF_2026-10-01.md:98`: "Counsel check on voter-file and profiling use before any sharing." `WALK_LIST_HANDOFF_2026-10-02.md:108` later records "Counsel check on voter-file use: waived by the owner." That waiver is for voter-file use in walk lists. Selecting households by political group is a different use. Decision needed: does the 2026-10-02 waiver extend to political-group filtering, or does this need a fresh counsel check, and does "sharing" include exporting voter-basis group files to field staff?
+`HANDOFF_2026-10-01.md:98`: "Counsel check on voter-file and profiling use before any sharing." `WALK_LIST_HANDOFF_2026-10-02.md:108` recorded a waiver for walk lists. D2 extends that to this feature, including exports to field staff.
 
 ### G3. Role gating
 
@@ -181,13 +204,14 @@ All labels pass `ADVISORY_PATTERN` and the spectrum words in section 1.1 are not
 
 ## 5. Open questions for the owner
 
-1. **G1:** Is vendor Outlook in scope? If yes, with which caveat text, and is a validation step required first?
-2. **G2:** Does the 2026-10-02 counsel waiver cover political-group filtering and exports, or is a new counsel check needed?
-3. **Door rule:** exclude-wins at the door (recommended), or drop only the excluded person and keep the door if an included person remains?
-4. **G3:** Hosted for `field-manager`, or local-admin only for the first version?
-5. **Small counts:** suppress or round per-street matching-door counts below a floor (for example 5)? If yes, suppressed streets still group but show "fewer than 5".
-6. **Canvass result freshness:** which disposition counts when a person is on several lists, and how old may it be? Proposal: newest non-null row across all lists, ignored if older than a chosen number of days. Should MV (Moved) remove the person from every count?
-7. **Unaffiliated:** is "Unaffiliated registration" acceptable in place of "Independent"?
-8. **Other and Working Families:** show O and W as their own choices (proposed), or fold O into an "Other parties" choice like `reg_group_of` does (`field_labels.py:150-152`)?
-9. **Exports:** voter-basis groups export as street-name CSVs like the public basis, or only as Terrier walk lists (which enforce the stop-level boundary that a street-name CSV cannot, per `PUBLIC_SCOPE_WARNING`)?
-10. **Audit locally (G4):** add local audit for this feature?
+Answered 2026-10-22: Outlook and other modeled leanings are out (D1); no independent or counsel review is needed (D2).
+
+1. **Door rule:** exclude-wins at the door (recommended), or drop only the excluded person and keep the door if an included person remains?
+2. **Unaffiliated vs Independent Party:** 30,984 rows are raw code U but vendor rollup O. If these are Independent Party of Oregon members, should they be split out as their own choice? That needs a code from the source, because Terrier stores only the raw U.
+3. **Code T:** 605 rows carry T, which has no label in `PARTY_CODES` (`field_labels.py:134-135`). What party is it, so it can be labeled?
+4. **Other and Working Families:** show O and W as their own choices (proposed), or fold them into an "Other parties" choice like `reg_group_of` does (`field_labels.py:150-152`)?
+5. **Undecided:** add the canvass result as a second dimension? If yes: newest non-null disposition across all lists, ignored after how many days, and should MV (Moved) remove the person from every count?
+6. **G3:** hosted for `field-manager`, or local-admin only for the first version?
+7. **Small counts:** suppress or round per-street matching-door counts below a floor (for example 5)? If yes, suppressed streets still group but show "fewer than 5".
+8. **Exports:** voter-basis groups export as street-name CSVs like the public basis, or only as Terrier walk lists (which enforce the stop-level boundary that a street-name CSV cannot, per `PUBLIC_SCOPE_WARNING`)?
+9. **Audit locally (G4):** add local audit for this feature?
