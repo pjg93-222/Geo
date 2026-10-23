@@ -7,6 +7,11 @@ export function csvValue(value:unknown):string{
   return FORMULA.test(text)?`'${text}`:text;
 }
 
+/** Undoes csvValue on a cell a guarded export wrote: only an apostrophe in front of a formula start goes, so a plain 'abc keeps it. */
+export function unguard(value:string):string{
+  return value.startsWith("'")&&FORMULA.test(value.slice(1))?value.slice(1):value;
+}
+
 /** Quoted CSV with CRLF between rows; every cell goes through csvValue. */
 export function csvText(rows:readonly (readonly unknown[])[]):string{
   return rows.map(row=>row.map(value=>`"${csvValue(value).replaceAll('"','""')}"`).join(',')).join('\r\n');

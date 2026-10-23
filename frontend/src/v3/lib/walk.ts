@@ -1,10 +1,11 @@
 // Walk list text rules: tallies, dates, phones, run headers, totals, result codes and the CSV in and out.
 // Pure, so node --test can load it directly: value imports name the .ts file, types come in with `import type`.
 import type {WalkArea,WalkCode,WalkDispositionEntry,WalkLast,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkRun,WalkSavedList,WalkSavedPayload,WalkScores,WalkSidePick,WalkStreet,WalkTally,WalkTotals,WalkTurf,WalkVoter,WalkWindow} from '../api/walkTypes';
-import {csvValue} from './csv.ts';
+import {csvValue,unguard} from './csv.ts';
 import {hasEvidence} from './walkEvidence.ts';
 import {MAX_LIST_PEOPLE,MAX_PLAN_SPANS,parseSpansParam,parseTrim} from './plan.ts';
 import {marginBin} from './opinions.ts';
+import {HEADER,PUBLIC_SCOPE_WARNING} from './publicStreetGroups.ts';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -759,7 +760,8 @@ export function splitCsv(text:string):string[][]{return scanCsv(text).rows;}
 
 /** A row of an uploaded file that cannot be sent; `row` is its number as a spreadsheet shows it (the header row is 1). */
 export interface WalkCsvProblem{row:number;message:string}
-export interface WalkCsvRead{rows:WalkMatchInput[];problems:WalkCsvProblem[]}
+/** `warning` is set when the file is a public-estimate export: it names streets, not the area they were chosen in. */
+export interface WalkCsvRead{rows:WalkMatchInput[];problems:WalkCsvProblem[];warning?:string}
 const chars=(s:string):number=>[...s].length;   // code points, as the server counts them
 /** "street name is too long", "street name and city are too long" */
 const tooLong=(fields:readonly Field[]):string=>{
@@ -773,7 +775,8 @@ const tooLong=(fields:readonly Field[]):string=>{
  * Cells are trimmed. Rows with no street are skipped. A row with a value longer than the server takes (MATCH_LIMITS, counted the
  * way the server counts, on the value as it would be sent) is left out with a problem such as "Row 7: street name is too long",
  * and the other rows go on. Throws a plain-language Error when a header has no street column, more than MAX_UPLOAD_ROWS rows
- * could be sent, or the file is over 1 MB.
+ * could be sent, or the file is over 1 MB. A public-estimate export (header row exactly publicStreetGroups' HEADER) is read one group at a time:
+ * several groups, or any row that was not grouped, throws; its street names lose the formula guard apostrophe and `warning` is set.
  */
 export function readWalkCsv(text:string):WalkCsvRead{
   if(text.length>MAX_UPLOAD_CHARS)throw new Error('That file is larger than 1 MB.');
@@ -785,9 +788,17 @@ export function readWalkCsv(text:string):WalkCsvRead{
   const hasHeader=Object.keys(found).length>0;
   if(hasHeader&&found.street===undefined)throw new Error('Add a column named street.');
   const at:Partial<Record<Field,number>>=hasHeader?found:{street:0,side:1,city:2,zip:3};
+  const heads=rows[0].map(norm),statusAt=heads.indexOf('status'),groupAt=heads.indexOf('group');
+  const publicExport=heads.length===HEADER.length&&HEADER.every((h,i)=>rows[0][i].trim()===h);
+  if(publicExport){
+    const body=rows.slice(1);
+    if(new Set(body.map(r=>(r[groupAt]??'').trim()).filter(Boolean)).size>1)throw new Error('This public-estimate file has several groups. Import one group file at a time.');
+    if(body.some(r=>(r[statusAt]??'').trim().toLowerCase()!=='grouped'))throw new Error("Streets that were not grouped can't be imported as a walk list.");
+    out.warning=PUBLIC_SCOPE_WARNING;
+  }
   for(let n=hasHeader?1:0;n<rows.length;n++){
     const r=rows[n];
-    const get=(f:Field):string=>at[f]===undefined?'':squash(r[at[f] as number]??'');
+    const get=(f:Field):string=>at[f]===undefined?'':squash(publicExport&&f==='street'?unguard(r[at[f] as number]??''):r[at[f] as number]??'');
     const street=get('street');if(!street)continue;
     const item:WalkMatchInput={street};
     const side=get('side');if(side)item.side=sideFromText(side)??side;
