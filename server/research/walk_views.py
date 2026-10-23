@@ -617,12 +617,16 @@ def latest_codes(voter_keys):
     """{voter key: {code, on, list}}: for each voter the newest result that stands, and the key of the list it was recorded
     on. A list's current result for a person is its newest entry (a null code cleared it); across lists the newest of those
     that are not cleared is the latest. Newest is the last one saved (the row id), not the clock's word: results are
-    appended and never edited."""
-    keys = sorted(set(voter_keys))
+    appended and never edited. voter_keys None: every voter with a result (one pass over the table)."""
+    if voter_keys is None:
+        batches = [Disposition.objects.all()]
+    else:
+        keys = sorted(set(voter_keys))
+        batches = (Disposition.objects.filter(voter_key__in=keys[start:start + 500]) for start in range(0, len(keys), 500))
     latest = {}
-    for start in range(0, len(keys), 500):
+    for batch in batches:
         state = {}
-        entries = Disposition.objects.filter(voter_key__in=keys[start:start + 500]).order_by('id')
+        entries = batch.order_by('id')
         for walk_list, list_key, key, code, day, ident in entries.values_list(
                 'walk_list_id', 'walk_list__key', 'voter_key', 'code', 'contacted_on', 'id'):
             state[(walk_list, key)] = (ident, code, day, list_key)
