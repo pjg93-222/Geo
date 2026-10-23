@@ -273,7 +273,7 @@ test('the unload guard: only flagged voters of the list shown count, never a ref
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(/^const shownFlagged:\{current:ReadonlySet<string>\}=\{current:new Set\(\)\};/m.test(src), 'a ref beside the guards, outliving the screen');
   assert.ok(/useEffect\(\(\)=>\{shownFlagged\.current=flaggedOnList\(payload,unsaved\);\},\[payload,unsaved\]\)/.test(src), 'kept to the list shown and its flags');
-  for (const guard of [/const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/, /const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/])
+  for (const guard of [/const warnHeld=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/, /const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|optInWrites\.pending\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/])
     assert.ok(guard.test(src), String(guard));
 });
 

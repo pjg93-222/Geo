@@ -722,7 +722,7 @@ test('upload identity: an answer for an earlier upload changes nothing (rematch 
 
 test('walk screen wiring: the unload guard, the startup plan, the rematch check and the CSV report use the helpers above', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
-  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'the unload guard asks the outbox, and while a refusal note is up or the list shown has a flagged mark');
+  assert.ok(/const warn=\(e:BeforeUnloadEvent\)=>\{if\(outbox\.unconfirmed\(\)\|\|saving\.current\|\|optInWrites\.pending\(\)\|\|refusals\.note\|\|shownFlagged\.current\.size>0\)/.test(src), 'the unload guard asks the outbox, saves in progress including opt-ins, and while a refusal note is up or the list shown has a flagged mark');
   assert.ok(/startPlan\(init\)/.test(src) && !/init\.picks\.length\)generate/.test(src), 'startup follows the plan, which includes an area alone');
   assert.ok(/const current=\(\)=>uploadRef\.current\?\.id===id/.test(src) && /if\(!current\(\)\)return;/.test(src), 'a rematch answer is dropped once its upload is gone');
   assert.ok(/pickerOf\(p\)/.test(src) && !/k in q/.test(src), 'a saved list restores the picker only through pickerOf');
@@ -1291,7 +1291,7 @@ test('walk screen wiring (round 2): re-knock losses told, refused marks describe
   assert.ok(/if\(q\.missing\)setActionNote\(\{text:missingText\(q\.missing\)/.test(src), 're-knock says how many voters it lost');
   assert.ok(/aria-describedby=\{p\.note\}/.test(src) && /<span id=\{note\} className="walk-unsaved"/.test(src), 'a refused mark is part of its group\'s description');
   assert.ok(/text\.length===1&&<div className="walk-find-pop walk-find-empty" role="status">Type at least 2 letters</.test(src), 'one letter asks for another');
-  assert.ok(/<table className="walk-table" role="table">/.test(src) && /<tr role="row"/.test(src) && /role="columnheader"/.test(src), 'roles survive the card layout');
+  assert.ok(/<table className=\{cx\('walk-table',p\.showOptIns&&'has-opt-ins'\)\} role="table">/.test(src) && /<tr role="row"/.test(src) && /role="columnheader"/.test(src), 'roles survive the card layout and the optional opt-in table class');
   const phone = css.slice(css.indexOf('@media(max-width:640px)'));
   assert.ok(/\.walk-res button\{[^}]*height:44px/.test(phone) && /\.walk-table-wrap\{overflow-x:visible\}/.test(phone), 'phone: 44 px buttons, no sideways table');
   assert.ok(!/@media[^{]*print/.test(css), 'the printed list is the PDF, not this stylesheet');
@@ -1391,10 +1391,10 @@ test('page address: planned streets ride along, are enough to rebuild a list, an
 test('walk screen wiring: the street plan shows only with features.roi, builds with spans, and the print toggle asks for scores only while on', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/features\?\.roi&&<StreetPlan /.test(src), 'no street plan without features.roi (Colorado)');
-  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut,splitSides\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets with the side toggle, and the click is not passed in as the streets');
+  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut,splitSides,profile\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets with the side toggle, and the click is not passed in as the streets');
   assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
   assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
-  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores,watermark,sheets:splitWalkSheets\(p,cap\)\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
+  assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores,watermark,sheets:splitWalkSheets\(p,cap\),profile:profileLabel\(p\.query,roi\?\.profiles\)\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
   assert.ok(/const watermark=session\.hosted&&session\.email\?watermarkText\(session\.email\):undefined;/.test(src) && /if\(session\.hosted&&!session\.email\)throw/.test(src), 'a hosted server watermarks the PDF with the verified identity, and prints nothing without one');
   assert.ok(/\{!hosted&&<button type="button" className="walk-button" disabled=\{!!busy\|\|!!capError\} onClick=\{\(\)=>void exportCsv\(\)\}/.test(src) && /p\|\|hosted\)return;/.test(src), 'a hosted server offers no CSV download, and overlapping exports are disabled');
   assert.ok(/for\(const chunk of idChunks\(ids\)\)/.test(src), 'a list longer than one request is asked for in pieces');
@@ -1515,14 +1515,14 @@ test('walk screen wiring: Plan walk list and Doors by the precinct field, the cl
   assert.ok(/\{roi&&area\.precinct&&<div className="walk-oneclick">/.test(src) && />Plan walk list<\/button>/.test(src) && /<span>Doors<\/span>/.test(src), 'a visible button and a Doors input, with a precinct chosen and a plan in the district');
   assert.ok(/min=\{DOORS_MIN\} max=\{DOORS_MAX\} step=\{1\}/.test(src) && /\{DOORS_MIN\} to \{DOORS_MAX\.toLocaleString\('en-US'\)\}/.test(src), 'doors from 1 to 1,000 on the input and in the hint');
   assert.ok(/clampDoors\(doorsText\?\?savedDoors,turfCfg\.doors\)/.test(src) && /writeDoors\(features\.district,doorsNow\)/.test(src), 'doors from the district\'s default, kept per viewer');
-  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
-  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined,splitSides\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
+  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked,profile\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
+  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined,splitSides,profile\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
   assert.ok(/putSpans\(got\.turf\?\.spans\?\?\[\],true,got\.cut\?\?null\);show\(p,false\);setTurf\(got\.turf\?\?null\)/.test(src), 'the blocks and the cut go in the address with fresh, and the note is kept for this list');
-  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),split_sides:splitSides\?'1':'0',max_doors:capText\|\|null,plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey,splitSides,capText\]/.test(src), 'the address preserves plan options, side toggle and sheet cap, and drops plan so a reload does not plan again');
+  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),split_sides:splitSides\?'1':'0',max_doors:capText\|\|null,profile:profile==='all'\?null:profile,plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile\]/.test(src), 'the address preserves plan options, side toggle and sheet cap, and drops plan so a reload does not plan again');
   assert.ok(/startPlan\(init\)==='turf'/.test(src) && /if\(!turfWaits\.current\|\|!features\)return;/.test(src) && /if\(features\.roi\)planTurf\(\);else generate\(\);/.test(src), 'plan=1 runs once the settings are here, and a district with no plan builds the precinct as it did');
   assert.ok(/putSpans\(ids,true\);generate\(ids\)/.test(src) && /putSpans\(parseSpansParam\(from\.spans\),!!from\.fresh,from\.trim\?\?null\)/.test(src) && /const putSpans=\(next:number\[\],left=false,cut:WalkListTrim\|null=null\)/.test(src), 'fresh goes with planned blocks: checked blocks (whole, no doors) and a saved list (with its doors) bring it, clearing them takes it away');
   assert.ok(/const kept=next\.length>0&&left\?cut:null;trimRef\.current=kept;setTrim\(kept\)/.test(src), 'doors ride only with planned blocks that are fresh, as the server wants');
-  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut,splitSides\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
+  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut,splitSides,profile\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
   assert.ok(/readWeights\(features\.district,defaults\)/.test(src) && /writeWeights\(features\.district,next\)/.test(src) && /weights=\{weights\} defaults=\{defaults\} onWeights=\{changeWeights\} doors=\{doorsNow\}/.test(src), 'the sliders are shared with the map through the weights helpers');
   assert.ok(/turfLines\(turf,payload\.totals,turfCfg\.jump_m\)/.test(src), 'the note uses the routed list\'s totals');
 });
@@ -1565,4 +1565,66 @@ test('a recovered parcel door whose pin was removed keeps its † and the legend
   assert.equal(new Set(all.ys.map(([, y]) => y)).size, 3);
   const cover = pdfTexts(both.doc, 1);
   assert.ok(cover.some(t => t.startsWith('† House number recovered')), 'the cover shows the recovery legend whenever a † is printed');
+});
+
+test('voter profile: the page address and a saved list carry it only when it is not Everyone', () => {
+  const read = (qs: string) => readWalkAddress(new URLSearchParams(qs));
+  assert.equal(read('precinct=02012&profile=coalition').profile, 'coalition');
+  for (const qs of ['precinct=02012', 'precinct=02012&profile=all', 'precinct=02012&profile=', 'precinct=02012&profile=Bad%20Key!']) assert.ok(!('profile' in read(qs)), qs);
+  assert.deepEqual(pickerOf(listOf({}, {precinct: '02012', profile: 'coalition'})), {area: {ss: '', sh: '', precinct: '02012'}, streets: '', profile: 'coalition'}, 'a saved list puts its profile back in the picker');
+  assert.ok(!('profile' in pickerOf(listOf({}, {precinct: '02012'}))!), 'a list saved before profiles restores as it was');
+});
+
+test('voter profile: the name of a list\'s profile, none for Everyone, the key when the district no longer offers it', () => {
+  const profiles = [{key: 'all', label: 'Everyone'}, {key: 'coalition', label: 'Supporters and persuadables'}];
+  assert.equal(walkLib.profileLabel({precinct: '02012', profile: 'coalition'}, profiles), 'Supporters and persuadables');
+  assert.equal(walkLib.profileLabel({precinct: '02012'}, profiles), ''); assert.equal(walkLib.profileLabel({profile: 'all'}, profiles), '');
+  assert.equal(walkLib.profileLabel({profile: 'coalition'}, undefined), 'coalition'); assert.equal(walkLib.profileLabel(undefined, profiles), '');
+});
+
+test('voter profile: the list and plan requests carry profile only when it is not Everyone, and a save sends the query the list came with', async () => {
+  const {getWalkPlan} = await import('../../src/v3/api/walk.ts');
+  const real = globalThis.fetch, urls: string[] = [], bodies: unknown[] = [];
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/api/auth/session')) return json(200, {csrf: 't'});
+    if (init?.method === 'POST') bodies.push(JSON.parse(String(init.body))); else urls.push(String(url));
+    return json(200, {});
+  }) as typeof fetch;
+  try {
+    const area = {precinct: '41005-101'};
+    await getWalkList('', area, undefined, [812], true, undefined, true, 'coalition');
+    await getWalkList('', area, undefined, [812], true, undefined, true, 'all');
+    await getWalkList('', area, undefined, [812], true);
+    await getWalkPlan(area, {preset: 'push', profile: 'coalition'});
+    await getWalkPlan(area, {preset: 'push', profile: 'all'});
+    await getWalkPlan(area, {preset: 'push'});
+    await saveWalkList('Saturday', {precinct: '41005-101', profile: 'coalition'}, 'f'.repeat(64));
+  } finally { globalThis.fetch = real; }
+  assert.deepEqual(urls, [
+    '/api/v3/walk/list?spans=812&fresh=1&profile=coalition&precinct=41005-101',
+    '/api/v3/walk/list?spans=812&fresh=1&precinct=41005-101',
+    '/api/v3/walk/list?spans=812&fresh=1&precinct=41005-101',
+    '/api/v3/walk/plan?precinct=41005-101&preset=push&profile=coalition',
+    '/api/v3/walk/plan?precinct=41005-101&preset=push',
+    '/api/v3/walk/plan?precinct=41005-101&preset=push',
+  ]);
+  assert.deepEqual(bodies, [{title: 'Saturday', query: {precinct: '41005-101', profile: 'coalition'}, fingerprint: 'f'.repeat(64)}]);
+});
+
+test('voter profile: the PDF cover names it, only when one is given', async () => {
+  const p = payload([run()]);
+  const plain = pdfTexts((await buildWalkPdf(p, {area: 'Precinct 02012'})).doc, 1), named = pdfTexts((await buildWalkPdf(p, {area: 'Precinct 02012', profile: 'Supporters and persuadables'})).doc, 1);
+  assert.ok(!plain.some(t => t.includes('Voter profile')), 'without a profile the cover is as it was');
+  assert.ok(named.some(t => t.includes('Precinct 02012 · Voter profile: Supporters and persuadables')), 'the cover line after the area');
+});
+
+test('voter profile: the screen shows a Voter profile choice only with two or more, sends it on every build, and tells it on the list and the exports', () => {
+  const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
+  assert.ok(/\(features\?\.roi\?\.profiles\?\.length\?\?0\)>1&&<label/.test(src) && /aria-label="Voter profile"/.test(src) && /Voter profile:<\/span>/.test(src), 'a labelled choice, hidden with none or one');
+  assert.ok(/useState\(init\.profile\?\?'all'\)/.test(src) && /features&&!features\.roi\?\.profiles\?\.some\(x=>x\.key===profileChoice\)\?'all':profileChoice/.test(src), 'it starts from the address, and a profile the district does not offer counts as Everyone');
+  assert.ok(/setProfileChoice\(from\.profile\?\?'all'\)/.test(src), 'opening a saved list brings its profile back');
+  assert.ok(/<StreetPlan area=\{area\} roi=\{features\.roi\} profile=\{profile\}/.test(src), 'the block plan ranks for the same profile');
+  assert.ok(/Voter profile: \$\{profileLabel\(payload\.query,roi\?\.profiles\)\}/.test(src), 'the list summary names it');
+  assert.ok(/exportWalkZip\(parts,\{area:listLabel\(p\),profile:profileLabel\(p\.query,roi\?\.profiles\)/.test(src), 'the ZIP carries it');
 });

@@ -8,7 +8,8 @@ import {int,LEVEL_LABEL,type Level} from '../lib/format';
 import {downloadFile} from '../lib/download';
 import {type Route} from '../lib/router';
 import {lastView,readSavedViews,removeView,safeViewPath,saveView,type SavedView} from '../lib/savedViews';
-import {Link,PageHeader} from './Header';
+import {Link,PageHeader,useFeatures} from './Header';
+import {DistrictDataSource} from './DistrictDataSource';
 import type {Meta} from '../types';
 import './WorkspaceScreen.css';
 
@@ -51,9 +52,11 @@ function FieldAudit({meta,data}:{meta:Meta;data:WorkspaceData}){
 
 interface AreaCount{level:Level;total:number;available:number}
 function DataSources({meta,data}:{meta:Meta;data:WorkspaceData}){
+  const district=useFeatures()?.district;
   const [counts,setCounts]=useState<AreaCount[]>([]);const [error,setError]=useState('');const [attempt,setAttempt]=useState(0);
   useEffect(()=>{let live=true;setError('');setCounts([]);Promise.all(meta.levels.map(async level=>{const a=await getAreas(meta,level);return {level,total:a.ids.length,available:a.status.filter(s=>s==='ok').length};})).then(rows=>{if(live)setCounts(rows);}).catch(()=>{if(live)setError('Geographic counts could not be loaded.');});return()=>{live=false;};},[meta,attempt]);
   return <>
+    <DistrictDataSource district={district}/>
     <div className="work-stat-grid"><div className="work-stat"><span>People</span><strong>{int(data.people)}</strong><p>Records in the local dataset</p></div><div className="work-stat"><span>Households</span><strong>{int(data.households)}</strong><p>Local household membership</p></div><div className="work-stat"><span>Framework fields</span><strong>{data.fields.length}</strong><p>{data.fields.filter(f=>f.group!=='lean').length} scored · {data.fields.filter(f=>f.group==='lean').length} political categories</p></div><div className="work-stat"><span>Geographic layers</span><strong>{meta.levels.length}</strong><p>Blocks, precincts, tracts and ZIPs</p></div></div>
     <p className="work-context"><span className="work-context-dot" aria-hidden="true"/><span><strong>Connected to the local dataset.</strong> People, contact details, field values and scores come from the prepared local stores. Missing values remain unavailable.</span></p>
     <section className="work-panel" aria-labelledby="source-ledger-heading"><div className="work-panel-heading"><div><h2 id="source-ledger-heading">Source ledger</h2><p>Active snapshot: <code>{data.snapshot}</code> · {meta.district_label}</p></div><span className="work-tag">Local dataset</span></div><div className="work-table-scroll" tabIndex={0} aria-label="Source ledger"><table className="work-table work-source-table"><thead><tr><th scope="col">Dataset</th><th scope="col">Origin</th><th scope="col">Interpretation</th></tr></thead><tbody>{data.layers.map(layer=><tr key={layer.key}><th scope="row">{LAYER_LABELS[layer.key]??layer.key}</th><td>{layer.origin}</td><td>{layer.detail}</td></tr>)}</tbody></table></div></section>

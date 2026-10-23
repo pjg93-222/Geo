@@ -6,6 +6,7 @@ import {Check,ChevronDown,Route as RouteIcon,Search,Upload,X} from 'lucide-react
 import {PageHeader,useFeatures} from './Header';
 import {StreetPlan} from './StreetPlan';
 import {WalkAddressSheets} from './WalkAddressSheets';
+import {WalkOptIns,type RecordWalkOptIn} from './WalkOptIns';
 import {AreaStreetDiscovery} from './AreaStreetDiscovery';
 import {useStartupReady} from './StartupFrame';
 import {Segmented,cx} from './ui';
@@ -14,11 +15,11 @@ import {replaceQuery,type Route} from '../lib/router';
 import type {Meta} from '../types';
 import {downloadFile} from '../lib/download';
 import {ApiError,getSession} from '../api/client';
-import {getWalkList,getWalkLists,getWalkOptions,getWalkPlan,getWalkSavedList,getWalkScores,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,searchWalkStreets} from '../api/walk';
+import {getWalkList,getWalkLists,getWalkOptions,getWalkPlan,getWalkSavedList,getWalkScores,matchWalkStreets,reknockWalkList,saveWalkDispositions,saveWalkList,saveWalkOptIns,searchWalkStreets} from '../api/walk';
 import type {WalkArea,WalkCode,WalkDoor,WalkLast,WalkLevel,WalkListMeta,WalkListPayload,WalkListTrim,WalkMatchInput,WalkMatchRow,WalkOption,WalkRun,WalkSavedList,WalkStreet,WalkTurf,WalkVoter} from '../api/walkTypes';
 import {
   CODE_LABEL,MAX_WALK_STREETS,WALK_CODES,chipNames,codeLegend,confirmedClears,countText,defaultListTitle,doorAddress,doorsOnSide,dropCleared,flushList,fullDate,historyKey,historyOf,
-  lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,readWalkAddress,readWalkCsv,
+  lastLabel,lastOf,lastText,latestJob,leftOutNote,listLabel,localToday,markAfterClick,mergePick,nextSide,parseStreetsParam,patchUploadRow,phoneText,pickName,pickerOf,profileLabel,readWalkAddress,readWalkCsv,
   doorsByPerson,flaggedOnList,listIdentity,marksWithRefused,refusalBarText,refusalHeadline,refusalOf,unsavedText,regDate,resultShelf,runHeader,savedLine,sideLabel,sideWords,startPlan,streetsParam,tallyText,totalsLine,visitRequest,walkFileName,watermarkText,
   LIST_REPLACED,OFF_LIST,adoptSaved,missingText,rekeyed,seenBy,splitOffRoster,turfLines,
   type HeldList,type RefusalNote,type SaveState,type WalkCsvProblem,type WalkCsvRead,type WalkHistory,type WalkPick,type WalkResults,type WalkScoreMap,type WalkVisit,
@@ -31,6 +32,7 @@ import {exportWalkPdf} from '../lib/walkPdf';
 import {buildWalkSheetsCsv,doorCap,splitWalkSheets} from '../lib/walkSheets';
 import {refusedStore} from '../lib/walkRefused';
 import {onRefusedReset} from '../lib/walkRefusedReset';
+import {hasRecordedOptIn,optInEntry,optInWriteScope,patchRecordedOptIn,recordedOptIns} from '../lib/walkOptIns';
 import '../styles/walk.css';
 
 // MapLibre loads only once a list exists, so opening this screen stays light.
@@ -258,14 +260,15 @@ const ResultRadios=memo(function ResultRadios(p:{id:string;name:string;value:Wal
   </div>;
 });
 
-const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean;value:WalkCode|null|undefined;unsaved:boolean;last:WalkLast|null;onMark:(id:string,code:WalkCode|null)=>void}){
+const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean;value:WalkCode|null|undefined;unsaved:boolean;last:WalkLast|null;onMark:(id:string,code:WalkCode|null)=>void;showOptIns:boolean;optInsDisabled:boolean;onRecordOptIn:RecordWalkOptIn}){
   const {v,door,first}=p;
   const note=p.unsaved?`walk-unsaved-${door.seq}-${v.person_id}`:undefined;
-  return <tr role="row" className={first?undefined:'cont'}>
+  return <tr role="row" className={cx(!first&&'cont',p.showOptIns&&hasRecordedOptIn(v.opt_ins)&&'has-recorded-opt-in')}>
     <td role="cell" className="walk-addr">{first
       ?<>{doorAddress(door)}{door.placed_by==='interpolated'&&<span title="Placed by house number"><span aria-hidden="true"> ≈</span><span className="walk-sr">, placed by house number</span></span>}</>
       :<span className="walk-sr">{doorAddress(door)}</span>}</td>
-    <td role="cell" className="walk-name" title={v.name}>{v.name}</td>
+    <td role="cell" className="walk-name" title={v.name}>{v.name}
+      {p.showOptIns&&<WalkOptIns personId={v.person_id} name={v.name} value={v.opt_ins} disabled={p.optInsDisabled} onRecord={p.onRecordOptIn}/>}</td>
     <td role="cell" className="walk-detail">{phoneText(v.phone)}</td>
     <td role="cell" className="walk-detail" data-label="Pri">{tallyText(v.pri)}</td><td role="cell" className="walk-detail" data-label="Gen">{tallyText(v.gen)}</td>
     <td role="cell" className="walk-detail" data-label="Abs">{tallyText(v.abs)}</td><td role="cell" className="walk-detail" data-label="Party">{v.party}</td>
@@ -277,7 +280,7 @@ const VoterRow=memo(function VoterRow(p:{v:WalkVoter;door:WalkDoor;first:boolean
   </tr>;
 });
 
-const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkResults;unsaved:ReadonlySet<string>;history:WalkHistory;onMark:(id:string,code:WalkCode|null)=>void}){
+const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkResults;unsaved:ReadonlySet<string>;history:WalkHistory;onMark:(id:string,code:WalkCode|null)=>void;showOptIns:boolean;optInsDisabled:boolean;optInPending:ReadonlyMap<string,unknown>;optInList:string;onRecordOptIn:RecordWalkOptIn}){
   const {run}=p;
   const title=`${run.street} (${sideLabel(run.side)})`;
   return <section className="walk-run" id={`walk-run-${run.stop}`} aria-labelledby={`walk-run-title-${run.stop}`}>
@@ -287,11 +290,11 @@ const RunPanel=memo(function RunPanel(p:{run:WalkRun;total:number;results:WalkRe
       <span className="walk-run-meta">{runHeader(run,p.total)}</span>
     </header>
     <div className="walk-table-wrap" role="region" tabIndex={0} aria-label={`Stop ${run.stop}, ${title}: voters`}>
-      <table className="walk-table" role="table">
+      <table className={cx('walk-table',p.showOptIns&&'has-opt-ins')} role="table">
         <colgroup>{COLUMNS.map(h=><col key={h}/>)}</colgroup>
         <thead role="rowgroup"><tr role="row">{COLUMNS.map(h=><th key={h} scope="col" role="columnheader">{h}</th>)}</tr></thead>
         <tbody role="rowgroup">{run.doors.flatMap(door=>door.voters.map((v,i)=>   // a voter with a mark, or a cleared mark awaiting the server, keeps the room for the history line but does not show it
-          <VoterRow key={`${door.seq}-${v.person_id}`} v={v} door={door} first={i===0} value={Object.hasOwn(p.results,v.person_id)?p.results[v.person_id]:undefined} unsaved={p.unsaved.has(v.person_id)} last={lastOf(v,p.history)} onMark={p.onMark}/>))}</tbody>
+          <VoterRow key={`${p.optInList}-${door.seq}-${v.person_id}`} v={v} door={door} first={i===0} value={Object.hasOwn(p.results,v.person_id)?p.results[v.person_id]:undefined} unsaved={p.unsaved.has(v.person_id)} last={lastOf(v,p.history)} onMark={p.onMark} showOptIns={p.showOptIns} optInsDisabled={p.optInsDisabled||p.optInPending.has(v.person_id)} onRecordOptIn={p.onRecordOptIn}/>))}</tbody>
       </table>
     </div>
     {run.doors.some(d=>d.placed_by==='interpolated')&&<p className="walk-run-foot">“≈” = placed by house number (no geocode)</p>}
@@ -343,6 +346,9 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const kept=next.length>0&&left?cut:null;trimRef.current=kept;setTrim(kept);
   };
   const features=useFeatures();
+  // The voter profile (roi.profiles): 'all' is everyone and is left out of every request and of the page address. A profile the district does not offer counts as 'all' once the settings are here.
+  const [profileChoice,setProfileChoice]=useState(init.profile??'all');
+  const profile=features&&!features.roi?.profiles?.some(x=>x.key===profileChoice)?'all':profileChoice;
   // One click (Plan walk list) and the sliders and doors it uses. A server without these settings gets the agent defaults.
   const roi=features?.roi??null;
   const turfCfg=turfOf(roi),defaults=potentialOf(roi);
@@ -354,6 +360,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const doorsNow=clampDoors(doorsText??savedDoors,turfCfg.doors);
   const [turf,setTurf]=useState<WalkTurf|null>(null);   // the blocks the last click picked: the note under the totals
   const [printScores,setPrintScores]=useState(false);   // the Print scores toggle: off, the PDF and CSV carry no scores
+  const [showOptIns,setShowOptIns]=useState(false);
+  const optInWrites=useRef(optInWriteScope()).current;
+  const optInView=useRef(0);
+  const [optInPending,setOptInPending]=useState<ReadonlyMap<string,unknown>>(new Map());
+  const optInDistrict=useRef(features?.district);optInDistrict.current=features?.district;
+  useEffect(()=>{optInWrites.reset();setOptInPending(new Map());return()=>optInWrites.reset();},[optInWrites,features?.district]);
   const [hosted,setHosted]=useState(false);   // a hosted server: no CSV download and no scores (the server refuses them), and the PDF is watermarked
   useEffect(()=>{getSession().then(s=>setHosted(s.hosted===true)).catch(()=>{});},[]);
   const [upload,setUpload]=useState<Upload|null>(null);const uploadRef=useRef<Upload|null>(null);const uploadSeq=useRef(0);const uploadAbort=useRef<AbortController|null>(null);
@@ -406,6 +418,37 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }).finally(()=>{if(saving.current?.job===job)saving.current=null;});
     saving.current={base,job};return job;
   },[refreshLists]);
+
+  const recordOptIn=useCallback<RecordWalkOptIn>(async(personId,kind,status)=>{
+    const entry=entryRef.current,district=optInDistrict.current;
+    if(!entry||!payloadRef.current)throw new Error('Build or open a list first.');
+    const request=optInWrites.begin(personId,kind);
+    setOptInPending(p=>new Map(p).set(personId,request));
+    const current=()=>request.current()&&entryRef.current===entry&&optInDistrict.current===district;
+    const requireCurrent=()=>{if(!current())throw new DOMException('The displayed list changed.','AbortError');};
+    try{
+      const key=await ensureSaved();
+      requireCurrent();
+      const shown=payloadRef.current;
+      if(shown?.list.key!==key||!shown.runs.some(run=>run.doors.some(door=>door.voters.some(voter=>voter.person_id===personId))))
+        throw new Error('The saved roster changed. Review the list before recording an opt-in.');
+      const result=await saveWalkOptIns(key,[optInEntry(personId,kind,status)],request.signal);
+      requireCurrent();
+      const returned=result.opt_ins?.[personId];
+      if(result.saved!==1||!returned||recordedOptIns(returned)[kind].source!=='recorded_manually'||recordedOptIns(returned)[kind].status!==status)
+        throw new Error('The server did not confirm this opt-in. Reload the list before trying again.');
+      const base=payloadRef.current;
+      if(base?.list.key!==key)throw new DOMException('The displayed list changed.','AbortError');
+      const next=patchRecordedOptIn(base,personId,kind,recordedOptIns(returned)[kind]);
+      payloadRef.current=next;setPayload(next);
+    }finally{
+      const wasCurrent=request.current();request.finish();
+      if(wasCurrent&&entryRef.current===entry&&optInDistrict.current===district)setOptInPending(p=>{
+        if(p.get(personId)!==request)return p;
+        const next=new Map(p);next.delete(personId);return next;
+      });
+    }
+  },[ensureSaved,optInWrites]);
 
   // Clearing a mark brings back whatever else is on file for the voter (a result recorded on another list). That is history to show, so
   // the list is looked at again: the voters whose clearing is confirmed show what the server holds for them, as a reload would, and their
@@ -478,6 +521,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
 
   // ---- build a list --------------------------------------------------------------------------------------------------------------
   const show=useCallback((p:WalkListPayload,adopt:boolean)=>{
+    optInWrites.reset();optInView.current++;setOptInPending(new Map());
     // results recorded on this list come back selected, and so do the walker's marks the server refused (flagged); the rest is history
     const marks=marksWithRefused(p,refusals.marks,listIdentity(p.list?.key,p.query??{}));
     payloadRef.current=p;setPayload(p);setSheetIndex(0);setSource('streets');setTurf(null);setResults(marks.results);setUnsaved(marks.unsaved);setHistory({});setReplaced(false);clearTimeout(timer.current);
@@ -487,7 +531,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
     const from=adopt?pickerOf(p):null;   // a re-knock list (either query shape) and a list with no picker settings leave the picker as it is
     if(from){
-      setArea(from.area);
+      setArea(from.area);setProfileChoice(from.profile??'all');
       const next=parseStreetsParam(from.streets).map((s):WalkPick=>({...s,label:names.get(s.id)??'',city:''}));picksRef.current=next;setPicks(next);
       putSpans(parseSpansParam(from.spans),!!from.fresh,from.trim??null);
       putUpload(null);setSkipped([]);setUploadWarning('');
@@ -504,6 +548,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       setNote('Some results from earlier are not saved yet. Use Retry below, and the list builds once they are.');return;
     }
     const id=++gen.current;
+    optInWrites.reset();setOptInPending(new Map());
     genAbort.current?.abort();const ac=genAbort.current=new AbortController();
     setLoading(true);setLoadError(null);setNote('');setAnnounce('Building the walk list.');
     if(matchMedia('(max-width:900px)').matches)requestAnimationFrame(()=>main.current?.scrollIntoView({block:'start',behavior:'smooth'}));
@@ -532,7 +577,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }
     if(!picks.length&&!planned.length&&noArea(area)){setNote('Pick an area or add a street first.');return;}
     const streets=streetsParam(picks),where={...area},left=freshRef.current,cut=trimRef.current??undefined;
-    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides),p=>show(p,false));
+    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides,profile),p=>show(p,false));
   }
   function walkPlanned(ids:number[]){putSpans(ids,true);generate(ids);}   // the checked blocks of the block plan, whole (no doors); their counts leave out doors with a recorded result
   const commitDoors=():number=>{setDoorsText(String(doorsNow));if(features)writeDoors(features.district,doorsNow);return doorsNow;};
@@ -542,12 +587,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(!area.precinct){setNote('Pick a precinct first.');return;}
     const where={...area},asked=commitDoors(),q=weightsQuery(weights),got:{turf?:WalkTurf;cut?:WalkListTrim|null}={};
     void load(async sig=>{
-      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked},sig);
+      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked,profile},sig);
       got.turf=plan.turf;
       if(!plan.turf)throw new ApiError(NO_TURF,400,true);
       if(!plan.turf.spans.length)throw new ApiError(NO_DOORS,400,true);
       got.cut=trimFor(plan.turf,asked,q);   // the list is cut to the doors asked for, with the weights the blocks were picked by (a server that cannot cut sends no trim)
-      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides);
+      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides,profile);
     },p=>{
       picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);setUploadWarning('');   // the list is the planned blocks alone
       putSpans(got.turf?.spans??[],true,got.cut??null);show(p,false);setTurf(got.turf??null);
@@ -600,7 +645,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       const session=await getSession();   // hosted: every page says who printed the list and when; no identity, no PDF
       if(session.hosted&&!session.email)throw new Error('no identity');
       const watermark=session.hosted&&session.email?watermarkText(session.email):undefined;
-      await exportWalkPdf(p,{area:listLabel(p),scores,watermark,sheets:splitWalkSheets(p,cap)});
+      await exportWalkPdf(p,{area:listLabel(p),scores,watermark,sheets:splitWalkSheets(p,cap),profile:profileLabel(p.query,roi?.profiles)});
     }catch{setActionNote({text:'The PDF could not be created. Try again.',alert:true});}
     finally{setBusy('');}
   }
@@ -619,7 +664,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       const session=await getSession();
       if(session.hosted&&!session.email)throw new Error('Sign in again before exporting.');
       const {exportWalkZip}=await import('../lib/walkRouteExport');
-      await exportWalkZip(parts,{area:listLabel(p),scores,watermark:session.hosted&&session.email?watermarkText(session.email):undefined,includeCsv:!session.hosted,
+      await exportWalkZip(parts,{area:listLabel(p),profile:profileLabel(p.query,roi?.profiles),scores,watermark:session.hosted&&session.email?watermarkText(session.email):undefined,includeCsv:!session.hosted,
         results:{...resultsRef.current},history:{...historyRef.current},unsaved:new Set(unsavedRef.current)});
     }catch(e){setActionNote({text:e instanceof Error?e.message:'The ZIP could not be created. Try again.',alert:true});}
     finally{setBusy('');}
@@ -695,8 +740,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
   const setLevel=(level:WalkLevel,v:string)=>{setNote('');putSpans([]);setArea(a=>level==='ss'?{ss:v,sh:'',precinct:''}:level==='sh'?{...a,sh:v,precinct:''}:{...a,precinct:v});};
   useEffect(()=>{
-    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,plan:null,list:listKey||null});
-  },[area,picks,spans,fresh,trim,listKey,splitSides,capText]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
+    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,profile:profile==='all'?null:profile,plan:null,list:listKey||null});
+  },[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
   const started=useRef(false);
   useEffect(()=>{
     if(started.current)return;started.current=true;
@@ -712,7 +757,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(features.roi)planTurf();else generate();   // a district with no plan builds the precinct's list as it always did
   },[features]);
   useEffect(()=>{
-    const warn=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||saving.current||refusals.note||shownFlagged.current.size>0){e.preventDefault();e.returnValue='';}};
+    const warn=(e:BeforeUnloadEvent)=>{if(outbox.unconfirmed()||saving.current||optInWrites.pending()||refusals.note||shownFlagged.current.size>0){e.preventDefault();e.returnValue='';}};
     const hidden=()=>{if(document.visibilityState==='hidden')void flush();};
     window.removeEventListener('beforeunload',warnHeld);   // while the screen is here, its own guard speaks for every list on the shelf
     window.addEventListener('beforeunload',warn);document.addEventListener('visibilitychange',hidden);
@@ -749,13 +794,15 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
       <aside className="walk-rail" aria-label="Walk list builder">
         <p className="walk-eyebrow">Walk list</p>
         <h1 className="walk-title">Build a walk list</h1>
-        <p className="walk-sub">Build from streets or import an address or street file.</p>
+        <p className="walk-sub">Build from streets, paste addresses or import a file.</p>
 
-        <div className="walk-source"><Segmented variant="index" label="Walk list source" items={[{id:'streets',label:'Streets'},{id:'addresses',label:'Address file'}]} value={source} onChange={setSource}/></div>
+        <div className="walk-source"><Segmented variant="index" label="Walk list source" items={[{id:'streets',label:'Streets'},{id:'addresses',label:'Addresses'}]} value={source} onChange={setSource}/></div>
         <AreaStreetDiscovery/>
         <label className="walk-check"><input type="checkbox" checked={splitSides} onChange={e=>setSplitSides(e.target.checked)}/> Split even and odd</label>
         <label className="walk-doors"><span>Maximum doors per list</span><input type="number" min={1} max={10000} step={1} inputMode="numeric" placeholder="No cap" value={capText} onChange={e=>{setCapText(e.target.value);setSheetIndex(0);}} aria-describedby="walk-cap-hint"/></label>
         <p id="walk-cap-hint" className="walk-hint">Creates as many lists as needed to cover every door. Blank means no cap. Even and odd stay on separate lists when enabled. Downloads include all lists.</p>
+        <label className="walk-check"><input type="checkbox" checked={showOptIns} onChange={event=>setShowOptIns(event.target.checked)} aria-describedby={showOptIns?'walk-opt-ins-hint':undefined}/> Show recorded opt-ins</label>
+        {showOptIns&&<p id="walk-opt-ins-hint" className="walk-hint">Manually recorded donor and volunteer status with its recording time. Unknown means no current opt-in is recorded. {source==='streets'?'Changing a status saves it; the list is saved first when needed.':'Imported sheets show existing records; use a saved street list to record changes.'} Highlights appear on screen; downloads keep their existing columns.</p>}
         {capError&&<p className="walk-note" role="alert">{capError}</p>}
         {source==='streets'&&<>
         <p className="walk-hint">Generate again after changing even/odd grouping. The cap updates the sheets immediately.</p>
@@ -784,7 +831,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         {leftOut&&<div className="walk-note" role="alert"><p>{leftOut.headline}</p><ul>{leftOut.reasons.map(t=><li key={t}>{t}</li>)}</ul></div>}
         {upload&&<UploadReport upload={upload} picks={picks} onChoose={choose} onSkip={skip} onRematch={(i,t)=>void rematch(i,t)}/>}
 
-        {features?.roi&&<StreetPlan area={area} roi={features.roi} race={features.candidate?raceWords(features.candidate.race_mode):''} density={features.overlay.density} busy={loading}
+        {(features?.roi?.profiles?.length??0)>1&&<label className="select walk-select"><span className="select-text" aria-hidden="true"><span className="walk-k">Voter profile:</span> {features?.roi?.profiles?.find(x=>x.key===profile)?.label??profile}</span>
+          <ChevronDown className="select-chev" strokeWidth={1.75} aria-hidden="true"/>
+          <select aria-label="Voter profile" value={profile} onChange={e=>setProfileChoice(e.target.value)}>
+            {features?.roi?.profiles?.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}
+          </select></label>}
+        {features?.roi&&<StreetPlan area={area} roi={features.roi} profile={profile} race={features.candidate?raceWords(features.candidate.race_mode):''} density={features.overlay.density} busy={loading}
           weights={weights} defaults={defaults} onWeights={changeWeights} doors={doorsNow} onWalk={walkPlanned}/>}
 
         <button type="button" className="walk-generate" onClick={()=>generate()} disabled={loading} aria-busy={loading}>{loading?'Building…':'Generate walk list'}</button>
@@ -810,7 +862,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
 
       <section className="walk-main" ref={main} aria-label="Walk list" aria-busy={loading}>
         <p className="walk-sr" role="status">{announce}</p>
-        {source==='addresses'?<WalkAddressSheets capText={capText} splitSides={splitSides} hosted={hosted}/>:loading?<div className="walk-wait" aria-hidden="true">
+        {source==='addresses'?<WalkAddressSheets capText={capText} splitSides={splitSides} hosted={hosted} showOptIns={showOptIns}/>:loading?<div className="walk-wait" aria-hidden="true">
             <span className="sk walk-sk" style={{width:'62%',height:16}}/>
             <span className="sk walk-sk" style={{width:'46%',height:36,marginTop:14}}/>
             <span className="sk walk-sk" style={{width:'100%',height:260,marginTop:14}}/>
@@ -825,7 +877,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           </div>}
           {replaced&&<p className="walk-note" role="status">{LIST_REPLACED}</p>}
           <div className="walk-summary-row">
-            <p className="walk-summary">{totalsLine(payload.totals)}</p>
+            <p className="walk-summary">{totalsLine(payload.totals)}{profileLabel(payload.query,roi?.profiles)&&` · Voter profile: ${profileLabel(payload.query,roi?.profiles)}`}</p>
             {payload.runs.length>0&&<div className="walk-seg"><Segmented variant="index" label="Map shading" items={[{id:'doors',label:'Doors'},{id:'party',label:'Party'}]} value={shade} onChange={setShade}/></div>}
           </div>
           {turf&&<div className="walk-turf" role="status">{turfLines(turf,payload.totals,turfCfg.jump_m).map(t=><p key={t}>{t}</p>)}</div>}
@@ -855,14 +907,14 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
             </div>
             <DoorScript/>
             <p className="walk-key">{historyKey(payload.window)} {codeLegend()}. Last shows the latest result on file with its date; choosing a result records a new visit.</p>
-            {shownSheet?.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} unsaved={unsaved} history={history} onMark={mark}/>)}
+            {shownSheet?.runs.map(run=><RunPanel key={run.stop} run={run} total={total} results={results} unsaved={unsaved} history={history} onMark={mark} showOptIns={showOptIns} optInsDisabled={loading||busy!==''} optInPending={optInPending} optInList={`${features?.district??''}:${optInView.current}`} onRecordOptIn={recordOptIn}/>)}
           </>:<div className="walk-empty"><h2>No doors found</h2><p>These streets have no voters on file. Try another street or a wider area.</p></div>}
         </>
         :<div className="walk-empty">
           <RouteIcon size={26} strokeWidth={1.5} aria-hidden="true"/>
           <h2>Your walk list will appear here</h2>
           <p>Pick an area and add the streets you plan to walk, then choose Generate walk list. You get the route on a map and the voters at each door in walking order, with a place to record every result.</p>
-          <p>For your own addresses, choose Address file and upload CSV, TSV, TXT, JSON or XLSX.</p>
+          <p>For your own addresses, choose Addresses and paste addresses or street names, or upload CSV, TSV, TXT, JSON or XLSX.</p>
         </div>}
       </section>
     </main>

@@ -8,11 +8,13 @@
                                  doors that already have a recorded result; with spans, fresh=1 and one precinct, doors=N
                                  (and wp, wi) read the spans in the order given and keep N doors of them, the last block cut
                                  to the doors with the most untapped potential, as the turf of GET /walk/plan is (street
-                                 picks are added whole on top)
+                                 picks are added whole on top); profile=coalition (a candidate district) lists only the
+                                 supporters and persuadables, see tools/profiles.py (default 'all': everyone, as without it)
   GET  /api/v3/walk/overview     the blocks of an area with door and party counts, for map shading
   GET  /api/v3/walk/plan         street plan (candidate districts): the blocks of an area ranked by a preset's value per 100 m,
                                  doors with a recorded result left out; with doors=N, for one precinct, also the turf of
-                                 about N doors to walk (walk_turf)
+                                 about N doors to walk (walk_turf); profile=coalition counts only the people of that voter
+                                 profile in every sum
   POST /api/v3/walk/scores       overall, participation and support standings and the untapped potential of up to 1,500
                                  listed people, for the printed list
   GET  /api/v3/walk/lists        the 50 newest saved lists
@@ -21,11 +23,12 @@
                                  with `missing`, the voters marked Not home that the voter data no longer has
   GET  /api/v3/walk/lists/<key>  a saved list as it was frozen, with each voter's latest result {code, on, list} refreshed
   POST /api/v3/walk/dispositions results of visits {list, on, entries}, appended; the newest entry of a person wins
+  POST /api/v3/walk/opt-ins      manually recorded donor/volunteer opt-ins {list, entries}; independent of visit results
 
 Every endpoint is local only (loopback owner, no proxy headers, not hosted), answers 403 in demo mode (lists carry real
 names and phones), is `no-store`, takes an exact list of query parameters and, for POST, a JSON object of at most 256 KB.
-Hosted (CU_DEPLOYMENT=hosted) there is no local owner (field_access.py). Three routes open to field staff (group field-staff):
-GET /walk/lists, GET /walk/lists/<key> and POST /walk/dispositions. Seven open to field managers (group field-manager, who are
+Hosted (CU_DEPLOYMENT=hosted) there is no local owner (field_access.py). Four routes open to field staff (group field-staff):
+GET /walk/lists, GET /walk/lists/<key>, POST /walk/dispositions and POST /walk/opt-ins. Seven open to field managers (group field-manager, who are
 not thereby field staff): options, streets, match, list, overview, plan and POST /walk/lists, so a list can be built and saved on
 the server. Each call leaves an AuditEvent (route only). Every other route here, scores included, answers 403. Django enforces
 CSRF on every POST. The voters of a saved list are fixed when it is saved: a result can only be recorded for a person on its
@@ -51,15 +54,17 @@ from django.utils import timezone
 
 from tools import districts as D
 from tools import field_labels as FL
+from tools import profiles as PR
 
 from . import field_access as FA
 from . import untapped as U
 from . import walk_context as C
 from . import walk_names as N
+from . import walk_opt_ins as O
 from . import walk_route
 from . import walk_store as W
 from . import walk_turf
-from .models import Disposition, WalkList
+from .models import Disposition, WalkList, WalkOptInRecord
 from .street_views import local_denied, local_only, local_only_post, response
 from .terrier_contacts import SourceStoreError
 from .v3_http import BadRequest, clean, params
@@ -88,8 +93,10 @@ LISTS_SHOWN = 50
 CODES = ('S', 'U', 'O', 'NH', 'MV')
 # an area id as the store holds it: at most 24 characters, but a CT precinct key is the code and the name (build_walk caps it at 64)
 AREA = r'[0-9A-Za-z._-]{1,%d}' % (64 if settings.DISTRICT['precinct_key'] == 'code-name' else 24)
-QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi', 'split_sides'}
+QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi', 'split_sides', 'profile'}
 NO_CANDIDATE = 'No candidate is set for this district.'
+PROFILE_NOT_OFFERED = 'That voter profile is not offered.'
+PROFILE_EMPTY = 'Nobody on those blocks is in this voter profile.'
 TRIM_NEEDS_BLOCKS = 'Trim needs planned blocks.'
 SUPPORT_NOT_BUILT = 'Support is not built yet.'
 SCORES_NOT_BUILT = 'Scores are not built yet.'
@@ -224,6 +231,26 @@ def parse_spans(text, ordered=False):
     return spans
 
 
+def parse_profile(text):
+    """The voter profile asked for (tools/profiles.py): 'all' when none is, refused when the district does not offer it (a
+    district without a candidate offers 'all' alone)."""
+    key = 'all' if text is None else text          # matched against the offered keys alone: anything else is not offered
+    if key not in PR.offered(settings.DISTRICT['party']):
+        raise Refused(PROFILE_NOT_OFFERED)
+    return key
+
+
+def profile_keep(store, profile):
+    """A function of a store row (with party and pos) that is true for the people the voter profile counts, None for 'all'
+    (no filter at all). s is the support score / 100 (untapped.terms), none for a person without a score row."""
+    if profile == 'all':
+        return None
+    if not (store.attach_scores() and store.support):
+        raise Refused(SUPPORT_NOT_BUILT, 503)
+    member, s = PR.member_fn(profile, settings.DISTRICT['party']), U.terms().s
+    return lambda row: member(row['party'], float(s[row['pos'] - 1]) if row['pos'] else None)
+
+
 def trim_query(values, area, plain):
     """{'doors', 'wp', 'wi'} of a list cut to a door count (doors and the weights written plainly, the weights only if sent), {}
     for any other list. Only the planned blocks of one precinct, with fresh=1 and doors=N (1 to 1,000) take it: the weights mean
@@ -244,7 +271,8 @@ def list_query(values):
     """(picks, spans, area, normalised query) of a list request: the GET parameters, or the query of a list to save.
     fresh=1 (the only value) leaves out the people at doors that already have a recorded result. doors=N (with spans, fresh=1
     and a precinct) keeps N doors of the spans, which are then read in the order given and kept in that order in the query;
-    wp and wi are the weights of the untapped potential that picks the doors (trim_query)."""
+    wp and wi are the weights of the untapped potential that picks the doors (trim_query). profile (parse_profile) limits the
+    list to the people of a voter profile; it is in the query only when it is not 'all'."""
     area = area_of(values)
     picks = parse_picks(values['streets']) if 'streets' in values else []
     spans = parse_spans(values['spans'], 'doors' in values) if 'spans' in values else []
@@ -256,7 +284,9 @@ def list_query(values):
     query = {'streets': ','.join('%d:%s' % pick for pick in picks)} if picks else {}
     if spans:
         query['spans'] = ','.join(map(str, spans))
-    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {}), **trim, **sides}
+    profile = parse_profile(values.get('profile'))                   # 'all' is no profile: it leaves the query as it was
+    return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {}), **trim, **sides,
+                                **({'profile': profile} if profile != 'all' else {})}
 
 
 CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
@@ -534,7 +564,7 @@ def plan_payload(store, rows, query, *, preserve_unlocated=False):
 
 def fingerprint(payload, keys):
     """A digest of what a list shows (all of it but the day it was built and its saved details) and of the voter behind
-    each person id: two builds with the same fingerprint are the same list. Taken before `last` is attached."""
+    each person id: two builds with the same fingerprint are the same list. Taken before live result/opt-in overlays."""
     shown = {name: value for name, value in payload.items() if name not in ('generated_on', 'list', 'fingerprint')}
     return hashlib.sha256(json.dumps([shown, keys], sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
@@ -548,7 +578,8 @@ def left_out_to_fit(store, spans, area, query, knocked):
     asked, (wp, wi) = int(query['doors']), U.parse_weights(query)
     if not (store.attach_scores() and store.support):
         raise Refused(SUPPORT_NOT_BUILT, 503)
-    folded, _ = fold_plan(store, store.span_people(area, spans), {}, U.terms(), knocked, wp, wi, by_door=True)
+    keep = profile_keep(store, query.get('profile', 'all'))
+    folded, _ = fold_plan(store, store.span_people(area, spans), {}, U.terms(), knocked, wp, wi, by_door=True, keep=keep)
     out, held = set(), 0
     for span in spans:
         parts = folded[span]['parts'] if span in folded else {}
@@ -565,13 +596,19 @@ def standard_payload(store, picks, spans, area, query):
     knocked = U.knocked() if 'fresh' in query else None
     skip = knocked.doors if knocked else None                       # the doors with a recorded result, for a fresh list
     cut = left_out_to_fit(store, spans, area, query, knocked) if 'doors' in query else None      # more doors the blocks do not add
-    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut)
+    keep = profile_keep(store, query.get('profile', 'all'))       # only the people of a voter profile, if one is asked
+    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut, keep)
     if len(rows) > MAX_VOTERS:
+        if keep is not None:          # a profile is judged person by person: not counted past the ceiling
+            raise Refused('That is more than %s voters, too large to build in one list. Choose a smaller area or fewer streets.'
+                          % '{:,}'.format(MAX_VOTERS))
         raise Refused('That is %s voters, too large to build in one list (at most %s). Choose a smaller area or fewer streets.'
                       % ('{:,}'.format(store.count_voters(picks, area, spans, skip, cut)), '{:,}'.format(MAX_VOTERS)))
     if not rows:
-        if skip and store.voters(picks, area, 1, spans):
+        if skip and store.voters(picks, area, 1, spans, keep=keep):
             raise Refused('Everyone on those blocks already has a recorded result.')
+        if keep and store.voters(picks, area, 1, spans):
+            raise Refused(PROFILE_EMPTY)
         raise Refused('No voters live on those streets in this area.')
     return plan_payload(store, rows, query)
 
@@ -601,6 +638,7 @@ def attach_last(payload, keys):
         for door in run['doors']:
             for voter in door['voters']:
                 voter['last'] = last.get(keys.get(voter['person_id']))
+    O.attach(payload, keys)
 
 
 @manager_read
@@ -677,7 +715,7 @@ def percentile(values):
             for key, v in values.items() if v is not None}
 
 
-def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
+def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False, keep=None):
     """({span id: sums over its people, a, b, len_m, street label, commonest block}, {'people', 'doors'} left out) from the
     Store.span_plan rows, with the untapped terms (untapped.terms()) and the doors that have a recorded result (untapped.
     knocked()). Those doors are left out of every sum and counted in the second answer. A person with a score row adds to
@@ -685,7 +723,9 @@ def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
     and supporter s (1 - t), unweighted; identify: s in the middle third, no support counting as 0.5) and to the means of s
     and t; one without adds to identify alone. The label is the street with most doors on the block, then the first by name
     (as the overview), counting every door, so a block keeps its name as results come in. With `by_door` a block also holds
-    'parts', {door: [people, undecided, supporter]} over its doors that are not left out (walk_turf.best_doors cuts by them)."""
+    'parts', {door: [people, undecided, supporter]} over its doors that are not left out (walk_turf.best_doors cuts by them).
+    `keep` (profile_keep): only the rows it passes add to the sums; every row still names its block, so a block keeps its
+    name whatever the voter profile."""
     names = store.directory().by_id
     pos = np.array([row['pos'] or 0 for row in rows], dtype=np.int64)
     at = np.maximum(pos - 1, 0)
@@ -697,12 +737,14 @@ def fold_plan(store, rows, blocks, terms, knocked, wp, wi, by_door=False):
     spans, doors, streets, gone_people, gone_doors = {}, {}, {}, 0, set()
     for k, row in enumerate(rows):
         door = row['stop_id'], row['unit']
+        streets.setdefault((row['span_id'], row['street_id']), set()).add(door)
+        if keep is not None and not keep(row):
+            continue
         span = spans.get(row['span_id'])
         if span is None:
             span = spans[row['span_id']] = {**dict.fromkeys(SUMS, 0), 'len_m': row['len_m'], 'a': row['a'], 'b': row['b'],
                                             'block': blocks.get(row['span_id']), 'parts': {}}
             doors[row['span_id']] = set()
-        streets.setdefault((row['span_id'], row['street_id']), set()).add(door)
         if door in knocked.doors:
             gone_people += 1
             gone_doors.add(door)
@@ -790,7 +832,7 @@ def plan(request):
     roi = settings.DISTRICT['roi']
     if roi is None:
         raise Refused(NO_CANDIDATE, 404)
-    q = params(request, {*W.AREA_COLUMNS, 'preset', 'w_value', 'w_pop', 'w_voter', 'wp', 'wi', 'doors'})
+    q = params(request, {*W.AREA_COLUMNS, 'preset', 'w_value', 'w_pop', 'w_voter', 'wp', 'wi', 'doors', 'profile'})
     area = area_of(q)
     if not area:
         raise Refused('Choose a district or precinct first.')
@@ -799,6 +841,7 @@ def plan(request):
         raise Refused('That street plan is not offered.')
     wp, wi = U.parse_weights(q)                    # the untapped potential's balance and influence weight (push, and the turf)
     asked = parse_doors(q.get('doors'), area)
+    profile = parse_profile(q.get('profile'))
     given = {'value': q.get('w_value'), 'pop_density': q.get('w_pop'), 'voter_density': q.get('w_voter')}
     if all(text is None for text in given.values()):
         weights = dict(roi['weights'])
@@ -815,7 +858,8 @@ def plan(request):
         if not (store.attach_scores() and store.support):
             raise Refused(SUPPORT_NOT_BUILT, 503)
         rows, blocks = store.span_plan(area)
-        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi, by_door=bool(asked))
+        keep = profile_keep(store, profile)           # the sums count only the people of the voter profile
+        spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi, by_door=bool(asked), keep=keep)
         if len(spans) > MAX_SPANS:
             raise Refused('That area has %s blocks; choose a house district or a precinct to rank them.' % '{:,}'.format(len(spans)))
         xy = store.node_xy({node for s in spans.values() for node in (s['a'], s['b'])}) if asked else None
@@ -824,6 +868,8 @@ def plan(request):
             'potential': {'wp': wp, 'wi': wi}, 'p': roi['p'], 'race_mode': settings.DISTRICT['race_mode'], 'spans': ranked,
             'not_ranked': skipped, 'knocked': left_out,
             'matched': {'people': sum(s['people'] for s in spans.values()), 'scored': sum(s['scored'] for s in spans.values())}}
+    if profile != 'all':
+        body['profile'] = profile
     if asked:           # a turf is worth the untapped potential at wp, wi, whatever the preset that ranks the blocks
         pool = {span_id: {'a': s['a'], 'b': s['b'], 'doors': s['doors'], 'people': s['people'], 'value': s['push'],
                           'undecided': s['undecided'], 'supporter': s['supporter'], 'parts': s['parts']} for span_id, s in spans.items()}
@@ -1021,3 +1067,40 @@ def dispositions(request):
         Disposition.objects.bulk_create(made)
         FA.audit(request, 'walk.disposition.write', list=saved.key, n=len(made), voter_keys=sorted({d.voter_key for d in made}))
     return response({'saved': len(made)})
+
+
+@field_write
+def opt_ins(request):
+    """Append only what was explicitly recorded, bound to the saved list's private roster."""
+    params(request, set())
+    body = json_body(request, {'list', 'entries'})
+    if set(body) != {'list', 'entries'}:
+        raise BadRequest('A saved list and entries are required')
+    saved = find_list(body['list'])
+    entries = body['entries']
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENTRIES:
+        raise Refused('Send between 1 and %d opt-in entries at a time.' % MAX_ENTRIES)
+    roster = saved.payload.get(PRIVATE) or {}
+    people, made = {}, []
+    for entry in entries:
+        if (not isinstance(entry, dict) or not {'person_id'} < set(entry)
+                or not set(entry) <= {'person_id', *O.KINDS}):
+            raise BadRequest('An entry needs person_id and at least one opt-in status')
+        person = entry['person_id']
+        if not isinstance(person, str) or person not in roster:
+            raise Refused('Some of those voters are not on this list.')
+        if person in people:
+            raise Refused('Send each person once per opt-in request.')
+        people[person] = roster[person]
+        for kind in O.KINDS:
+            if kind in entry:
+                status = entry[kind]
+                if not isinstance(status, str) or status not in O.STATUSES:
+                    raise Refused('Opt-in status must be unknown, opted_in or opted_out.')
+                made.append(WalkOptInRecord(walk_list=saved, person_id=person,
+                                           voter_key=roster[person], kind=kind, status=status))
+    with transaction.atomic():
+        WalkOptInRecord.objects.bulk_create(made)
+        FA.audit(request, 'walk.opt_in.write', list=saved.key, n=len(made), voter_keys=sorted(set(people.values())))
+        states = O.for_people(people)
+    return response({'saved': len(entries), 'opt_ins': states})

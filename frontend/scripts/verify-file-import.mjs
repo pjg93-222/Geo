@@ -4,10 +4,14 @@ import {importListResponse} from './walk-import-fixture.mjs';
 import {unzipSync,strFromU8} from 'fflate';
 import {createServer} from 'node:http';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {extname,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 
+// The workbook is a private local file: pass its path as the first argument or in TERRIER_IMPORT_WORKBOOK.
+const workbook=process.argv[2]||process.env.TERRIER_IMPORT_WORKBOOK;
+if(!workbook||!existsSync(workbook)){console.error('Usage: node scripts/verify-file-import.mjs <workbook.xlsx> (or set TERRIER_IMPORT_WORKBOOK). '+(workbook?'Not found: '+workbook:'No workbook given.'));process.exit(2);}
 const root=fileURLToPath(new URL('../dist/',import.meta.url));
 const output=fileURLToPath(new URL('../../_build/file-import-verification/',import.meta.url));
 const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png','.mp4':'video/mp4','.woff2':'font/woff2'};
@@ -121,7 +125,7 @@ try{
   assert.equal(Object.keys(hostedZip.files).filter(x=>x.endsWith('.pdf')).length,3);
   hostedExport=false;
   report.checks.push('ZIP rechecks hosted session and omits CSV exports');
-  await page.getByLabel('Upload an address file',{exact:true}).setInputFiles('C:/Users/pgoff/Downloads/CT Door Knock Streets 1.xlsx');
+  await page.getByLabel('Upload an address file',{exact:true}).setInputFiles(workbook);
   await page.getByText(/33 street/).first().waitFor();
   await page.screenshot({path:resolve(output,'workbook-review.png')});
   assert.equal(await page.getByRole('button',{name:'Download all lists ZIP',exact:true}).count(),0);

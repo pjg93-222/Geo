@@ -68,6 +68,8 @@ def prepare_principal(principal, state_root):
 
     This runs only after verified schema backup/migration. A new binding/invitation
     gets its own verified backup; no account, password or role is created here.
+    The approved existing owner is never invited to choose a password and never
+    asked for one (desktop_access.py); only a recipient chooses its own.
     """
     from django.contrib.auth.models import User
     from .models import DesktopPrincipalBinding, Invitation, AuditEvent
@@ -95,15 +97,15 @@ def prepare_principal(principal, state_root):
         if principal.mode == 'existing-owner':
             if not user or str(user.pk) != principal.local_user_id or not user.is_active or not user.is_staff:
                 raise ValueError('The approved existing owner is unavailable')
-            if not user.has_usable_password() and (User.objects.count() != 1 or not user.is_superuser):
-                raise ValueError('First-password setup refuses ambiguous existing accounts')
         if user and (not user.is_active or not user.is_staff):
             raise ValueError('The approved account is disabled or lacks its existing role')
         return binding, user
 
-    from .desktop_access import password_lock_disabled
+    def needs_password(user):
+        return principal.mode != 'existing-owner' and (not user or not user.has_usable_password())
+
     existing, user = inspect()
-    if existing and user and (user.has_usable_password() or password_lock_disabled(principal)):
+    if existing and user and not needs_password(user):
         return None
     result = {'launchPath': None}
 
@@ -118,7 +120,7 @@ def prepare_principal(principal, state_root):
                         principal_id=principal.principal_id, account_identity=principal.account_identity,
                         local_username=principal.local_username, district_id=principal.district_id,
                         mode=principal.mode, user=user)
-                if not user or (not user.has_usable_password() and not password_lock_disabled(principal)):
+                if needs_password(user):
                     path = create_invitation(principal.local_username, administrator=True, reset=user is not None)
                     token = path.partition('=')[2]
                     digest = hashlib.sha256(token.encode()).hexdigest()
@@ -140,7 +142,8 @@ def prepare_principal(principal, state_root):
 def accept_bound_invitation(principal, invitation, user):
     """Called inside the ordinary password acceptance transaction, before writes."""
     binding = binding_for(principal, lock=True)
-    if not binding or binding.invitation_hash != invitation.token_hash or binding.local_username != invitation.username:
+    # The approved existing owner has no password to set, so no invitation can change its account.
+    if not binding or binding.mode == 'existing-owner' or binding.invitation_hash != invitation.token_hash or binding.local_username != invitation.username:
         return None
     if binding.user_id is not None:
         if not user or user.pk != binding.user_id or not invitation.reset:

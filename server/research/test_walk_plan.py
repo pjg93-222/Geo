@@ -57,6 +57,7 @@ from tools import field_labels as FL
 from . import walk_store as W
 from . import walk_testkit as T
 from . import walk_views as V
+from .models import WalkList
 from .terrier_contacts import SourceStoreError
 
 LOOPBACK = dict(HTTP_HOST='localhost')
@@ -963,6 +964,140 @@ class WalkPlanTests(TestCase):
                               (dict(streets='%d:both' % cedar), GOLDEN['streets']),
                               (dict(ss='010'), GOLDEN['area'])):
             self.assertEqual(digest(self.list(**query)), golden, query)
+
+    # ---- voter profiles (tools/profiles.py) ------------------------------------------------------------------
+    # The district's candidate is a Democrat. On spans 1 and 6 (Cedar Heights Dr, p01-p20; precinct W holds p01-p16) the coalition is
+    # the unaffiliated and minor-party people (p05 p06 p08 p11 p16 p19), the Democrats with s of 2/3 or more (p07, s 1.0) and the
+    # Republicans with s in the middle third (p01 p02, s 0.5; p18, s exactly 2/3). Left out: Democrats below 2/3 or with no s
+    # (p03 p04 p09 p10 p13-p15 p20) and Republicans outside the middle third (p12 s 0; p17 s 0.2).
+    COALITION = ('p01', 'p02', 'p05', 'p06', 'p07', 'p08', 'p11', 'p16', 'p18', 'p19')
+    COALITION_W = ('p01', 'p02', 'p05', 'p06', 'p07', 'p08', 'p11', 'p16')            # those in precinct W
+
+    def test_a_profile_of_all_is_no_profile_at_all(self):
+        query = dict(spans='1,6', precinct=PRECINCT_W)
+        plain, named = self.list(**query), self.list(profile='all', **query)
+        self.assertEqual(json.dumps(named, sort_keys=True), json.dumps(plain, sort_keys=True))
+        self.assertEqual(named['query'], {'spans': '1,6', 'precinct': PRECINCT_W})
+        self.assertEqual(json.dumps(self.plan(profile='all'), sort_keys=True), json.dumps(self.plan(), sort_keys=True))
+        self.assertNotIn('profile', self.plan(profile='all'))
+        self.assertEqual(json.dumps(self.trimmed(doors='4', profile='all'), sort_keys=True),       # the door-count trim too
+                         json.dumps(self.trimmed(doors='4'), sort_keys=True))
+
+    def test_the_coalition_list_holds_the_supporters_and_persuadables(self):
+        shown = self.list(spans='1,6', profile='coalition')
+        self.assertEqual(self.voters(shown), set(self.ids(*self.COALITION)))
+        self.assertEqual(shown['totals']['voters'], 10)
+        self.assertEqual(shown['query'], {'spans': '1,6', 'profile': 'coalition'})
+        self.assertEqual(self.voters(self.list(spans='1,6', precinct=PRECINCT_W, fresh='1', profile='coalition')),
+                         set(self.ids(*self.COALITION_W)))
+        whole = self.voters(self.list(ss='010', profile='coalition'))                 # the whole senate district: more people, same rule
+        self.assertTrue(set(self.ids(*self.COALITION)) <= whole and not whole & set(self.ids('p03', 'p12', 'p13', 'p17', 'p20')))
+
+    def test_the_coalition_list_by_street_pick_and_with_a_result_left_out(self):
+        picked = self.voters(self.list(streets='%d:both' % self.cedar(), profile='coalition'))
+        self.assertEqual(picked & set(self.ids(*self.COALITION)), set(self.ids(*self.COALITION)))
+        self.assertFalse(picked & set(self.ids('p03', 'p12', 'p13', 'p17', 'p20')))
+        self.knock('p01')                                                      # the door of p01 and p02
+        self.assertEqual(self.voters(self.trimmed(profile='coalition')), set(self.ids(*self.COALITION_W)) - set(self.ids('p01', 'p02')))
+
+    def test_the_plan_counts_only_the_people_of_the_profile(self):
+        # chd1: p01 p02 p05 p06 p07 p08 p11 on 6 doors (p01 and p02 share one). undecided 0.8 + 0.6 = 1.4; supporter
+        # 0.5 x (0.2 + 0.4) + 4 x 0.5 + 0 = 2.3; identify 2 (p01, p02). chd2: p16 p18 p19 on 3 doors, under the 5 a block needs.
+        for preset, value in (('mixed', 1.4), ('turnout', 2.3), ('identify', 2.0)):
+            row = self.by_span(self.plan(preset=preset, profile='coalition'))[1]
+            self.assertEqual((row['people'], row['doors'], row['value']), (7, 6, value), preset)
+        everyone = self.plan(preset='identify')
+        self.assertEqual((self.by_span(everyone)[1]['people'], self.by_span(everyone)[1]['doors']), (12, 7))
+        profiled = self.plan(preset='identify', profile='coalition')
+        self.assertEqual(profiled['profile'], 'coalition')
+        self.assertNotIn(6, self.by_span(profiled))
+        self.assertIn(6, self.by_span(everyone))
+        self.assertLess(profiled['matched']['people'], everyone['matched']['people'])
+
+    def test_a_list_cut_to_a_door_count_cuts_the_blocks_of_the_profile(self):
+        shown = self.trimmed(profile='coalition', doors='4')
+        self.assertEqual(shown['totals']['doors'], 4)
+        voters = self.voters(shown)
+        self.assertLessEqual(voters, set(self.ids(*self.COALITION_W)))
+        self.assertGreaterEqual(voters, set(self.ids('p01', 'p02', 'p05')))      # the doors of most potential
+
+    def test_a_republican_candidate_gets_supportive_republicans_and_persuadable_democrats(self):
+        # supporters p18 (s 2/3); persuadable Democrats p03 p04 (0.5) p13 p14 p15 (0.4) p20 (none, so 0.5); everyone unaffiliated
+        want = set(self.ids('p18', 'p03', 'p04', 'p13', 'p14', 'p15', 'p20', 'p05', 'p06', 'p08', 'p11', 'p16', 'p19'))
+        with override_settings(DISTRICT={**CANDIDATE, 'party': 'R'}):
+            self.assertEqual(self.voters(self.list(spans='1,6', profile='coalition')), want)
+
+    def test_a_bad_profile_is_refused(self):
+        for value in ('nope', 'COALITION', 'all,coalition', '', 'coalition '):
+            self.list(400, ss='010', profile=value)
+            self.plan(400, profile=value)
+        self.get('/api/v3/walk/list?ss=010&profile=all&profile=coalition', 400)
+        for value in ('nope', 'COALITION', 'coalition '):                      # every unknown key, not only a lower-case one
+            self.assertEqual(self.list(400, ss='010', profile=value)['error'], V.PROFILE_NOT_OFFERED, value)
+            self.assertEqual(self.plan(400, profile=value)['error'], V.PROFILE_NOT_OFFERED, value)
+        self.post('/api/v3/walk/lists', {'title': 'x', 'query': {'ss': '010', 'profile': 'nope'}, 'fingerprint': '0' * 64}, 400)
+
+    def test_a_district_without_a_candidate_offers_only_all(self):
+        with override_settings(DISTRICT=CO):
+            self.assertEqual(self.list(400, ss='010', profile='coalition')['error'], V.PROFILE_NOT_OFFERED)
+            self.assertEqual(self.list(ss='010', profile='all')['query'], {'ss': '010'})
+
+    def test_a_profile_needs_the_support_scores_and_somebody_in_it(self):
+        with override_settings(DATA_DIR=self.world_without_support('nosupport-profile')):
+            self.assertEqual(self.list(503, ss='010', profile='coalition')['error'], 'Support is not built yet.')
+            self.assertEqual(self.list(ss='010', profile='all')['totals']['voters'], self.list(ss='010')['totals']['voters'])
+        with mock.patch.object(V.PR, 'member_fn', return_value=lambda code, s: False):
+            self.assertEqual(self.list(400, spans='1,6', precinct=PRECINCT_W, profile='coalition')['error'], V.PROFILE_EMPTY)
+
+    def test_a_block_with_nobody_in_the_profile_leaves_the_others_listed(self):
+        # only p07 (a Democrat with s 1.0, on span 1) is kept: span 6 has nobody in the profile, and the list is still built
+        with mock.patch.object(V.PR, 'member_fn', return_value=lambda code, s: code == 'D' and s is not None and s > 0.9):
+            self.assertEqual(self.voters(self.list(spans='1,6', profile='coalition')), set(self.ids('p07')))
+            self.assertEqual(self.voters(self.trimmed(doors='4', profile='coalition')), set(self.ids('p07')))
+            self.assertEqual(self.plan(preset='identify', profile='coalition')['matched']['people'], 1)   # one door: not ranked
+
+    def test_a_block_keeps_its_street_name_whatever_the_profile(self):
+        # two of chd1's seven doors are moved to another street: the block is named for the five, even when the profile keeps
+        # only the people at the two
+        with W.walk_store() as store:
+            store.attach_scores()
+            rows, blocks = store.span_plan({'precinct': PRECINCT_W})
+            rows = [dict(row) for row in rows if row['span_id'] == 1]
+            names = store.directory().by_id
+            own = rows[0]['street_id']
+            other = next(street for street in names if names[street].display != names[own].display)
+            moved = sorted({(row['stop_id'], row['unit']) for row in rows})[:2]
+            for row in rows:
+                if (row['stop_id'], row['unit']) in moved:
+                    row['street_id'] = other
+            nobody = SimpleNamespace(doors=frozenset())
+            everyone, _ = V.fold_plan(store, rows, blocks, V.U.terms(), nobody, 0.5, 0.5)
+            profiled, _ = V.fold_plan(store, rows, blocks, V.U.terms(), nobody, 0.5, 0.5,
+                                      keep=lambda row: (row['stop_id'], row['unit']) in moved)
+        self.assertEqual(everyone[1]['street'], V.street_label(names, own))
+        self.assertEqual(profiled[1]['street'], everyone[1]['street'])
+        self.assertEqual(profiled[1]['doors'], 2)
+        self.assertEqual(profiled[1]['people'], sum((row['stop_id'], row['unit']) in moved for row in rows))
+
+    def test_a_profile_list_past_the_ceiling_is_refused_without_counting_the_area(self):
+        with mock.patch.object(V, 'MAX_VOTERS', 3), mock.patch.object(W.Store, 'count_voters', side_effect=AssertionError('counted')):
+            self.assertEqual(self.list(400, spans='1,6', profile='coalition')['error'],
+                             'That is more than 3 voters, too large to build in one list. Choose a smaller area or fewer streets.')
+        with mock.patch.object(V, 'MAX_VOTERS', 3):          # without a profile the fast count still says how many
+            self.assertIn('That is 20 voters', self.list(400, spans='1,6')['error'])
+
+    def test_a_saved_list_keeps_its_profile(self):
+        query = {'spans': '1,6', 'precinct': PRECINCT_W, 'profile': 'coalition'}
+        shown = self.list(**query)
+        saved = self.post('/api/v3/walk/lists', {'title': 'Coalition', 'query': query, 'fingerprint': shown['fingerprint']}, 201)
+        self.assertEqual((saved['query'], saved['changed']), (query, False))
+        key = saved['list']['key']
+        self.assertEqual(WalkList.objects.get(key=key).query, query)
+        self.assertEqual(self.voters(self.get('/api/v3/walk/lists/' + key)), set(self.ids(*self.COALITION_W)))
+        plain = self.post('/api/v3/walk/lists', {'title': 'All', 'query': {**query, 'profile': 'all'},
+                                                 'fingerprint': self.list(spans='1,6', precinct=PRECINCT_W)['fingerprint']}, 201)
+        self.assertNotIn('profile', plain['query'])
+        self.assertEqual(plain['totals']['voters'], 16)
 
     # ---- the printed scores ----------------------------------------------------------------------------------
     def test_a_candidate_district_gets_overall_participation_support_and_potential_as_whole_numbers(self):

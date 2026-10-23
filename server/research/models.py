@@ -72,3 +72,16 @@ class Disposition(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['voter_key', '-recorded_at']), models.Index(fields=['walk_list', 'person_id'])]
+
+
+class WalkOptInRecord(models.Model):
+    """An explicitly recorded administrative opt-in; never a prediction or a visit result."""
+    walk_list = models.ForeignKey(WalkList, on_delete=models.CASCADE, related_name='opt_in_records')
+    person_id = models.CharField(max_length=80)
+    voter_key = models.CharField(max_length=64)
+    kind = models.CharField(max_length=10, choices=[('donor', 'donor'), ('volunteer', 'volunteer')])
+    status = models.CharField(max_length=10, choices=[('unknown', 'unknown'), ('opted_in', 'opted_in'), ('opted_out', 'opted_out')])
+    recorded_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [models.Index(fields=['voter_key', 'kind', '-id'], name='walk_optin_voter_kind_id')]

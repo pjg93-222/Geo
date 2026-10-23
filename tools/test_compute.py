@@ -5,6 +5,7 @@ compute.compose.yaml, the two hashed locks, the build job of .github/workflows/r
     <venv python> -m unittest tools.test_compute          (from the V3 folder)
 """
 import contextlib
+import hashlib
 import io
 import json
 import math
@@ -804,6 +805,8 @@ class RunTests(unittest.TestCase):
         self.seeded = []            # (names, source) of each stage seeding
         self.salts = []             # the $TERRIER_WALK_SALT each build was started with
         self.after_container = None  # a function of B's folder, called once the fake container build has written it
+        self.reviewed = lambda path: 'f' * 40       # reviewed_blob of a committed list: its HEAD blob (a function a test replaces)
+        self.tree = lambda repo: 'a' * 40           # built_tree_head of a clean tree: its HEAD (likewise)
 
     @staticmethod
     def write_step(out, step, stamp, rows, fts=None):
@@ -812,8 +815,9 @@ class RunTests(unittest.TestCase):
             (out / 'area_scores_shown.csv').write_bytes(b'area,score\n1,2\n')
             (out / 'area_scores_shown.manifest.json').write_bytes(SHOWN_MANIFEST.encode())
         elif step == 'walk':      # the walk store: a meta table that carries the stamps, and the peak memory only Windows can measure
-            make_walk_store(out / 'walk.sqlite3', 5, built=stamp, qa={'rows': 5, 'timing': {'total': stamp},
-                                                                       'peak_memory_mb': None if stamp == 'c' else 1234})
+            tick = sum(map(ord, stamp))           # a distinct ISO time and timing per build: the kinds of stamp the volatile list may leave out
+            make_walk_store(out / 'walk.sqlite3', 5, built='2026-10-18T10:00:%02d+00:00' % (tick % 60),
+                            qa={'rows': 5, 'timing': {'total': float(tick)}, 'peak_memory_mb': None if stamp == 'c' else 1234})
         elif step == 'ingest':    # ingest and extend stamp created_at in manifest.json: the zips differ between the two Windows builds
             make_zip(out / 'ingest' / 'k1.zip', {'manifest.json': {'created_at': stamp, 'snapshot': 'k1'}, 'rows.json': [1, 2]})
             (out / 'ingest' / 'ingest_receipt.json').write_bytes(b'{"rows": 2}')
@@ -850,7 +854,9 @@ class RunTests(unittest.TestCase):
         return [mock.patch.object(P, 'windows_build', windows), mock.patch.object(P, 'container_build', container),
                 mock.patch.object(P, 'windows_fingerprint', lambda pythons, repo, images: {i: {'python': 'win'} for i in images}),
                 mock.patch.object(P, 'container_fingerprint', lambda images, repo, out, run_id: {i: {'python': 'box'} for i in images}),
-                mock.patch.object(P, 'seed_stage', lambda images, repo, out, run_id, district, source, names: self.seeded.append((tuple(names), str(source))))]
+                mock.patch.object(P, 'seed_stage', lambda images, repo, out, run_id, district, source, names: self.seeded.append((tuple(names), str(source)))),
+                mock.patch.object(P, 'reviewed_blob', lambda path: self.reviewed(path)),
+                mock.patch.object(P, 'built_tree_head', lambda repo: self.tree(repo))]
 
     def main(self, *args, b_rows=ROWS, scratch=None, image=EXPLICIT, score_image=SCORE_EXPLICIT, environ=None):
         """`image`, `score_image`: the --image / --score-image flags (None: no flag). `environ`: the process environment's
@@ -1130,6 +1136,72 @@ class RunTests(unittest.TestCase):
         self.calls.clear()
         self.main('--steps', 'bundle', scratch=self.root / 'two')
         self.assertEqual([c[0] for c in self.calls], ['windows', 'windows', 'container'])      # the default is still A1, A2, B
+
+    def test_single_reference_leaves_out_the_listed_store_stamps_and_records_the_list(self):
+        code, text = self.main('--single-reference', '--steps', 'walk', '--negative-control')
+        self.assertEqual(code, 0, text)
+        self.assertEqual([c[0] for c in self.calls], ['windows', 'container'])
+        self.assertRegex(text, r'PASS  walk\.sqlite3 .*fixed volatile list \(left out\): meta\[built_utc, qa\.peak_memory_mb, qa\.timing\.\*\]')
+        self.assertRegex(text, r'PASS  negative control walk\.sqlite3 .*detected')
+        self.assertRegex(text, r'PASS  negative control walk\.sqlite3 \(beside the list\) +in meta: qa\.rows changed beside the listed fields: detected')
+        self.assertRegex(text, r'volatile list tools/compute_volatile\.json: \d+ entries, sha256 [0-9a-f]{64}, HEAD blob f{40}; tree .* HEAD a{40}')
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['volatile_list'], {'path': 'tools/compute_volatile.json', 'entries': len(P.load_volatile()['entries']),
+                                                   'sha256': hashlib.sha256(P.VOLATILE_FILE.read_bytes()).hexdigest(), 'head_blob': 'f' * 40})
+        self.assertEqual(report['repo_head'], 'a' * 40)
+
+    def test_single_reference_stops_before_building_when_the_list_is_not_committed_or_cannot_be_read(self):
+        def refuse(path):
+            raise ValueError('tools/compute_volatile.json is not committed (git status --porcelain is not empty)')
+        self.reviewed = refuse
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--steps', 'walk')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('is not committed', errors.getvalue())
+        self.assertEqual(self.calls, [])
+        self.reviewed = lambda path: 'f' * 40
+        errors = io.StringIO()
+        with mock.patch.object(P, 'VOLATILE_FILE', self.root / 'gone.json'), self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--steps', 'walk')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('cannot read the volatile list', errors.getvalue())
+        self.assertEqual(self.calls, [])
+
+    def test_two_run_mode_never_reads_the_list(self):
+        def untouched(path):
+            raise AssertionError('the volatile list was read')
+        self.reviewed = untouched
+        code, text = self.main('--steps', 'walk')
+        self.assertEqual(code, 0, text)
+        self.assertEqual([c[0] for c in self.calls], ['windows', 'windows', 'container'])
+        self.assertRegex(text, r'PASS  walk\.sqlite3 .*run-to-run variance \(left out\): meta\[built_utc, qa\.peak_memory_mb, qa\.timing\]')
+        report = json.loads((self.root / 'scratch' / 'parity_report.json').read_text(encoding='utf-8'))
+        self.assertNotIn('volatile_list', report)
+        self.assertIsNone(report['repo_head'])
+
+    def test_single_reference_stops_before_building_on_a_dirty_tree_a_moved_writer_or_skip_container(self):
+        def dirty(repo):
+            raise ValueError('the tree %s to build has 2 uncommitted path(s) (git status --porcelain)' % repo)
+        self.tree = dirty
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--steps', 'walk')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('uncommitted', errors.getvalue())
+        self.tree = lambda repo: 'a' * 40
+        (self.root / 'tree').mkdir()                                      # a tree whose writers are not the lines the list cites
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--steps', 'walk', '--repo', str(self.root / 'tree'))
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('no longer holds the needle', errors.getvalue())
+        errors = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(errors):
+            self.main('--single-reference', '--skip-container', scratch=self.root / 'skip')
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('--skip-container', errors.getvalue())
+        self.assertEqual(self.calls, [])
 
     def test_refusals(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -2164,6 +2236,370 @@ class ZipAndWalkCompareTests(unittest.TestCase):
                 mock.patch.object(P, 'compose', lambda *a, **k: composed.append(a[4:])):
             P.seed_stage({'score': SCORE_EXPLICIT}, REPO, self.root / 'out', 'B-1', S.D.get('co-05'), source, ['scores.sqlite3'])
         self.assertEqual(composed, [('run', '--rm', 'terrier-score', 'fingerprint')])        # compose makes it, so it carries compose's labels
+
+
+class VolatileListTests(unittest.TestCase):
+    """--single-reference's fixed volatile list (tools/compute_volatile.json, D-242): which stamps of a store it leaves out, and what it never
+    can. Tiny synthetic stores shaped like street, scores and walk; the list under test is the committed one."""
+
+    LIST = P.load_volatile()
+    STAMP, LATER = '2026-10-18T10:00:00+00:00', '2026-10-18T11:30:00+00:00'
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def put(self, label, store, table, cells, rows=(('1', 'a'), ('2', 'b'))):
+        """`store` in the folder `label`: a person table and a key/value `table` holding `cells` {key: cell as stored}."""
+        path = self.root / label / store
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.executescript('CREATE TABLE person (id TEXT PRIMARY KEY, name TEXT); CREATE TABLE %s (key TEXT PRIMARY KEY, value TEXT);' % table)
+            connection.executemany('INSERT INTO person VALUES (?, ?)', rows)
+            connection.executemany('INSERT INTO %s VALUES (?, ?)' % table, list(cells.items()))
+
+    def judge(self, store, table, windows, container, rows=None, volatile=LIST):
+        """compare_store the way --single-reference calls it: A2 is A1."""
+        self.put('A1', store, table, windows)
+        self.put('B', store, table, container, **({'rows': rows} if rows else {}))
+        return P.compare_store(store, self.root / 'A1', self.root / 'A1', self.root / 'B', volatile)
+
+    # street, scores, walk: the cells their writers produce, with the stamp of one build and of another
+
+    @staticmethod
+    def iso(stamp):
+        """A distinct ISO-8601 time for a short label ('t1'); an ISO time stays as it is."""
+        return stamp if 'T' in stamp else '2026-10-18T10:00:%02d+00:00' % (sum(map(ord, stamp)) % 60)
+
+    def street(self, stamp, **extra):
+        return {'schema_version': '1', 'source_sha256': json.dumps('abc'), 'created_at_utc': json.dumps(self.iso(stamp)), **extra}
+
+    @staticmethod
+    def w1(seconds, **fields):
+        return json.dumps({'matches': 3, 'rows_checked': 3, 'seconds': seconds, 'source_sha256': 'abc', 'status': 'verified', **fields},
+                          separators=(',', ':'), sort_keys=True)
+
+    def scores(self, stamp, seconds, **extra):
+        return {'schema': json.dumps('scores-v3'), 'built_utc': json.dumps(self.iso(stamp)), 'w1': self.w1(seconds), **extra}
+
+    def walk(self, stamp, timing=None, peak=1234, **qa):
+        return {'schema': 'walk-v1', 'built_utc': self.iso(stamp), 'n_people': '5',
+                'qa': json.dumps({'rows': 5, 'timing': timing or {'checksums': 1.5, 'total': 9.0}, 'peak_memory_mb': peak, **qa}, sort_keys=True)}
+
+    # the list itself
+
+    def test_the_committed_list_names_the_store_stamps_and_cites_the_line_that_writes_each(self):
+        entries = self.LIST['entries']
+        self.assertEqual([(e['store'], e['table'], e['key'], e['pointer']) for e in entries],
+                         [('street.sqlite3', 'metadata', 'created_at_utc', ''), ('scores.sqlite3', 'metadata', 'built_utc', ''),
+                          ('scores.sqlite3', 'metadata', 'w1', '/seconds'), ('walk.sqlite3', 'meta', 'built_utc', ''),
+                          ('walk.sqlite3', 'meta', 'qa', '/timing/*'), ('walk.sqlite3', 'meta', 'qa', '/peak_memory_mb')])
+        P.check_writers(entries, REPO)                                      # every needle is on its cited line in this tree
+        self.assertEqual(self.LIST['sha256'], hashlib.sha256(P.VOLATILE_FILE.read_bytes()).hexdigest())
+        self.assertEqual(self.LIST['rel'], 'tools/compute_volatile.json')
+
+    def refused(self, *entries, raw=None):
+        path = self.root / 'list.json'
+        path.write_text(raw if raw is not None else json.dumps({'schema': 1, 'entries': list(entries)}), encoding='utf-8')
+        with self.assertRaises(ValueError) as caught:
+            P.load_volatile(path)
+        return str(caught.exception)
+
+    def test_a_list_that_could_reach_more_than_a_stamp_is_refused(self):
+        good = dict(self.LIST['entries'][0])
+        for store in ('bundle-out/k.zip', 'k.zip', 'density.json', 'area_scores_shown.csv', 'area_scores_shown.manifest.json', 'k.zip.sha256',
+                      'ingest_receipt.json', '*.sqlite3', 'other.sqlite3'):
+            self.assertIn('not a SQLite store of a build step', self.refused({**good, 'store': store}), store)
+        self.assertIn('not a key/value table', self.refused({**good, 'table': 'person'}))
+        self.assertIn('one exact key', self.refused({**good, 'key': '*'}))
+        self.assertIn('one exact key', self.refused({**good, 'key': ''}))
+        self.assertIn('not "" or a JSON pointer', self.refused({**good, 'pointer': '/*'}))           # nothing but wildcards
+        self.assertIn('not "" or a JSON pointer', self.refused({**good, 'pointer': '/*/*'}))
+        self.assertIn('not "" or a JSON pointer', self.refused({**good, 'pointer': 'seconds'}))
+        self.assertIn('needs a writer', self.refused({**good, 'writer': 'build_street.py'}))
+        self.assertIn('needs a writer', self.refused({**good, 'needle': ''}))
+        self.assertIn('needs a string', self.refused({k: v for k, v in good.items() if k != 'writer'}))
+        self.assertIn('or_null', self.refused({**good, 'or_null': 'object'}))
+        self.assertIn('kind that is not one of', self.refused({**good, 'kind': 'wall'}))
+        pointed = self.LIST['entries'][2]                                                              # a pointer needs the writer's dump format
+        self.assertIn('needs dumps', self.refused({k: v for k, v in pointed.items() if k != 'dumps'}))
+        self.assertIn('needs dumps', self.refused({**pointed, 'dumps': 'pretty'}))
+        self.assertIn('listed twice', self.refused(good, good))
+        self.assertIn('no entries', self.refused())
+        self.assertIn('cannot read', self.refused(raw='not json'))
+        with self.assertRaises(ValueError):
+            P.load_volatile(self.root / 'missing.json')
+
+    # the masking
+
+    def test_the_listed_stamps_of_street_scores_and_walk_pass_and_are_named(self):
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), self.street(self.LATER))
+        self.assertTrue(ok, detail)
+        self.assertIn('fixed volatile list (left out): metadata[created_at_utc]', detail)
+        ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), self.scores(self.LATER, 232.5))
+        self.assertTrue(ok, detail)
+        self.assertIn('fixed volatile list (left out): metadata[built_utc, w1.seconds]', detail)
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('2026-10-18T10:00:00.1+00:00'),
+                                self.walk('2026-10-18T11:30:00.2+00:00', timing={'checksums': 3.5, 'total': 40.0}, peak=None))
+        self.assertTrue(ok, detail)
+        self.assertIn('fixed volatile list (left out): meta[built_utc, qa.peak_memory_mb, qa.timing.*]', detail)
+
+    def test_equal_stamps_leave_nothing_out(self):
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), self.street(self.STAMP))
+        self.assertTrue(ok, detail)
+        self.assertIn('fixed volatile list (left out): none', detail)
+
+    def test_without_the_list_or_without_an_entry_for_the_store_a_stamp_still_fails(self):
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), self.street(self.LATER), volatile=None)
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata'))
+        ok, detail = self.judge('roads.sqlite3', 'metadata', {'built_utc': json.dumps(self.STAMP)}, {'built_utc': json.dumps(self.LATER)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata'))      # roads has no entry
+        ok, detail = self.judge('street.sqlite3', 'metadata', {'built_utc': json.dumps(self.STAMP)}, {'built_utc': json.dumps(self.LATER)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[built_utc]'))      # a key of another store
+        ok, detail = self.judge('street.sqlite3', 'meta', {'created_at_utc': json.dumps(self.STAMP)}, {'created_at_utc': json.dumps(self.LATER)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta'))            # a table of another store
+
+    def test_the_store_is_found_by_its_file_name_in_a_district_folder(self):
+        self.put('A1', 'or-05/street.sqlite3', 'metadata', self.street(self.STAMP))
+        self.put('B', 'or-05/street.sqlite3', 'metadata', self.street(self.LATER))
+        ok, detail = P.compare('or-05/street.sqlite3', self.root / 'A1', self.root / 'A1', self.root / 'B', self.LIST)
+        self.assertTrue(ok, detail)
+
+    def test_a_real_row_difference_fails_beside_a_masked_stamp(self):
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), self.street(self.LATER), rows=(('1', 'a'), ('2', 'c')))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): person'))          # the stamp is explained, the row is not
+
+    def test_an_unlisted_metadata_key_fails_even_beside_a_listed_one(self):
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP, source_name='"a.csv"'),
+                                self.street(self.LATER, source_name='"b.csv"'))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[source_name]'))
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), {**self.street(self.LATER), 'source_name': '"b.csv"'})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[source_name]'))      # a key only in B
+        ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), {k: v for k, v in self.street(self.LATER).items()
+                                                                                         if k != 'created_at_utc'})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[created_at_utc]'))      # the stamp itself missing
+
+    def test_only_the_listed_field_of_a_json_value_is_left_out(self):
+        ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), {**self.scores(self.STAMP, 61.0), 'w1': self.w1(61.0, matches=2)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'))
+        ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), {**self.scores(self.STAMP, 61.0), 'w1': self.w1(61.0, extra=1)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'))      # a new field is a shape change
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', rows=6))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', timing={'checksums': 3.5}))      # another set of phases
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), {**self.walk('t2'), 'n_people': '6'})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[n_people]'))
+
+    def test_a_listed_value_must_have_the_same_type_on_both_sides(self):
+        for container in (json.dumps(None), json.dumps(1.5), '2026-10-18T11:30:00+00:00'):           # null, a number, a bare text against a JSON string
+            ok, detail = self.judge('street.sqlite3', 'metadata', self.street(self.STAMP), {**self.street(self.LATER), 'created_at_utc': container})
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[created_at_utc]'), container)
+        ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), {**self.scores(self.STAMP, 61.0), 'w1': self.w1('61s')})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', timing={'checksums': 'x', 'total': 9.0}))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', peak='big'))      # or_null takes a number or null, nothing else
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1', peak=None), self.walk('t2', peak=2048))          # null on the Windows side is the same entry
+        self.assertTrue(ok, detail)
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('2026-10-18T10:00:00+00:00'), {**self.walk('x'), 'built_utc': json.dumps('t2')})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[built_utc]'))      # raw text against a JSON string
+
+    def test_a_writer_that_moved_is_found_by_the_needle_check(self):
+        entry = self.LIST['entries'][0]
+        path, line = entry['writer'].rsplit(':', 1)
+        lines = (REPO / path).read_text(encoding='utf-8').splitlines()
+        tree = self.root / 'tree'
+        (tree / path).parent.mkdir(parents=True)
+        (tree / path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        P.check_writers([entry], tree)                                                 # the same file: holds
+        for edited in (['# one more line'] + lines, lines[:int(line) - 1]):            # the line moved down; the file ends before it
+            (tree / path).write_text('\n'.join(edited) + '\n', encoding='utf-8')
+            with self.assertRaises(ValueError) as caught:
+                P.check_writers([entry], tree)
+            self.assertIn('no longer holds the needle', str(caught.exception))
+        for other in (self.root / 'empty', tree):                                      # no such file; line 0
+            with self.assertRaises(ValueError):
+                P.check_writers([{**entry, 'writer': entry['writer'] if other.name == 'empty' else path + ':0'}], other)
+
+    def test_the_text_around_a_masked_field_is_the_writers_own_text(self):
+        good = self.w1(61.0)                 # {"matches":3,"rows_checked":3,"seconds":61.0,"source_sha256":"abc","status":"verified"}
+        variants = {
+            'spacing': good.replace(':3,', ': 3,', 1),
+            'number spelling beside the field': good.replace('"matches":3', '"matches":3E0'),
+            'number spelling of the field': good.replace('61.0', '6.1e1'),
+            'escape': good.replace('"abc"', '"\\u0061bc"'),
+            'key order': '{"rows_checked":3,"matches":3,' + good.split('"matches":3,"rows_checked":3,')[1],
+            'duplicate key': good.replace('"matches":3,', '"matches":3,"matches":3,'),
+            'NaN': good.replace('61.0', 'NaN'),
+            'Infinity': good.replace('61.0', 'Infinity'),
+        }
+        windows = self.scores(self.STAMP, 60.0)
+        failed = (False, 'B differs from the Windows build in table(s): metadata[w1]')
+        for name, text in variants.items():
+            self.assertNotEqual(text, good, name)
+            self.assertEqual(self.judge('scores.sqlite3', 'metadata', windows, {**windows, 'w1': text}), failed, name)
+            self.assertEqual(self.judge('scores.sqlite3', 'metadata', {**windows, 'w1': text}, {**windows, 'w1': good}), failed, name + ' (Windows side)')
+        # the walk store's qa is dumped with sort_keys and default separators, the street cell with neither: each entry names its own format
+        qa = json.loads(self.walk('t1')['qa'])
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), {**self.walk('t2'), 'qa': json.dumps(qa, separators=(',', ':'), sort_keys=True)})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+
+    def test_a_listed_value_must_look_like_its_kind(self):
+        sound = {'created_at_utc': json.dumps(self.STAMP)}
+        for other in ('soon', '', '1.5'):                                               # a clock holds an ISO-8601 time on both sides
+            for windows, container in ((sound, {'created_at_utc': json.dumps(other)}), ({'created_at_utc': json.dumps(other)}, sound),
+                                       ({'created_at_utc': json.dumps(other)}, {'created_at_utc': json.dumps(other + ' ')})):
+                ok, detail = self.judge('street.sqlite3', 'metadata', windows, container)
+                self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[created_at_utc]'), other)
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), {**self.walk('t2'), 'built_utc': 'soon'})
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[built_utc]'))
+        for seconds in (-1.0, True, '5'):                                               # a duration is a number of at least 0
+            ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), {**self.scores(self.STAMP, 61.0), 'w1': self.w1(seconds)})
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'), seconds)
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', timing={'checksums': -0.5, 'total': 9.0}))
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('walk.sqlite3', 'meta', self.walk('t1'), self.walk('t2', peak=-5))                  # a measurement likewise
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): meta[qa]'))
+        ok, detail = self.judge('scores.sqlite3', 'metadata', self.scores(self.STAMP, 0.0), self.scores(self.LATER, 0.5))      # 0 is fine
+        self.assertTrue(ok, detail)
+
+    def test_the_control_beside_the_list_changes_what_the_list_does_not_name_and_the_comparison_sees_it(self):
+        cases = (('street.sqlite3', 'metadata', self.street(self.STAMP), 'an unlisted key', 'metadata[zz_unlisted_control]'),
+                 ('scores.sqlite3', 'metadata', self.scores(self.STAMP, 60.0), 'w1.matches', 'metadata[w1]'),
+                 ('walk.sqlite3', 'meta', self.walk(self.STAMP), 'qa.rows', 'meta[qa]'))
+        for store, table, cells, what, named in cases:
+            self.put('A1', store, table, cells)
+            self.put('B', store, table, cells)
+            control = self.root / 'NC'
+            (control / store).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.root / 'B' / store, control / store)
+            self.assertTrue(P.compare_store(store, self.root / 'A1', self.root / 'A1', control, self.LIST)[0], store)      # equal until changed
+            entries = [e for e in self.LIST['entries'] if e['store'] == store]
+            self.assertEqual(P.change_beside_listed(control / store, entries), (table, what))
+            ok, detail = P.compare_store(store, self.root / 'A1', self.root / 'A1', control, self.LIST)
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): ' + named))
+            self.assertTrue(P.control_detected(ok, detail, table))
+
+    def test_the_same_document_in_another_text_is_not_a_stamp(self):
+        windows = {**self.scores(self.STAMP, 60.0), 'w1': '{"matches":3,"seconds":60.0,"status":"verified"}'}
+        ok, detail = self.judge('scores.sqlite3', 'metadata', windows, {**windows, 'w1': '{"status":"verified","matches":3,"seconds":61.0}'})        # key order
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'))
+        ok, detail = self.judge('scores.sqlite3', 'metadata', windows, {**windows, 'w1': '{"matches":3,"seconds":60.0,"status":"verified" }'})        # spacing only
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata[w1]'))
+
+    def test_a_table_that_is_not_key_value_is_never_masked(self):
+        for label, value in (('A1', 't1'), ('B', 't2')):
+            path = self.root / label / 'street.sqlite3'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.executescript('CREATE TABLE metadata (stamp TEXT); INSERT INTO metadata VALUES ("%s");' % value)
+        ok, detail = P.compare_store('street.sqlite3', self.root / 'A1', self.root / 'A1', self.root / 'B', self.LIST)
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata'))
+
+    def test_the_byte_gates_never_read_the_list(self):
+        same = {'manifest.json': {'snapshot': 's'}, 'rows.json': [1, 2]}
+        make_zip(self.root / 'A1' / 'bundle.zip', {**same, 'created_at': 't1'}, stamp=(2026, 10, 1, 0, 0, 0))
+        make_zip(self.root / 'B' / 'bundle.zip', {**same, 'created_at': 't2'}, stamp=(2026, 10, 1, 0, 0, 0))
+        (self.root / 'A1' / 'density.json').write_bytes(b'{"seconds": 1}')
+        (self.root / 'B' / 'density.json').write_bytes(b'{"seconds": 2}')
+        # even a list that names them (one this loader would refuse) masks nothing: compare_zip and compare_file do not take a list
+        forged = {'entries': [{'store': 'bundle.zip', 'table': 'metadata', 'key': 'created_at', 'pointer': '', 'writer': 'x:1', 'kind': 'clock', 'needle': 'x'},
+                              {'store': 'density.json', 'table': 'metadata', 'key': 'seconds', 'pointer': '', 'writer': 'x:1', 'kind': 'clock', 'needle': 'x'}]}
+        for name in ('bundle.zip', 'density.json'):
+            ok, detail = P.compare(name, self.root / 'A1', self.root / 'A1', self.root / 'B', forged)
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build byte for byte'), name)
+            ok, detail = P.compare(name, self.root / 'A1', self.root / 'A1', self.root / 'B', self.LIST)
+            self.assertEqual((ok, detail), (False, 'B differs from the Windows build byte for byte'), name)
+
+    def test_two_run_mode_is_unchanged_and_ignores_the_list(self):
+        for label, stamp in (('A1', 't1'), ('A2', 't2'), ('B', 't3')):
+            self.put(label, 'street.sqlite3', 'metadata', self.street(stamp))
+        folders = [self.root / label for label in ('A1', 'A2', 'B')]
+        ok, detail = P.compare('street.sqlite3', *folders)
+        self.assertTrue(ok, detail)
+        self.assertIn('run-to-run variance (left out): metadata[created_at_utc]', detail)           # measured from A1 against A2, as before
+        self.put('A2', 'street.sqlite3', 'metadata', self.street('t1'))                            # a stable stamp on Windows ...
+        ok, detail = P.compare('street.sqlite3', *folders)                                          # ... that B does not carry fails, listed or not
+        self.assertEqual((ok, detail), (False, 'B differs from the Windows build in table(s): metadata'))
+
+
+@unittest.skipUnless(shutil.which('git'), 'git is not on PATH')
+class ReviewedListTests(unittest.TestCase):
+    """reviewed_blob: a list is reviewed when it is committed and clean, in a throwaway repository."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.repo = Path(self.temporary.name)
+        self.list = self.repo / 'tools' / 'compute_volatile.json'
+        self.list.parent.mkdir()
+        self.git('init', '-q')
+
+    def git(self, *args):
+        done = subprocess.run(['git', '-c', 'core.autocrlf=false', '-c', 'user.name=t', '-c', 'user.email=t@t.test', '-C', str(self.repo), *args],
+                              capture_output=True, text=True, check=True)
+        return done.stdout.strip()
+
+    def commit(self, text='{"entries": [1]}\n'):
+        self.list.write_bytes(text.encode('utf-8'))
+        self.git('add', '--', 'tools/compute_volatile.json')
+        self.git('commit', '-q', '-m', 'list')
+
+    def refused(self):
+        with self.assertRaises(ValueError) as caught:
+            P.reviewed_blob(self.list, self.repo)
+        return str(caught.exception)
+
+    def test_a_committed_clean_list_returns_its_head_blob(self):
+        self.commit()
+        self.assertEqual(P.reviewed_blob(self.list, self.repo), self.git('rev-parse', 'HEAD:tools/compute_volatile.json'))
+
+    def test_an_untracked_staged_or_edited_list_is_refused(self):
+        self.list.write_text('{}', encoding='utf-8')
+        self.assertIn('is not committed', self.refused())                                  # untracked
+        self.git('add', '--', 'tools/compute_volatile.json')
+        self.assertIn('is not committed', self.refused())                                  # staged, no commit
+        self.git('commit', '-q', '-m', 'list')
+        self.assertTrue(P.reviewed_blob(self.list, self.repo))
+        self.list.write_text('{"entries": []}', encoding='utf-8')
+        self.assertIn('is not committed', self.refused())                                  # edited after the commit
+        self.git('add', '--', 'tools/compute_volatile.json')
+        self.assertIn('is not committed', self.refused())                                  # edited and staged
+
+    def test_built_tree_head_wants_a_clean_tree(self):
+        self.commit()
+        self.assertEqual(P.built_tree_head(self.repo), self.git('rev-parse', 'HEAD'))
+        (self.repo / 'other.py').write_text('x', encoding='utf-8')                         # an untracked file
+        with self.assertRaises(ValueError) as caught:
+            P.built_tree_head(self.repo)
+        self.assertIn('uncommitted', str(caught.exception))
+        (self.repo / 'other.py').unlink()
+        self.list.write_bytes(b'{"entries": [2]}\n')                                      # a tracked file edited
+        with self.assertRaises(ValueError):
+            P.built_tree_head(self.repo)
+        with tempfile.TemporaryDirectory() as elsewhere, self.assertRaises(ValueError):    # no repository at all
+            P.built_tree_head(elsewhere)
+
+    def test_a_list_hidden_from_git_status_is_still_refused(self):
+        self.commit()
+        self.git('update-index', '--assume-unchanged', 'tools/compute_volatile.json')
+        self.list.write_text('{"entries": [2]}\n', encoding='utf-8')
+        self.assertEqual(self.git('status', '--porcelain', '--', 'tools/compute_volatile.json'), '')      # git status is told to look away
+        self.assertIn('differs from HEAD', self.refused())
+
+    def test_an_ignored_list_and_a_list_outside_the_repository_are_refused(self):
+        (self.repo / '.gitignore').write_text('tools/\n', encoding='utf-8')
+        self.list.write_text('{}', encoding='utf-8')
+        self.assertEqual(self.git('status', '--porcelain', '--', 'tools/compute_volatile.json'), '')
+        with self.assertRaises(ValueError):                                                 # HEAD holds no such file (and no commit at all)
+            P.reviewed_blob(self.list, self.repo)
+        with self.assertRaises(ValueError) as caught:
+            P.reviewed_blob(Path(self.temporary.name).parent / 'elsewhere.json', self.repo)
+        self.assertIn('not in the repository', str(caught.exception))
 
 
 if __name__ == '__main__':

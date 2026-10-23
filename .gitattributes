@@ -1,1 +1,2 @@
 server/research/access_gate.py text eol=lf
+tools/compute_volatile.json text eol=lf

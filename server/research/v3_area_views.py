@@ -23,6 +23,7 @@ from django.conf import settings
 from tools import area_layers as AL
 from tools import districts as D
 from tools import field_labels as FL
+from tools import profiles as PR
 from tools import scores_schema as S
 
 from . import scoresdb
@@ -152,7 +153,7 @@ def features(request):
         'name': d['candidate'], 'party': d['party'], 'party_label': FL.PARTY_CODES[d['party']], 'race_mode': d['race_mode'],
         'primary_universe': d['primary_universe'], 'signals': d['support']['signals']}
     roi = d['roi'] and {**d['roi'], 'presets': [{'id': i, 'label': FL.ROI_PRESETS[i][0], 'formula': FL.ROI_PRESETS[i][1]}
-                                               for i in d['roi']['presets']]}
+                                               for i in d['roi']['presets']], 'profiles': PR.listing(d['party'])}
     industries = [{'id': i, 'label': FL.INDUSTRIES[i]['label'],
                    'fields': [{'name': n, 'label': t, 'weight': w} for n, t, w in FL.INDUSTRIES[i]['fields']]}
                   for i in d['industries']]

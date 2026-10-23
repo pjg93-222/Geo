@@ -1,0 +1,771 @@
+# Installer acceptance for the published Terrier 1.0.7 unsigned Windows installer.
+# Repository file: .github/workflows/desktop-installer-acceptance.yml (pjg93-222/Geo).
+#
+# Downloads the EXISTING release asset (public URL, no token), verifies its sha256, records the
+# expected NotSigned Authenticode status, compares the NSIS payload with the published preview zip
+# (7-Zip listings: file set, size, CRC32; the zip's sha256 is verified first), installs it silently per-user on a disposable hosted
+# runner, launches the installed exe once with --melange-isolated-profile and once in production
+# mode, checks the access screen (no grant: no backend, no listening port), closes it by recorded
+# PID only, uninstalls silently and records what remains. Nothing is compiled, no release or tag is
+# created, no secret is used, and the only artifact is acceptance-terrier.json (no binaries).
+# Out of scope: approved functions behind the access gate (no grant) and auto-update (unsigned).
+#
+# Triggers: a push to main that changes this file, or workflow_dispatch. This repository's default branch
+# is main, so dispatch is available once the file is on main.
+name: desktop-installer-acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/desktop-installer-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-installer-acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      APP_ID: terrier
+      APP_NAME: Terrier
+      APP_VERSION: '1.0.7'
+      RELEASE_REPO: pjg93-222/Geo
+      RELEASE_TAG: desktop-preview-v1.0.7
+      ASSET: Terrier-1.0.7-win-x64-unsigned-installer.exe
+      # From desktop-preview-v1.0.7 (build run 39081008873, target S 78c45b710): SHA256SUMS.txt = provenance artifacts = API digests.
+      ASSET_SHA256: 7390fe7826538a717ef8cdd11d7636b90fb6a0edfce84a02b64aa9acde76ad1d
+      ZIP: Terrier-1.0.7-win-x64-unsigned-preview.zip
+      ZIP_SHA256: d706f182c77201e3f869c4f37fb2e7d1d86e917b19ca60d8c76ee8e5dde92507
+      ZIP_EXPECTED_NOTE: 'none: exact parity (the hosted build zipped win-unpacked before any smoke)'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Download, verify, install, launch, close by PID, uninstall
+        run: |
+          # Installer acceptance for one published unsigned desktop installer. No build, no grant, no update.
+          # Inputs come only from the job env (APP_ID, APP_NAME, APP_VERSION, RELEASE_REPO, RELEASE_TAG, ASSET, ASSET_SHA256).
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $app = $env:APP_ID; $name = $env:APP_NAME; $version = $env:APP_VERSION; $aumid = "org.melange.desktop.$app"
+          $root = Join-Path $env:RUNNER_TEMP 'acc'
+          $outDir = Join-Path $env:RUNNER_TEMP 'acceptance'
+          $jsonPath = Join-Path $outDir "acceptance-$app.json"
+          New-Item -ItemType Directory -Force -Path $root, $outDir | Out-Null
+          $installer = Join-Path $root $env:ASSET
+          $requestedDir = Join-Path $root "program\$name"
+          $isolatedRoot = Join-Path $root 'iso'
+          $stateRoot = Join-Path $env:USERPROFILE 'Documents\MelangeApplicationState'
+          $prodProfile = Join-Path $stateRoot $app
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+          $uninstallRoots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+
+          $obs = [ordered]@{
+            schema = 'melange-installer-acceptance-1'
+            app = $app; product = $name; version = $version
+            release = [ordered]@{ repository = $env:RELEASE_REPO; tag = $env:RELEASE_TAG; asset = $env:ASSET; expectedSha256 = $env:ASSET_SHA256 }
+            run = [ordered]@{ repository = $env:GITHUB_REPOSITORY; sha = $env:GITHUB_SHA; ref = $env:GITHUB_REF; event = $env:GITHUB_EVENT_NAME; runId = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; imageOS = $env:ImageOS; imageVersion = $env:ImageVersion; startedAt = (Get-Date).ToUniversalTime().ToString('o') }
+            outOfScope = @('approved functions behind the access gate: no grant is issued', 'auto-update: the build is unsigned and the native updater is fail-closed')
+            checks = [ordered]@{}
+            observations = [ordered]@{}
+          }
+          $failed = New-Object System.Collections.Generic.List[string]
+          $unverified = New-Object System.Collections.Generic.List[string]
+          function Check([string]$id, [bool]$ok, $detail) {
+            $obs.checks[$id] = [ordered]@{ ok = $ok; detail = $detail }
+            if ($ok) { Write-Host "PASS $id" } else { $failed.Add($id); Write-Host "::error title=$id::$(ConvertTo-Json $detail -Compress -Depth 5)" }
+          }
+          function Note([string]$id, $value) { $obs.observations[$id] = $value }
+          # Phase evidence: needs_request only when the access screen text was read; no direct evidence is 'unverified' (neither pass nor fail).
+          function PhaseCheck([string]$id, $launch) {
+            if ($launch.accessPhase -eq 'unobserved') {
+              $obs.checks[$id] = [ordered]@{ ok = $null; status = 'unverified'; detail = [ordered]@{ phase = 'unverified'; reason = 'no UIA text or other direct phase evidence'; uia = $launch.uia } }
+              $unverified.Add($id); Write-Host "::warning title=$id::access phase unverified (no direct evidence)"
+            } else { Check $id ($launch.accessPhase -eq 'needs_request') ([ordered]@{ phase = $launch.accessPhase; uia = $launch.uia }) }
+          }
+          function Tail([string]$path, [int]$lines = 60) { if (Test-Path -LiteralPath $path) { @(Get-Content -LiteralPath $path -Tail $lines -ErrorAction SilentlyContinue) } else { $null } }
+          function Listing([string]$dir) {
+            if (-not (Test-Path -LiteralPath $dir)) { return $null }
+            @(Get-ChildItem -LiteralPath $dir -Recurse -Depth 1 -Force -ErrorAction SilentlyContinue | Select-Object -First 120 | ForEach-Object { $_.FullName.Substring($dir.Length).TrimStart('\') + $(if ($_.PSIsContainer) { '\' } else { " ($($_.Length) B)" }) })
+          }
+          function RegValue([string]$key, [string]$valueName) {
+            $item = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+            if ($item -and $item.PSObject.Properties[$valueName]) { $v = $item.PSObject.Properties[$valueName].Value; if ($v -is [byte[]]) { [BitConverter]::ToString($v) } else { "$v" } } else { $null }
+          }
+          function UninstallEntries {
+            foreach ($r in $uninstallRoots) {
+              Get-ChildItem -LiteralPath $r -ErrorAction SilentlyContinue | ForEach-Object {
+                $v = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
+                if ($v -and $v.PSObject.Properties['DisplayName'] -and "$($v.DisplayName)" -like "$name*") {
+                  $e = [ordered]@{ hive = $r; key = $_.PSChildName }
+                  foreach ($f in 'DisplayName', 'DisplayVersion', 'Publisher', 'InstallLocation', 'UninstallString', 'QuietUninstallString', 'DisplayIcon') { $e[$f] = $(if ($v.PSObject.Properties[$f]) { "$($v.$f)" } else { $null }) }
+                  $e
+                }
+              }
+            }
+          }
+          function Shortcuts {
+            $shell = New-Object -ComObject WScript.Shell
+            foreach ($kind in 'Programs', 'Desktop') {
+              $lnk = Join-Path ([Environment]::GetFolderPath($kind)) "$name.lnk"
+              [ordered]@{ kind = $kind; path = $lnk; exists = (Test-Path -LiteralPath $lnk); target = $(if (Test-Path -LiteralPath $lnk) { $shell.CreateShortcut($lnk).TargetPath } else { $null }) }
+            }
+          }
+
+          Add-Type -TypeDefinition @'
+          using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+          public static class AcceptanceCrc {
+            static readonly uint[] Table = Build();
+            static uint[] Build() { var t = new uint[256]; for (uint i = 0; i < 256; i++) { uint c = i; for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1; t[i] = c; } return t; }
+            public static string OfFile(string path) {
+              uint crc = 0xFFFFFFFFu; var buffer = new byte[1 << 20];
+              using (var stream = System.IO.File.OpenRead(path)) { int n; while ((n = stream.Read(buffer, 0, buffer.Length)) > 0) for (int i = 0; i < n; i++) crc = Table[(crc ^ buffer[i]) & 0xFF] ^ (crc >> 8); }
+              return (crc ^ 0xFFFFFFFFu).ToString("X8");
+            }
+          }
+          public static class AcceptanceWindows {
+            delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+            public static List<string> Top(uint pid) {
+              var found = new List<string>();
+              EnumWindows((hwnd, l) => { uint owner; GetWindowThreadProcessId(hwnd, out owner); if (owner == pid) { var text = new StringBuilder(512); GetWindowText(hwnd, text, 512); if (text.Length > 0) found.Add((IsWindowVisible(hwnd) ? "1|" : "0|") + hwnd.ToInt64() + "|" + text); } return true; }, IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          function TopWindows([int]$processId) {
+            @([AcceptanceWindows]::Top([uint32]$processId) | ForEach-Object { $parts = $_ -split '\|', 3; [ordered]@{ visible = ($parts[0] -eq '1'); handle = [long]$parts[1]; title = $parts[2] } })
+          }
+          # Descendants of one launched PID, created after the launch (guards against PID reuse).
+          function ProcessTree([int]$rootId, [datetime]$since) {
+            $all = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since })
+            $ids = New-Object 'System.Collections.Generic.HashSet[int]'; [void]$ids.Add($rootId)
+            do { $before = $ids.Count; foreach ($p in $all) { if ($ids.Contains([int]$p.ParentProcessId)) { [void]$ids.Add([int]$p.ProcessId) } } } while ($ids.Count -ne $before)
+            @($all | Where-Object { $ids.Contains([int]$_.ProcessId) } | ForEach-Object {
+              $cl = "$($_.CommandLine)"
+              [ordered]@{ pid = [int]$_.ProcessId; parent = [int]$_.ParentProcessId; name = $_.Name; started = $_.CreationDate.ToUniversalTime().ToString('o'); path = $_.ExecutablePath
+                backendServer = ($cl -match 'desktop_backend\.py' -and $cl -match '\s--port\s'); accessHelper = ($cl -match '--desktop-(access-state|credential|owner-check)'); commandLine = $cl.Substring(0, [Math]::Min(300, $cl.Length)) }
+            })
+          }
+          # Stop only PIDs recorded from this launch's tree, and only if the live process is the same one (start time).
+          function StopRecorded($records) {
+            $stopped = @()
+            $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+            foreach ($rec in $records) {
+              if (-not $seen.Add([int]$rec.pid)) { continue }
+              $live = Get-Process -Id $rec.pid -ErrorAction SilentlyContinue
+              $start = $null; if ($live) { try { $start = $live.StartTime } catch { } }  # null when the PID now belongs to an unreadable process
+              if ($start -and [Math]::Abs(($start.ToUniversalTime() - [datetime]::Parse($rec.started, $null, 'RoundtripKind')).TotalSeconds) -lt 2) {
+                Stop-Process -Id $rec.pid -Force -ErrorAction SilentlyContinue; $stopped += $rec.pid
+              }
+            }
+            if ($stopped) { Wait-Process -Id $stopped -Timeout 15 -ErrorAction SilentlyContinue }
+            @($stopped)
+          }
+          # Page texts of access.html / access-ui.js (Melange ops/desktop/client at a9be8919). Window chrome (frame title,
+          # application menu "<Name>", "Edit", "View") is NOT page evidence: v3 run 38892494162 saw only chrome and misread it as "other".
+          $PhaseTexts = [ordered]@{
+            needs_request = 'Request administrator approval for this installation.'
+            pending = 'This installation is waiting for administrator approval.'
+            needs_password = 'This installation is approved. Choose your local password, then sign in.'
+            locked = 'Sign in with your local password to open'
+            ready = 'You are signed in. Your local workspace is ready to open.'
+            revoked = 'Administrator access has been revoked.'
+            terrier_signin = 'This installation is approved. Continue to Terrier'
+            error = 'Access could not be checked. Your workspace has not been opened.'
+            fail_closed = 'This action could not be completed.'
+            checking = "Checking this installation's access."
+          }
+          $PageMarkers = @('APPLICATION ACCESS', 'Approved installations can work offline.') + @($PhaseTexts.Values)
+          function PageTextSeen($names) { foreach ($n in @($names)) { foreach ($m in $PageMarkers) { if ("$n".Contains($m)) { return $true } } }; $false }
+          function UiaText([long]$handle) {
+            try {
+              Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+              $element = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$handle)
+              $names = @()
+              # Retry until page text (not only window chrome) is exposed, and past the transient "checking" text.
+              for ($i = 0; $i -lt 10; $i++) {
+                $names = @($element.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique -First 80)
+                if ((PageTextSeen $names) -and -not ((@($names) -join "`n").Contains($PhaseTexts.checking))) { break }
+                Start-Sleep -Seconds 2
+              }
+              [ordered]@{ available = $true; pageTextSeen = (PageTextSeen $names); names = $names }
+            } catch { [ordered]@{ available = $false; pageTextSeen = $false; error = $_.Exception.Message } }
+          }
+          # 'unobserved' (no page text) becomes 'unverified'; any observed page text maps to its phase or to 'other'.
+          function AccessPhase($uia) {
+            if (-not $uia.available -or -not $uia.pageTextSeen) { return 'unobserved' }
+            $text = (@($uia.names) -join "`n")
+            foreach ($phase in $PhaseTexts.Keys) { if ($text.Contains($PhaseTexts[$phase])) { return $phase } }
+            'other'
+          }
+          # Uninstaller argv from an UninstallString or QuietUninstallString: every existing option is its own element and
+          # '/S' is appended once, as a separate last element. (v4 built '/currentuser/S' by string concatenation.)
+          function UninstallArgv([string]$commandLine) {
+            $m = [regex]::Match($commandLine, '^\s*"?(?<exe>.+?\.exe)"?(?:\s+(?<rest>.*))?$', 'IgnoreCase')
+            if (-not $m.Success) { throw "unparseable uninstall command: $commandLine" }
+            [string[]]$options = @($m.Groups['rest'].Value -split '\s+' | Where-Object { $_ -and $_ -cne '/S' })
+            [string[]]$argv = @($options) + @('/S')
+            [ordered]@{ exe = $m.Groups['exe'].Value; argv = $argv }
+          }
+          function ArgvRegression {
+            $cases = @(
+              @{ in = '"C:\p\Uninstall App.exe"'; exe = 'C:\p\Uninstall App.exe'; argv = @('/S') },
+              @{ in = '"C:\p\Uninstall App.exe" /currentuser'; exe = 'C:\p\Uninstall App.exe'; argv = @('/currentuser', '/S') },
+              @{ in = '"C:\p\Uninstall App.exe" /currentuser /S'; exe = 'C:\p\Uninstall App.exe'; argv = @('/currentuser', '/S') },
+              @{ in = '"C:\p\Uninstall App.exe"  /allusers   /KEEP_APP_DATA '; exe = 'C:\p\Uninstall App.exe'; argv = @('/allusers', '/KEEP_APP_DATA', '/S') },
+              @{ in = 'C:\p\Uninstall.exe /currentuser'; exe = 'C:\p\Uninstall.exe'; argv = @('/currentuser', '/S') }
+            )
+            foreach ($c in $cases) {
+              $r = UninstallArgv $c.in
+              $same = $r.argv.Count -eq $c.argv.Count; for ($i = 0; $same -and $i -lt $c.argv.Count; $i++) { $same = $r.argv[$i] -ceq $c.argv[$i] }
+              $ok = $same -and $r.exe -ceq $c.exe -and $r.argv -is [array] -and @($r.argv | Select-Object -Unique).Count -eq $r.argv.Count -and $r.argv[-1] -ceq '/S'
+              [ordered]@{ input = $c.in; expected = $c.argv; actual = @($r.argv); exe = $r.exe; ok = $ok }
+            }
+          }
+          # One `7z l -slt` listing -> path => (size, CRC32). Fail-closed: a missing '----------' delimiter, a record without
+          # Path, a file without a numeric Size, a CRC that is not exactly 8 hex characters, a blank CRC on a non-empty file,
+          # or a duplicate normalised path throws. Directories are skipped; a zero-byte file's blank 7z CRC reads as 00000000
+          # (the zip value); a leading 'win-unpacked/' (the B2 Mentat zip layout) is stripped; '\' becomes '/'.
+          function SltEntries([string[]]$lines) {
+            $all = @($lines)
+            $start = [Array]::IndexOf([string[]]$all, '----------')
+            if ($start -lt 0) { throw "7z -slt listing has no '----------' delimiter ($($all.Count) lines)" }
+            $entries = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+            $current = [ordered]@{}; $record = 0
+            foreach ($line in @($all[($start + 1)..($all.Count)]) + @('')) {
+              if ($null -eq $line) { $line = '' }
+              if ($line -ne '') {
+                $kv = [regex]::Match($line, '^(?<k>[^=]*?[^= ]) =(?: (?<v>.*))?$')
+                if (-not $kv.Success) { throw "malformed 7z -slt line in record $($record + 1): $line" }
+                $current[$kv.Groups['k'].Value] = $kv.Groups['v'].Value; continue
+              }
+              if ($current.Count -eq 0) { continue }
+              $record++
+              if (-not $current.Contains('Path') -or -not $current['Path']) { throw "7z -slt record $record has no Path" }
+              $isDir = $current['Folder'] -eq '+' -or "$($current['Attributes'])".StartsWith('D')
+              if (-not $isDir) {
+                $sizeText = "$($current['Size'])"; $size = 0L
+                if (-not [long]::TryParse($sizeText, [ref]$size) -or $size -lt 0) { throw "7z -slt record $record ($($current['Path'])) has no valid Size: '$sizeText'" }
+                if (-not $current.Contains('CRC')) { throw "7z -slt record $record ($($current['Path'])) has no CRC field" }
+                $crc = "$($current['CRC'])".ToUpperInvariant()
+                if ($crc -eq '') { if ($size -ne 0) { throw "7z -slt record $record ($($current['Path'])) has a blank CRC but size $size" }; $crc = '00000000' }
+                elseif ($crc -notmatch '^[0-9A-F]{8}$') { throw "7z -slt record $record ($($current['Path'])) has an invalid CRC '$crc'" }
+                $key = $current['Path'].Replace('\', '/'); if ($key.StartsWith('win-unpacked/')) { $key = $key.Substring(13) }
+                if ($entries.ContainsKey($key)) { throw "duplicate normalised path in 7z -slt listing: $key" }
+                $entries[$key] = [ordered]@{ size = $size; crc = $crc }
+              }
+              $current = [ordered]@{}
+            }
+            # A Dictionary returned bare would be enumerated into the pipeline; wrap it.
+            , $entries
+          }
+          # Exact parity: identical path set, sizes and CRC32 on both sides. Empty listings are an error, not a match.
+          function CompareListings($installerEntries, $zipEntries) {
+            if ($null -eq $installerEntries -or $installerEntries.Count -eq 0) { throw 'the installer payload listing parsed to zero files' }
+            if ($null -eq $zipEntries -or $zipEntries.Count -eq 0) { throw 'the zip listing parsed to zero files' }
+            $mismatched = @($installerEntries.Keys | Where-Object { $zipEntries.ContainsKey($_) -and ($installerEntries[$_].size -ne $zipEntries[$_].size -or $installerEntries[$_].crc -cne $zipEntries[$_].crc) })
+            $onlyInstaller = @($installerEntries.Keys | Where-Object { -not $zipEntries.ContainsKey($_) })
+            $onlyZip = @($zipEntries.Keys | Where-Object { -not $installerEntries.ContainsKey($_) })
+            $result = [ordered]@{
+              installerFiles = $installerEntries.Count; zipFiles = $zipEntries.Count
+              installerBytes = [long](@($installerEntries.Values | ForEach-Object { $_.size }) | Measure-Object -Sum).Sum
+              zipBytes = [long](@($zipEntries.Values | ForEach-Object { $_.size }) | Measure-Object -Sum).Sum
+              common = $installerEntries.Count - $onlyInstaller.Count
+              mismatchedCount = $mismatched.Count; mismatched = @($mismatched | Select-Object -First 50)
+              onlyInstallerCount = $onlyInstaller.Count; onlyInstaller = @($onlyInstaller | Select-Object -First 50)
+              onlyZipCount = $onlyZip.Count; onlyZip = @($onlyZip | Select-Object -First 50)
+            }
+            $result.ok = ($mismatched.Count -eq 0 -and $onlyInstaller.Count -eq 0 -and $onlyZip.Count -eq 0)
+            $result
+          }
+          # Negative controls (and one valid case) for the parser and comparer; they run before any listing is trusted.
+          function ParserControls {
+            $head = @('Path = x.7z', 'Type = 7z', '', '----------')
+            $file = { param($p, $s, $c) @("Path = $p", "Size = $s", "CRC = $c", 'Attributes = A', '') }
+            $valid = $head + (& $file 'a\b.txt' 3 '0A1B2C3D') + (& $file 'empty.txt' 0 '') + @('Path = a', 'Size = 0', 'Attributes = D', '')
+            $zipValid = $head + @('Path = win-unpacked\a\b.txt', 'Folder = -', 'Size = 3', 'CRC = 0a1b2c3d', '', 'Path = win-unpacked\empty.txt', 'Folder = -', 'Size = 0', 'CRC = 00000000', '', 'Path = win-unpacked\a', 'Folder = +', 'Size = 0', '')
+            $cases = @(
+              @{ name = 'empty input'; expect = 'reject'; run = { CompareListings (SltEntries @()) (SltEntries $zipValid) } },
+              @{ name = 'missing delimiter'; expect = 'reject'; run = { SltEntries (@('Path = x.7z', 'Type = 7z', '') + (& $file 'a.txt' 1 '00000001')) } },
+              @{ name = 'delimiter but no files on both sides'; expect = 'reject'; run = { CompareListings (SltEntries $head) (SltEntries $head) } },
+              @{ name = 'duplicate normalised path'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a\b.txt' 3 '0A1B2C3D') + (& $file 'a/b.txt' 3 '0A1B2C3D')) } },
+              @{ name = 'bad CRC XYZ'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a.txt' 1 'XYZ')) } },
+              @{ name = 'bad CRC 9 characters'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a.txt' 1 '123456789')) } },
+              @{ name = 'blank CRC on a non-empty file'; expect = 'reject'; run = { SltEntries ($head + (& $file 'a.txt' 1 '')) } },
+              @{ name = 'record without Size'; expect = 'reject'; run = { SltEntries ($head + @('Path = a.txt', 'CRC = 00000001', '')) } },
+              @{ name = 'record without Path'; expect = 'reject'; run = { SltEntries ($head + @('Size = 1', 'CRC = 00000001', '')) } },
+              @{ name = 'size mismatch'; expect = 'reject'; run = { CompareListings (SltEntries $valid) (SltEntries ($head + (& $file 'a\b.txt' 4 '0A1B2C3D') + (& $file 'empty.txt' 0 ''))) } },
+              @{ name = 'one-sided file'; expect = 'reject'; run = { CompareListings (SltEntries ($valid + (& $file 'extra.dll' 2 '00000002'))) (SltEntries $zipValid) } },
+              @{ name = 'valid 7z vs zip layouts'; expect = 'pass'; run = { CompareListings (SltEntries $valid) (SltEntries $zipValid) } },
+              @{ name = 'CRC32 of "123456789" is CBF43926'; expect = 'pass'; run = { $t = [IO.Path]::GetTempFileName(); try { [IO.File]::WriteAllText($t, '123456789'); $v = [AcceptanceCrc]::OfFile($t); if ($v -cne 'CBF43926') { throw "CRC32 $v" } } finally { [IO.File]::Delete($t) } } }
+            )
+            foreach ($c in $cases) {
+              $outcome = $null; $why = $null
+              try { $r = & $c.run; if ($r -is [System.Collections.Specialized.OrderedDictionary] -and $r.Contains('ok')) { $outcome = $(if ($r.ok) { 'pass' } else { 'reject' }); $why = "ok=$($r.ok)" } else { $outcome = 'pass'; $why = 'parsed' } }
+              catch { $outcome = 'reject'; $why = $_.Exception.Message }
+              [ordered]@{ case = $c.name; expected = $c.expect; outcome = $outcome; ok = ($outcome -eq $c.expect); detail = $why }
+            }
+          }
+
+          # uninstall.silent verdict. Gated: the launcher, Uninstall <Name>.exe and the relaunched %TEMP% Un_*.exe (whose parent
+          # is the launcher) must all exit 0, and no window may be visible. Only the helpers of electron-builder's NSIS
+          # un.checkAppRunning (app-builder-lib templates/nsis/include/allowOnlyOneInstallerInstance.nsh, CHECK_APP_RUNNING)
+          # are tolerated, each matched on image, exact command line, parent and exit code. Images may be the System32 form or,
+          # under WOW64 redirection of the 32-bit NSIS uninstaller, the SysWOW64 form; command lines name System32 as nsExec wrote it.
+          #   nsisExecutionPolicyProbe  - powershell.exe running one of IS_POWERSHELL_AVAILABLE's two probes (the
+          #                               ExecutionPolicy form observed in Geo v5 run 38896840011 and v6.1 run 38902836244; the
+          #                               Get-CimInstance form verbatim from the template), parent = an uninstaller process, exit 0 or 1
+          #   nsisFindProcess           - FIND_PROCESS's per-user fallback, cmd.exe /C tasklist ... | findstr ..., run when a probe
+          #                               reports PowerShell unavailable (observed in Melange 1.0.5 run 38998856644), parent = an
+          #                               uninstaller process, exit 1 only (findstr found no running <Name>.exe; 0 means the app was
+          #                               still running and fails)
+          #   nsisFindProcessTasklist / nsisFindProcessFindstr - the pipe's two programs, parent = that cmd.exe, command lines as
+          #                               cmd.exe forms them (reproduced locally with SysWOW64\cmd.exe), tasklist exit 0, findstr exit 1
+          #   probeConsoleHost          - %SystemRoot%\System32\conhost.exe "0x4", parent = a probe, the fallback or an uninstaller
+          #                               process, and only when a probe or the fallback is present, exit 0
+          # Any other descendant, or a tolerated one that deviates in any of those fields, fails the check. Absence of any helper is
+          # fine: the tree is sampled every ~500 ms, so short-lived helpers are recorded only when a sample lands on them.
+          function SilentVerdict($launcher, $members, $visibleWindows, [string[]]$argv, [string]$product) {
+            $root = "$env:SystemRoot"
+            $images = { param($leaf) @("$root\System32\$leaf", "$root\SysWOW64\$leaf") }
+            $probeImage = "$root\System32\WindowsPowerShell\v1.0\powershell.exe"   # the command line names this form in every run
+            $probeArgs = @(' -C "if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }"',
+              ' -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"')
+            $exe = "$product.exe"; $findstr = "$root\system32\findstr.exe"   # nsExec writes $SYSDIR in lower case
+            $findArgs = " /C tasklist /FI `"USERNAME eq %USERNAME%`" /FI `"IMAGENAME eq $exe`" /FO CSV /NH | `"$findstr`" /B /I /C:`"\`"$exe\`"`""
+            $hostImage = "$root\System32\conhost.exe"
+            $exactCommand = { param($m, $image, $suffix, $prefix) $cl = "$($m.commandLine)"; $head = $prefix + $image + $(if ($prefix -eq '"') { '"' } else { '' })
+              $cl.Length -eq ($head.Length + $suffix.Length) -and $cl.StartsWith($head, [StringComparison]::OrdinalIgnoreCase) -and $cl.Substring($head.Length) -ceq $suffix }
+            $imageIs = { param($m, $images) [bool]"$($m.path)" -and @($images | Where-Object { "$($m.path)" -ieq $_ }).Count -gt 0 }  # whole-path equality, no substring; an unrecorded image never matches
+            # One tolerated helper: every field must match; the reason names the fields that do not.
+            $tolerate = { param($r, $role, $label, $imgs, $image, $suffixes, $prefix, $parentOk, $exits)
+              $r.role = "${role}?"
+              $checks = [ordered]@{ image = (& $imageIs $r $imgs); argv = (@($suffixes | Where-Object { & $exactCommand $r $image $_ $prefix }).Count -gt 0); parent = [bool]$parentOk; exit = ($r.exited -and $r.exitCode -in $exits) }
+              $r.ok = -not ($checks.Values -contains $false); $r.reason = $(if ($r.ok) { $null } elseif (-not "$($r.path)") { 'image not recorded' } else { "$label deviates: " + (($checks.Keys | Where-Object { -not $checks[$_] }) -join ', ') })
+              if ($r.ok) { $r.role = $role } }
+            $pidsOf = { param($role) @($rows | Where-Object { $_.role -eq $role } | ForEach-Object { $_.pid }) }
+            $rows = @($members | ForEach-Object { [ordered]@{ pid = $_.pid; parent = $_.parent; name = $_.name; path = $_.path; exited = $_.exited; exitCode = $_.exitCode; commandLine = $_.commandLine; role = $null; ok = $false; reason = $null } })
+            $uninstallerPids = @($rows | Where-Object { $_.name -ceq "Uninstall $product.exe" -and $_.pid -eq $launcher.pid } | ForEach-Object { $_.pid })
+            foreach ($r in $rows) { if ($r.name -ceq "Uninstall $product.exe") { $r.role = 'uninstaller'; $r.ok = ($r.pid -eq $launcher.pid -and $r.exited -and $r.exitCode -eq 0); if (-not $r.ok) { $r.reason = 'uninstaller is not the launcher or did not exit 0' } } }
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -cmatch '^Un_[A-Z]\.exe$') { $r.role = 'uninstallerRelaunch'; $r.ok = ($uninstallerPids -contains $r.parent -and $r.exited -and $r.exitCode -eq 0); if (-not $r.ok) { $r.reason = 'relaunch parent is not the launcher or it did not exit 0' } } }
+            $nsisPids = @($rows | Where-Object { $_.role -in 'uninstaller', 'uninstallerRelaunch' } | ForEach-Object { $_.pid })
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'powershell.exe') {
+              & $tolerate $r 'nsisExecutionPolicyProbe' 'probe' (& $images 'WindowsPowerShell\v1.0\powershell.exe') $probeImage $probeArgs '"' ($nsisPids -contains $r.parent) @(0, 1) } }
+            $probePids = @(& $pidsOf 'nsisExecutionPolicyProbe')
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'cmd.exe') {
+              & $tolerate $r 'nsisFindProcess' 'find-process fallback' (& $images 'cmd.exe') "$root\System32\cmd.exe" @($findArgs) '"' ($nsisPids -contains $r.parent) @(1) } }
+            $findPids = @(& $pidsOf 'nsisFindProcess')
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'tasklist.exe') {
+              & $tolerate $r 'nsisFindProcessTasklist' 'find-process tasklist' (& $images 'tasklist.exe') 'tasklist' @("  /FI `"USERNAME eq $env:USERNAME`" /FI `"IMAGENAME eq $exe`" /FO CSV /NH ") '' ($findPids -contains $r.parent) @(0) } }
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'findstr.exe') {
+              & $tolerate $r 'nsisFindProcessFindstr' 'find-process findstr' (& $images 'findstr.exe') $findstr @("  /B /I /C:`"\`"$exe\`"`"") '"' ($findPids -contains $r.parent) @(1) } }
+            foreach ($r in $rows) { if (-not $r.role -and $r.name -ieq 'conhost.exe') {
+              & $tolerate $r 'probeConsoleHost' 'console host' @($hostImage) $hostImage @(' 0x4') '\??\' (($probePids + $findPids + $nsisPids) -contains $r.parent -and ($probePids.Count + $findPids.Count) -gt 0) @(0) } }
+            foreach ($r in $rows) { if (-not $r.role) { $r.role = 'unexpected'; $r.ok = $false; $r.reason = 'unexpected descendant of the uninstaller' } }
+            $relaunch = @($rows | Where-Object { $_.role -eq 'uninstallerRelaunch' })
+            $failing = @($rows | Where-Object { -not $_.ok })
+            [ordered]@{
+              ok = (@($visibleWindows).Count -eq 0 -and $launcher.exited -and $launcher.exitCode -eq 0 -and $uninstallerPids.Count -eq 1 -and $relaunch.Count -ge 1 -and $failing.Count -eq 0 -and $argv.Count -ge 1 -and $argv[-1] -ceq '/S')
+              argv = @($argv); visibleWindows = @($visibleWindows); launcher = $launcher; relaunchObserved = ($relaunch.Count -ge 1)
+              probePresent = ($probePids.Count -gt 0); processes = $rows; failing = $failing
+            }
+          }
+          # Replay controls from recorded runs. Fields are verbatim from the run JSONs; those JSONs did not record parent PIDs
+          # or image paths, so parents are the structural ones v6.1 records live (relaunch <- launcher, probe <- relaunch,
+          # console host <- probe) and images are the ones Geo v6.1 run 38902836244 recorded (SysWOW64 probe, System32 conhost).
+          # The Geo v6.1 set below is verbatim, recorded parents and images included.
+          function SilentControls {
+            $sys = "$env:SystemRoot"
+            $launcher5 = [ordered]@{ pid = 7384; exited = $true; exitCode = 0 }
+            $geo5 = @(
+              [ordered]@{ pid = 1260; parent = 3596; name = 'conhost.exe'; path = "$sys\system32\conhost.exe"; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" },
+              [ordered]@{ pid = 3596; parent = 8076; name = 'powershell.exe'; path = "$sys\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"; exited = $true; exitCode = 1; commandLine = "`"$sys\system32\WindowsPowerShell\v1.0\powershell.exe`" -C `"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }`"" },
+              [ordered]@{ pid = 7384; parent = 9000; name = 'Uninstall Terrier.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe" /currentuser /S' },
+              [ordered]@{ pid = 8076; parent = 7384; name = 'Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Terrier\' })
+            $launcher6 = [ordered]@{ pid = 6400; exited = $true; exitCode = 0 }
+            $geo6 = @(
+              [ordered]@{ pid = 1240; parent = 6400; name = 'Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Terrier\' },
+              [ordered]@{ pid = 6400; parent = 9000; name = 'Uninstall Terrier.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe" /currentuser /S' })
+            $launcher61 = [ordered]@{ pid = 3808; exited = $true; exitCode = 0 }
+            $geo61 = @(
+              [ordered]@{ pid = 1296; parent = 5752; name = 'conhost.exe'; path = 'C:\Windows\system32\conhost.exe'; exited = $true; exitCode = 0; commandLine = '\??\C:\Windows\system32\conhost.exe 0x4' },
+              [ordered]@{ pid = 3808; parent = 7184; name = 'Uninstall Terrier.exe'; path = 'D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Terrier\Uninstall Terrier.exe" /currentuser /S' },
+              [ordered]@{ pid = 5752; parent = 7324; name = 'powershell.exe'; path = 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'; exited = $true; exitCode = 1; commandLine = '"C:\Windows\system32\WindowsPowerShell\v1.0\powershell.exe" -C "if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }"' },
+              [ordered]@{ pid = 7324; parent = 3808; name = 'Un_A.exe'; path = 'C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Terrier\' })
+            $copy = { param($set) @($set | ForEach-Object { $c = [ordered]@{}; foreach ($k in $_.Keys) { $c[$k] = $_[$k] }; $c }) }
+            $extra = (& $copy $geo5) + @([ordered]@{ pid = 4444; parent = 8076; name = 'helper.exe'; exited = $true; exitCode = 1; commandLine = 'helper.exe' })
+            $extraZero = (& $copy $geo6) + @([ordered]@{ pid = 4445; parent = 1240; name = 'helper.exe'; exited = $true; exitCode = 0; commandLine = 'helper.exe' })
+            $argvChanged = & $copy $geo5; $argvChanged[1].commandLine = "`"$sys\system32\WindowsPowerShell\v1.0\powershell.exe`" -C `"exit 1`""
+            $argvExtra = & $copy $geo5; $argvExtra[1].commandLine = "`"$sys\system32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -C `"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }`""
+            $imageChanged = & $copy $geo5; $imageChanged[1].commandLine = "`"C:\Tools\powershell.exe`" -C `"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }`""
+            $parentChanged = & $copy $geo5; $parentChanged[1].parent = 4321
+            $exitChanged = & $copy $geo5; $exitChanged[1].exitCode = 2
+            $exitZero = & $copy $geo5; $exitZero[1].exitCode = 0
+            $imageMissing = & $copy $geo61; $imageMissing[2].path = $null
+            $imageV2 = & $copy $geo61; $imageV2[2].path = 'C:\Windows\System32\WindowsPowerShell\v2.0\powershell.exe'
+            $imageUser = & $copy $geo61; $imageUser[2].path = 'C:\Users\runneradmin\powershell.exe'
+            $imageSuffix = & $copy $geo61; $imageSuffix[2].path = 'D:\x\C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+            $hostOrphan = & $copy $geo6; $hostOrphan += [ordered]@{ pid = 1261; parent = 1240; name = 'conhost.exe'; path = "$sys\system32\conhost.exe"; exited = $true; exitCode = 0; commandLine = "\??\$sys\system32\conhost.exe 0x4" }
+            # Melange 1.0.5 run 38998856644 set, verbatim: the FIND_PROCESS cmd.exe fallback and its console host were sampled.
+            $launcher105 = [ordered]@{ pid = 8056; exited = $true; exitCode = 0 }
+            $mel105 = @(
+              [ordered]@{ pid = 1536; parent = 8056; name = 'Un_A.exe'; path = 'C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Users\RUNNER~1\AppData\Local\Temp\~nsuA.tmp\Un_A.exe"  /currentuser /S _?=D:\a\_temp\acc\program\Melange\' },
+              [ordered]@{ pid = 1884; parent = 3852; name = 'conhost.exe'; path = 'C:\Windows\system32\conhost.exe'; exited = $true; exitCode = 0; commandLine = '\??\C:\Windows\system32\conhost.exe 0x4' },
+              [ordered]@{ pid = 3852; parent = 1536; name = 'cmd.exe'; path = 'C:\Windows\SysWOW64\cmd.exe'; exited = $true; exitCode = 1; commandLine = '"C:\Windows\system32\cmd.exe" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq Melange.exe" /FO CSV /NH | "C:\Windows\system32\findstr.exe" /B /I /C:"\"Melange.exe\""' },
+              [ordered]@{ pid = 8056; parent = 7244; name = 'Uninstall Melange.exe'; path = 'D:\a\_temp\acc\program\Melange\Uninstall Melange.exe'; exited = $true; exitCode = 0; commandLine = '"D:\a\_temp\acc\program\Melange\Uninstall Melange.exe" /currentuser /S' })
+            # The pipe's two programs as SysWOW64\cmd.exe forms them (command-line shape reproduced locally), and the other probe.
+            $mel105Pipe = (& $copy $mel105) + @(
+              [ordered]@{ pid = 2001; parent = 3852; name = 'tasklist.exe'; path = 'C:\Windows\SysWOW64\tasklist.exe'; exited = $true; exitCode = 0; commandLine = "tasklist  /FI `"USERNAME eq $env:USERNAME`" /FI `"IMAGENAME eq Melange.exe`" /FO CSV /NH " },
+              [ordered]@{ pid = 2002; parent = 3852; name = 'findstr.exe'; path = 'C:\Windows\SysWOW64\findstr.exe'; exited = $true; exitCode = 1; commandLine = '"C:\Windows\system32\findstr.exe"  /B /I /C:"\"Melange.exe\""' },
+              [ordered]@{ pid = 2003; parent = 1536; name = 'powershell.exe'; path = 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'; exited = $true; exitCode = 0; commandLine = '"C:\Windows\system32\WindowsPowerShell\v1.0\powershell.exe" -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"' })
+            $findRunning = & $copy $mel105; $findRunning[2].exitCode = 0
+            $findArgv = & $copy $mel105; $findArgv[2].commandLine = '"C:\Windows\system32\cmd.exe" /C tasklist /FI "IMAGENAME eq Melange.exe" /FO CSV /NH | "C:\Windows\system32\findstr.exe" /B /I /C:"\"Melange.exe\""'
+            $findOtherExe = & $copy $mel105; $findOtherExe[2].commandLine = $findOtherExe[2].commandLine.Replace('Melange.exe', 'Other.exe')
+            $findParent = & $copy $mel105; $findParent[2].parent = 4321
+            $findImage = & $copy $mel105; $findImage[2].path = 'C:\Users\runneradmin\cmd.exe'
+            $tasklistStray = & $copy $mel105Pipe; $tasklistStray[4].parent = 1536
+            $findstrMatched = & $copy $mel105Pipe; $findstrMatched[5].exitCode = 0
+            $cases = @(
+              @{ name = 'Geo v5 run 38896840011 set (probe present)'; expect = $true; launcher = $launcher5; set = $geo5 },
+              @{ name = 'Geo v6 run 38900109141 set (probe absent)'; expect = $true; launcher = $launcher6; set = $geo6 },
+              @{ name = 'Geo v6.1 run 38902836244 set (WOW64 probe, real parents)'; expect = $true; launcher = $launcher61; set = $geo61 },
+              @{ name = 'probe with no recorded image'; expect = $false; launcher = $launcher61; set = $imageMissing },
+              @{ name = 'probe image ...\System32\WindowsPowerShell\v2.0'; expect = $false; launcher = $launcher61; set = $imageV2 },
+              @{ name = 'probe image in a user directory'; expect = $false; launcher = $launcher61; set = $imageUser },
+              @{ name = 'probe image with a WOW64 path as a suffix only'; expect = $false; launcher = $launcher61; set = $imageSuffix },
+              @{ name = 'v5 set + extra child exiting 1'; expect = $false; launcher = $launcher5; set = $extra },
+              @{ name = 'v6 set + extra child exiting 0'; expect = $false; launcher = $launcher6; set = $extraZero },
+              @{ name = 'probe with a different argv'; expect = $false; launcher = $launcher5; set = $argvChanged },
+              @{ name = 'probe with an extra argument'; expect = $false; launcher = $launcher5; set = $argvExtra },
+              @{ name = 'probe from a different image'; expect = $false; launcher = $launcher5; set = $imageChanged },
+              @{ name = 'probe with a different parent'; expect = $false; launcher = $launcher5; set = $parentChanged },
+              @{ name = 'probe with exit code 0'; expect = $true; launcher = $launcher5; set = $exitZero },
+              @{ name = 'probe with exit code 2'; expect = $false; launcher = $launcher5; set = $exitChanged },
+              @{ name = 'console host without a probe'; expect = $false; launcher = $launcher6; set = $hostOrphan },
+              @{ name = 'Melange 1.0.5 run 38998856644 set (find-process fallback)'; expect = $true; launcher = $launcher105; set = $mel105; product = 'Melange' },
+              @{ name = 'find-process fallback with tasklist, findstr and the Get-CimInstance probe'; expect = $true; launcher = $launcher105; set = $mel105Pipe; product = 'Melange' },
+              @{ name = 'find-process exit 0 (app still running)'; expect = $false; launcher = $launcher105; set = $findRunning; product = 'Melange' },
+              @{ name = 'find-process with a different argv'; expect = $false; launcher = $launcher105; set = $findArgv; product = 'Melange' },
+              @{ name = 'find-process for another executable'; expect = $false; launcher = $launcher105; set = $findOtherExe; product = 'Melange' },
+              @{ name = 'find-process with a different parent'; expect = $false; launcher = $launcher105; set = $findParent; product = 'Melange' },
+              @{ name = 'find-process image in a user directory'; expect = $false; launcher = $launcher105; set = $findImage; product = 'Melange' },
+              @{ name = 'tasklist not under the find-process'; expect = $false; launcher = $launcher105; set = $tasklistStray; product = 'Melange' },
+              @{ name = 'findstr matched (app still running)'; expect = $false; launcher = $launcher105; set = $findstrMatched; product = 'Melange' }
+            )
+            foreach ($c in $cases) {
+              $v = SilentVerdict $c.launcher $c.set @() ([string[]]@('/currentuser', '/S')) $(if ($c.product) { $c.product } else { 'Terrier' })
+              [ordered]@{ case = $c.name; expected = $c.expect; actual = $v.ok; ok = ($v.ok -eq $c.expect); failing = @($v.failing | ForEach-Object { "$($_.name): $($_.reason)" }) }
+            }
+          }
+
+          function LaunchApp([string]$mode, [string[]]$arguments, [string]$expectedTitle, [string]$userData, [bool]$expectLoginItem) {
+            $r = [ordered]@{ mode = $mode; arguments = $arguments; expectedTitle = $expectedTitle; userData = $userData }
+            $base = Join-Path $root "launch-$mode"
+            $since = (Get-Date).AddSeconds(-2)
+            $p = Start-Process -FilePath $exe -ArgumentList (@($arguments) + @('--force-renderer-accessibility', '--enable-logging=file', "--log-file=$base.chromium.log")) -WorkingDirectory $root -PassThru -RedirectStandardOutput "$base.stdout.txt" -RedirectStandardError "$base.stderr.txt"
+            $r.mainPid = $p.Id
+            $tree = @(); $target = $null
+            try {
+              $r.processSessionId = (Get-Process -Id $p.Id -ErrorAction SilentlyContinue).SessionId
+              $titles = New-Object System.Collections.Generic.List[string]
+              $deadline = (Get-Date).AddSeconds(150)
+              while ((Get-Date) -lt $deadline -and -not $p.HasExited -and -not $target) {
+                foreach ($w in TopWindows $p.Id) {
+                  $seen = "$(if ($w.visible) { 'visible' } else { 'hidden' }): $($w.title)"; if (-not $titles.Contains($seen)) { $titles.Add($seen) }
+                  if ($w.title -eq $expectedTitle -and $w.visible) { $target = $w }
+                }
+                if (-not $target) { Start-Sleep -Milliseconds 500 }
+              }
+              $r.windowTitlesSeen = @($titles)
+              $r.window = $target
+              $r.exitedEarly = $p.HasExited
+              # Protected access bootstrap writes these records before the access screen can render a phase.
+              $deadline = (Get-Date).AddSeconds(60)
+              while ((Get-Date) -lt $deadline -and -not ((Test-Path (Join-Path $userData 'access-identity.dpapi')) -and (Test-Path (Join-Path $userData 'access-trust.dpapi')))) { Start-Sleep -Seconds 1 }
+              if ($expectLoginItem) { $deadline = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $deadline -and -not (RegValue $runKey $aumid)) { Start-Sleep -Seconds 1 } }
+              # Watch for a backend server or any listening TCP port in the app's process tree.
+              $listeners = New-Object 'System.Collections.Generic.HashSet[string]'; $backends = New-Object 'System.Collections.Generic.HashSet[string]'; $helpers = 0
+              for ($i = 0; $i -lt 10; $i++) {
+                $tree = @(ProcessTree $p.Id $since); $ids = @($tree | ForEach-Object { $_.pid })
+                foreach ($c in @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) { if ($ids -contains [int]$c.OwningProcess) { [void]$listeners.Add("$($c.LocalAddress):$($c.LocalPort) pid=$($c.OwningProcess)") } }
+                foreach ($t in $tree) { if ($t.backendServer) { [void]$backends.Add("pid=$($t.pid) $($t.commandLine)") }; if ($t.accessHelper) { $helpers++ } }
+                Start-Sleep -Seconds 2
+              }
+              $r.listeningPorts = @($listeners); $r.backendServers = @($backends); $r.accessHelperSamples = $helpers
+              $r.backendLogExists = Test-Path (Join-Path $userData 'logs\backend.log')
+              $r.windowsAtEnd = @(TopWindows $p.Id)
+              $r.uia = $(if ($target) { UiaText $target.handle } else { [ordered]@{ available = $false; error = 'no visible window with the expected title' } })
+              $r.accessPhase = AccessPhase $r.uia
+              $r.loginItem = RegValue $runKey $aumid
+              $r.loginItemApproved = RegValue $approvedKey $aumid
+              $r.userDataListing = Listing $userData
+            } finally {
+              $r.treeBeforeClose = @(ProcessTree $p.Id $since)
+              $r.closeMainWindowSent = $false
+              if (-not $p.HasExited) { $p.Refresh(); $r.closeMainWindowSent = $p.CloseMainWindow() }
+              $r.exitedAfterCloseMainWindow = $p.WaitForExit(45000)
+              Start-Sleep -Seconds 2
+              $remaining = @(ProcessTree $p.Id $since)
+              $r.recordedPids = @(@($r.treeBeforeClose) + $remaining | ForEach-Object { $_.pid } | Sort-Object -Unique)
+              $r.forceStoppedPids = @(StopRecorded (@($r.treeBeforeClose) + $remaining))
+              $r.exitCode = $(if ($p.HasExited) { $p.ExitCode } else { $null })
+              $r.strayProcessesUnderInstallDir = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { "pid=$($_.ProcessId) $($_.Name)" })
+              $r.stdoutTail = Tail "$base.stdout.txt" 40; $r.stderrTail = Tail "$base.stderr.txt" 40; $r.chromiumLogTail = Tail "$base.chromium.log" 60
+            }
+            $r
+          }
+
+          try {
+            Write-Host '::group::Runner session'
+            $self = [System.Diagnostics.Process]::GetCurrentProcess()
+            $session = [ordered]@{ sessionId = $self.SessionId; userInteractive = [Environment]::UserInteractive; user = "$env:USERDOMAIN\$env:USERNAME"; userProfile = $env:USERPROFILE
+              shellDocuments = [Environment]::GetFolderPath('MyDocuments'); screen = "$([AcceptanceWindows]::GetSystemMetrics(0))x$([AcceptanceWindows]::GetSystemMetrics(1))"
+              querySession = @(try { & query.exe session 2>&1 | ForEach-Object { "$_" } } catch { "query.exe unavailable: $($_.Exception.Message)" }) }
+            Note 'runnerSession' $session; $session | ConvertTo-Json -Depth 3
+            Note 'preexisting' ([ordered]@{ stateRootExists = (Test-Path $stateRoot); loginItem = (RegValue $runKey $aumid); uninstallEntries = @(UninstallEntries) })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::1. Download and verify sha256'
+            $url = "https://github.com/$env:RELEASE_REPO/releases/download/$env:RELEASE_TAG/$env:ASSET"
+            & curl.exe --fail --location --silent --show-error --retry 5 --retry-all-errors --output $installer $url
+            if ($LASTEXITCODE -ne 0) { throw "download failed (curl exit $LASTEXITCODE): $url" }
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+            $obs.release.url = $url; $obs.release.size = (Get-Item -LiteralPath $installer).Length; $obs.release.actualSha256 = $hash
+            Check 'download.sha256' ($hash -eq $env:ASSET_SHA256) ([ordered]@{ expected = $env:ASSET_SHA256; actual = $hash; size = $obs.release.size })
+            if ($hash -ne $env:ASSET_SHA256) { throw 'sha256 mismatch: the downloaded installer is not executed' }
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::2. Authenticode'
+            $sig = Get-AuthenticodeSignature -LiteralPath $installer
+            Check 'installer.notSigned' ("$($sig.Status)" -eq 'NotSigned') ([ordered]@{ status = "$($sig.Status)"; message = $sig.StatusMessage; expected = 'NotSigned (unsigned preview, recorded)' })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::2b. Installer payload vs published zip (CRC32 parity; the zip is never executed)'
+            $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+            $zip = Join-Path $root $env:ZIP
+            $work = Join-Path $root 'cmp'
+            $preCompressedExpected = $null; $loose = @()
+            $parity = [ordered]@{ zip = $env:ZIP; expectedSha256 = $env:ZIP_SHA256; sevenZip = $sevenZip; expectedDifference = $env:ZIP_EXPECTED_NOTE }
+            try {
+              $controls = @(ParserControls)
+              Check 'zip.parserControls' (@($controls | Where-Object { -not $_.ok }).Count -eq 0) $controls
+              if (@($controls | Where-Object { -not $_.ok }).Count) { throw 'listing parser failed its negative controls; no listing is trusted' }
+              if (-not (Test-Path -LiteralPath $sevenZip)) { throw "7-Zip not found at $sevenZip" }
+              $parity.sevenZipVersion = "$((Get-Item -LiteralPath $sevenZip).VersionInfo.ProductVersion)"
+              $zipUrl = "https://github.com/$env:RELEASE_REPO/releases/download/$env:RELEASE_TAG/$env:ZIP"
+              & curl.exe --fail --location --silent --show-error --retry 5 --retry-all-errors --output $zip $zipUrl
+              if ($LASTEXITCODE -ne 0) { throw "zip download failed (curl exit $LASTEXITCODE): $zipUrl" }
+              $parity.url = $zipUrl; $parity.size = (Get-Item -LiteralPath $zip).Length
+              $parity.actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+              Check 'zip.sha256' ($parity.actualSha256 -eq $env:ZIP_SHA256) ([ordered]@{ expected = $env:ZIP_SHA256; actual = $parity.actualSha256; size = $parity.size })
+              if ($parity.actualSha256 -ne $env:ZIP_SHA256) { throw 'zip sha256 mismatch: comparison skipped' }
+              $drive = Get-PSDrive -Name $root.Substring(0, 1); $parity.freeBytes = $drive.Free
+              if ($drive.Free -lt 1.5 * (Get-Item -LiteralPath $installer).Length) { throw "free space $($drive.Free) B is below 1.5x the installer size" }
+              New-Item -ItemType Directory -Force -Path $work | Out-Null
+              [Console]::OutputEncoding = [Text.Encoding]::UTF8
+              $top = @(& $sevenZip l -sccUTF-8 $installer)
+              $parity.installerType = "$(@($top | Where-Object { $_ -match '^Type = ' }) | Select-Object -First 1)"
+              $payloads = @($top | Where-Object { $_ -match '\$PLUGINSDIR\\app-(64|32|arm64)\.7z\s*$' } | ForEach-Object { ($_ -split '\s+')[-1] })
+              $parity.payloads = $payloads
+              Check 'zip.installerPayload' ($parity.installerType -eq 'Type = Nsis' -and $payloads.Count -eq 1 -and $payloads[0] -eq '$PLUGINSDIR\app-64.7z') ([ordered]@{ type = $parity.installerType; payloads = $payloads })
+              if ($payloads -notcontains '$PLUGINSDIR\app-64.7z') { throw 'no single $PLUGINSDIR\app-64.7z payload' }
+              & $sevenZip e -sccUTF-8 $installer '$PLUGINSDIR\app-64.7z' "-o$work" -y | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "7z could not extract the NSIS payload (exit $LASTEXITCODE)" }
+              $instLines = @(& $sevenZip l -slt -sccUTF-8 (Join-Path $work 'app-64.7z')); $instExit = $LASTEXITCODE
+              $zipLines = @(& $sevenZip l -slt -sccUTF-8 $zip); $zipExit = $LASTEXITCODE
+              if ($instExit -ne 0 -or $zipExit -ne 0) { throw "7z listing failed (payload exit $instExit, zip exit $zipExit)" }
+              # electron-builder stores preCompressedFileExtensions files (default .avi .mov .m4v .mp4 .m4p .qt .mkv .webm .vmdk)
+              # as separate NSIS File entries ($INSTDIR\resources\...), NOT inside app-64.7z (NsisTarget.ts generateForPreCompressed;
+              # extractAppPackage.nsh inserts customFiles_x64 after the payload). They are extracted, CRC32-hashed and merged.
+              $topSlt = @(& $sevenZip l -slt -sccUTF-8 $installer); if ($LASTEXITCODE -ne 0) { throw "7z could not list the installer (exit $LASTEXITCODE)" }
+              $d = [Array]::IndexOf([string[]]$topSlt, '----------'); if ($d -lt 0) { throw "the installer's 7z -slt listing has no '----------' delimiter" }
+              $topPaths = @($topSlt[($d + 1)..($topSlt.Count)] | Where-Object { "$_".StartsWith('Path = ') } | ForEach-Object { "$_".Substring(7) })
+              $installerEntries = SltEntries $instLines
+              $nsisOther = @(); $n = 0
+              foreach ($raw in $topPaths) {
+                if ($raw.StartsWith('$PLUGINSDIR\')) { continue }
+                $norm = ($raw -replace '^\$INSTDIR[\\/]', '').Replace('\', '/')
+                if (-not $norm.StartsWith('resources/')) { $nsisOther += $raw; continue }
+                $n++; $dest = Join-Path $work "loose\$n"
+                & $sevenZip e -sccUTF-8 $installer $raw "-o$dest" -y | Out-Null; $looseExit = $LASTEXITCODE
+                $files = @(Get-ChildItem -LiteralPath $dest -File -ErrorAction SilentlyContinue)
+                if ($looseExit -ne 0 -or $files.Count -ne 1) { throw "could not extract the loose NSIS file $raw (exit $looseExit, $($files.Count) files)" }
+                if ($installerEntries.ContainsKey($norm)) { throw "loose NSIS file duplicates an app-64.7z entry: $norm" }
+                $installerEntries[$norm] = [ordered]@{ size = [long]$files[0].Length; crc = [AcceptanceCrc]::OfFile($files[0].FullName) }
+                $loose += [ordered]@{ path = $norm; nsisPath = $raw; size = $installerEntries[$norm].size; crc = $installerEntries[$norm].crc }
+                [IO.Directory]::Delete($dest, $true)
+              }
+              $zipEntries = SltEntries $zipLines
+              $preCompressedExpected = @($zipEntries.Keys | Where-Object { $_ -match '\.(avi|mov|m4v|mp4|m4p|qt|mkv|webm|vmdk)$' } | Sort-Object | ForEach-Object { [ordered]@{ path = $_; size = $zipEntries[$_].size; crc = $zipEntries[$_].crc } })
+              $parity.nsisLooseFiles = $loose; $parity.nsisTopLevelCount = $topPaths.Count; $parity.nsisTopLevelOther = @($nsisOther | Select-Object -First 50)
+              $parity.zipPreCompressedFiles = $preCompressedExpected
+              $comparison = CompareListings $installerEntries $zipEntries
+              $parity.comparison = $comparison
+              Check 'zip.parity' $comparison.ok ([ordered]@{ installerFiles = $comparison.installerFiles; zipFiles = $comparison.zipFiles; common = $comparison.common; mismatched = $comparison.mismatchedCount
+                onlyInstaller = $comparison.onlyInstaller; onlyZip = $comparison.onlyZip; nsisLooseFilesMerged = @($loose | ForEach-Object { $_.path }); expectedDifference = $env:ZIP_EXPECTED_NOTE })
+            } catch {
+              $parity.error = $_.Exception.Message
+              Check 'zip.parityCompleted' $false $parity.error
+            } finally {
+              # Only the files this step created: the zip and the extracted payload.
+              Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+              Note 'installerZipParity' $parity
+            }
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::3. Silent per-user install'
+            $inst = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$requestedDir") -PassThru
+            if (-not $inst.WaitForExit(900000)) { throw 'installer did not finish within 15 minutes' }
+            Check 'install.exitCode' ($inst.ExitCode -eq 0) ([ordered]@{ exitCode = $inst.ExitCode; arguments = "/S /D=$requestedDir" })
+            $entries = @(UninstallEntries)
+            $hkcu = @($entries | Where-Object { $_.hive -like 'HKCU:*' })
+            Note 'uninstallEntriesAfterInstall' $entries
+            Check 'install.hkcuUninstallKey' ($hkcu.Count -eq 1) ([ordered]@{ count = $hkcu.Count; entries = $entries })
+            Check 'install.perUserOnly' (@($entries | Where-Object { $_.hive -like 'HKLM:*' }).Count -eq 0) 'no HKLM uninstall entry (perMachine false)'
+            if ($hkcu.Count -ne 1) { throw 'no unique HKCU uninstall entry; later steps need its InstallLocation' }
+            $entry = $hkcu[0]
+            Check 'install.displayName' ("$($entry.DisplayName)" -like "$name*") $entry.DisplayName
+            Check 'install.displayVersion' ($entry.DisplayVersion -eq $version) $entry.DisplayVersion
+            # electron-builder writes InstallLocation under HKCU\Software\<APP_GUID> (INSTALL_REGISTRY_KEY), not under the
+            # Uninstall key, so the install dir is the /D target, cross-checked against UninstallString's directory and the exe.
+            # A registry InstallLocation is optional evidence: recorded, and it must agree when present.
+            $uninstallDir = $(if ("$($entry.UninstallString)" -match '^\s*"?(.+?\.exe)"?\s*(.*)$') { Split-Path -Parent $Matches[1] } else { $null })
+            $installKey = "HKCU:\Software\$($entry.key)"
+            $registryLocation = RegValue $installKey 'InstallLocation'
+            $evidence = [ordered]@{ requested = $requestedDir; uninstallStringDir = $uninstallDir; requestedExeExists = (Test-Path -LiteralPath (Join-Path $requestedDir "$name.exe"))
+              installRegistryKey = $installKey; installRegistryLocation = $registryLocation; uninstallKeyInstallLocation = $entry.InstallLocation
+              installRegistryValues = [ordered]@{ KeepShortcuts = (RegValue $installKey 'KeepShortcuts'); ShortcutName = (RegValue $installKey 'ShortcutName'); MenuDirectory = (RegValue $installKey 'MenuDirectory') } }
+            $agrees = { param($location) -not $location -or $location.TrimEnd('\') -ieq $requestedDir }
+            $honored = $evidence.requestedExeExists -and "$uninstallDir" -ieq $requestedDir -and (& $agrees $registryLocation) -and (& $agrees $entry.InstallLocation)
+            # On a mismatch the check fails; later evidence is still collected from the directory the uninstaller names.
+            $installDir = $(if ($honored -or -not $uninstallDir -or -not (Test-Path -LiteralPath (Join-Path $uninstallDir "$name.exe"))) { $requestedDir } else { $uninstallDir })
+            $evidence.installDirUsed = $installDir
+            Note 'installLocation' $evidence
+            Check 'install.customDirHonored' $honored $evidence
+            $exe = Join-Path $installDir "$name.exe"
+            Check 'install.programFiles' ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath (Join-Path $installDir 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $installDir "resources\runtime\$app"))) ([ordered]@{ exe = $exe; top = @(Get-ChildItem -LiteralPath $installDir -Name -ErrorAction SilentlyContinue) })
+            # Files that electron-builder stores outside app-64.7z must be on disk after install, equal (size + CRC32) to the zip.
+            $preResults = @(foreach ($e in @($preCompressedExpected)) {
+              $file = Join-Path $installDir ($e.path.Replace('/', '\')); $exists = Test-Path -LiteralPath $file -PathType Leaf
+              $size = $(if ($exists) { (Get-Item -LiteralPath $file).Length } else { $null }); $crc = $(if ($exists) { [AcceptanceCrc]::OfFile($file) } else { $null })
+              [ordered]@{ path = $e.path; exists = $exists; size = $size; crc = $crc; expectedSize = $e.size; expectedCrc = $e.crc; ok = ($exists -and $size -eq $e.size -and $crc -ceq $e.crc) } })
+            Check 'install.preCompressedAssets' ($null -ne $preCompressedExpected -and @($preResults | Where-Object { -not $_.ok }).Count -eq 0) ([ordered]@{ evaluated = ($null -ne $preCompressedExpected); expected = @($preCompressedExpected).Count; results = $preResults })
+            $links = @(Shortcuts)
+            Check 'install.shortcut' (@($links | Where-Object { $_.exists -and $_.target -ieq $exe }).Count -ge 1) $links
+            Note 'signatures' ([ordered]@{ installedExe = "$((Get-AuthenticodeSignature -LiteralPath $exe).Status)"; uninstaller = $(if (Test-Path -LiteralPath (Join-Path $installDir "Uninstall $name.exe")) { "$((Get-AuthenticodeSignature -LiteralPath (Join-Path $installDir "Uninstall $name.exe")).Status)" } else { 'not found' }) })
+            Check 'install.noLoginItemBeforeLaunch' ($null -eq (RegValue $runKey $aumid)) (RegValue $runKey $aumid)
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::4a. Launch with --melange-isolated-profile'
+            $isoUserData = Join-Path $isolatedRoot $app
+            $iso = LaunchApp 'isolated' @("--melange-isolated-profile=$isolatedRoot") "$name access [isolated test profile]" $isoUserData $false
+            $iso.isolatedProfileLog = Tail (Join-Path $isoUserData 'logs\isolated-profile.log') 5
+            $iso.discoveryCacheExists = Test-Path (Join-Path $isolatedRoot 'github-discovery')
+            $iso.productionStateRootExists = Test-Path $stateRoot
+            Note 'launchIsolated' $iso
+            Check 'isolated.window' ($null -ne $iso.window) ([ordered]@{ expected = $iso.expectedTitle; seen = $iso.windowTitlesSeen; sessionId = $iso.processSessionId })
+            $appWindows = @($iso.windowsAtEnd | Where-Object { $_.title -like "$name*" })  # IME helper windows carry their own titles
+            Check 'isolated.titleMarker' ($appWindows.Count -gt 0 -and @($appWindows | Where-Object { -not $_.title.EndsWith(' [isolated test profile]') }).Count -eq 0) $iso.windowsAtEnd
+            Check 'isolated.accessBootstrap' ((Test-Path (Join-Path $isoUserData 'access-identity.dpapi')) -and (Test-Path (Join-Path $isoUserData 'access-trust.dpapi'))) $iso.userDataListing
+            PhaseCheck 'isolated.accessPhase' $iso
+            Check 'isolated.noBackendOrPort' ($iso.listeningPorts.Count -eq 0 -and $iso.backendServers.Count -eq 0 -and -not $iso.backendLogExists) ([ordered]@{ ports = $iso.listeningPorts; backends = $iso.backendServers; backendLog = $iso.backendLogExists })
+            Check 'isolated.marker' ([bool]$iso.isolatedProfileLog -or (@($iso.stdoutTail) -match 'Isolated test profile active').Count -gt 0) ([ordered]@{ log = $iso.isolatedProfileLog; stdout = $iso.stdoutTail })
+            Check 'isolated.noLoginItem' ($null -eq $iso.loginItem) $iso.loginItem
+            Check 'isolated.productionProfileUntouched' (-not $iso.productionStateRootExists) $stateRoot
+            Check 'isolated.closedByPid' ($iso.strayProcessesUnderInstallDir.Count -eq 0) ([ordered]@{ closeMainWindowSent = $iso.closeMainWindowSent; graceful = $iso.exitedAfterCloseMainWindow; forceStopped = $iso.forceStoppedPids; stray = $iso.strayProcessesUnderInstallDir })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::4b. Launch in production mode'
+            $prod = LaunchApp 'production' @() "$name access" $prodProfile $true
+            Note 'launchProduction' $prod
+            Check 'production.window' ($null -ne $prod.window) ([ordered]@{ expected = $prod.expectedTitle; seen = $prod.windowTitlesSeen; sessionId = $prod.processSessionId })
+            Check 'production.profileCreated' ((Test-Path (Join-Path $prodProfile 'settings.json')) -and (Test-Path (Join-Path $prodProfile 'access-identity.dpapi')) -and (Test-Path (Join-Path $prodProfile 'access-trust.dpapi'))) ([ordered]@{ path = $prodProfile; listing = $prod.userDataListing })
+            PhaseCheck 'production.accessPhase' $prod
+            Check 'production.noBackendOrPort' ($prod.listeningPorts.Count -eq 0 -and $prod.backendServers.Count -eq 0 -and -not $prod.backendLogExists) ([ordered]@{ ports = $prod.listeningPorts; backends = $prod.backendServers; backendLog = $prod.backendLogExists })
+            Check 'production.loginItem' ("$($prod.loginItem)" -like "*$exe*" -and "$($prod.loginItem)" -like '*--desktop-updater*') ([ordered]@{ name = $aumid; value = $prod.loginItem; startupApproved = $prod.loginItemApproved })
+            Check 'production.closedByPid' ($prod.strayProcessesUnderInstallDir.Count -eq 0) ([ordered]@{ closeMainWindowSent = $prod.closeMainWindowSent; graceful = $prod.exitedAfterCloseMainWindow; forceStopped = $prod.forceStoppedPids; stray = $prod.strayProcessesUnderInstallDir })
+            Write-Host '::endgroup::'
+
+            Write-Host '::group::5. Silent uninstall'
+            $regression = @(ArgvRegression)
+            Check 'uninstall.argvRegression' (@($regression | Where-Object { -not $_.ok }).Count -eq 0) $regression
+            if (@($regression | Where-Object { -not $_.ok }).Count) { throw 'uninstaller argv builder failed its regression; the uninstaller was not executed' }
+            $silentControls = @(SilentControls)
+            Check 'uninstall.silentControls' (@($silentControls | Where-Object { -not $_.ok }).Count -eq 0) $silentControls
+            $current = @(UninstallEntries) | Where-Object { $_.hive -like 'HKCU:*' } | Select-Object -First 1
+            $u = "$($current.UninstallString)"
+            $plan = UninstallArgv $u
+            # The exact argv, element by element, is recorded before execution.
+            Note 'uninstallArgv' ([ordered]@{ uninstallString = $u; quietUninstallString = $current.QuietUninstallString; exe = $plan.exe; argc = $plan.argv.Count; argv = @($plan.argv); recordedAt = (Get-Date).ToUniversalTime().ToString('o') })
+            Write-Host "uninstall argv ($($plan.argv.Count)): $(@($plan.argv | ForEach-Object { "[$_]" }) -join ' ')"
+            $since = (Get-Date).AddSeconds(-2)
+            $un = Start-Process -FilePath $plan.exe -ArgumentList $plan.argv -PassThru
+            # The NSIS uninstaller re-runs itself from %TEMP%: follow its process tree (handles held so exit codes stay
+            # readable), watch every member for a visible window, and wait for the observable result.
+            $held = @{}; $visible = New-Object System.Collections.Generic.List[string]
+            $deadline = (Get-Date).AddMinutes(10)
+            do {
+              foreach ($t in @(ProcessTree $un.Id $since)) {
+                if (-not $held.ContainsKey($t.pid)) { $hp = Get-Process -Id $t.pid -ErrorAction SilentlyContinue; if ($hp) { try { [void]$hp.Handle; $held[$t.pid] = [ordered]@{ name = $t.name; parent = $t.parent; path = $t.path; commandLine = $t.commandLine; process = $hp } } catch { } } }
+                foreach ($w in TopWindows $t.pid) { if ($w.visible) { $seen = "pid=$($t.pid) $($t.name): $($w.title)"; if (-not $visible.Contains($seen)) { $visible.Add($seen) } } }
+              }
+              $busy = (Test-Path -LiteralPath $installDir) -or @(UninstallEntries).Count -gt 0 -or -not $un.HasExited -or @($held.Values | Where-Object { -not $_.process.HasExited }).Count -gt 0
+              if ($busy) { Start-Sleep -Milliseconds 500 }
+            } while ($busy -and (Get-Date) -lt $deadline)
+            $members = @($held.GetEnumerator() | Sort-Object Key | ForEach-Object { [ordered]@{ pid = $_.Key; parent = $_.Value.parent; path = $_.Value.path; name = $_.Value.name; exited = $_.Value.process.HasExited; exitCode = $(if ($_.Value.process.HasExited) { $_.Value.process.ExitCode } else { $null }); commandLine = $_.Value.commandLine } })
+            $launcher = [ordered]@{ pid = $un.Id; exited = $un.HasExited; exitCode = $(if ($un.HasExited) { $un.ExitCode } else { $null }) }
+            $verdict = SilentVerdict $launcher $members @($visible) ([string[]]$plan.argv) $name
+            Check 'uninstall.silent' ($verdict.ok -and @($silentControls | Where-Object { -not $_.ok }).Count -eq 0) $verdict
+            Check 'uninstall.programDirRemoved' (-not (Test-Path -LiteralPath $installDir)) ([ordered]@{ uninstallString = $u; argv = @($plan.argv); dir = $installDir })
+            Check 'uninstall.registryRemoved' (@(UninstallEntries).Count -eq 0) @(UninstallEntries)
+            Check 'uninstall.loginItemRemoved' ($null -eq (RegValue $runKey $aumid) -and $null -eq (RegValue $approvedKey $aumid)) ([ordered]@{ run = (RegValue $runKey $aumid); startupApproved = (RegValue $approvedKey $aumid) })
+            $links = @(Shortcuts)
+            Check 'uninstall.shortcutsRemoved' (@($links | Where-Object { $_.exists }).Count -eq 0) $links
+            Check 'uninstall.userDataRetained' (Test-Path (Join-Path $prodProfile 'settings.json')) 'deleteAppDataOnUninstall is false: the production profile stays'
+            Note 'remainsAfterUninstall' ([ordered]@{
+              installRegistryKeyExists = (Test-Path -LiteralPath $installKey)
+              productionProfile = Listing $prodProfile
+              isolatedProfile = Listing $isolatedRoot
+              melangeDesktopAppData = Test-Path (Join-Path $env:APPDATA 'MelangeDesktop')
+              electronDefaultUserData = Test-Path (Join-Path $env:APPDATA $name)
+              updaterCache = Test-Path (Join-Path $env:LOCALAPPDATA "$app-desktop-updater")
+              credentialManagerEntries = @(& cmdkey.exe /list 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match 'MelangeSystems' }).Count
+            })
+            Write-Host '::endgroup::'
+          } catch {
+            $failed.Add('fatal'); $obs.fatal = "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
+            Write-Host "::error title=fatal::$($_.Exception.Message)"
+          } finally {
+            $obs.run.finishedAt = (Get-Date).ToUniversalTime().ToString('o')
+            # PASS only when every check, including the observed needs_request phase, passed; unverified phase evidence never counts as PASS.
+            $obs.failed = @($failed); $obs.unverified = @($unverified)
+            $obs.result = $(if ($failed.Count) { 'FAIL' } elseif ($unverified.Count) { 'PASS_WITH_UNVERIFIED' } else { 'PASS' })
+            $obs.phaseProven = ($unverified.Count -eq 0 -and $obs.checks.Contains('production.accessPhase') -and $obs.checks['production.accessPhase'].ok -eq $true -and $obs.checks.Contains('isolated.accessPhase') -and $obs.checks['isolated.accessPhase'].ok -eq $true)
+            $obs | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding utf8
+            Write-Host "acceptance-$app.json: $($obs.result) ($($obs.checks.Count) checks, failed: $($failed -join ', '); unverified: $($unverified -join ', '))"
+          }
+          if ($failed.Count) { exit 1 }
+          exit 0
+
+      - name: Upload acceptance record (JSON only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (= v4.6.2)
+        with:
+          name: acceptance-terrier
+          path: ${{ runner.temp }}/acceptance/acceptance-terrier.json
+          if-no-files-found: error
+          retention-days: 3
