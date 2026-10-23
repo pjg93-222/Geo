@@ -34,31 +34,42 @@ export function publicStreetCenter(street:PublicStreet):PublicPoint{
   if(!points.length)return [0,0];
   return [points.reduce((s,p)=>s+p[0],0)/points.length,points.reduce((s,p)=>s+p[1],0)/points.length];
 }
+/** The two door bases (AUDIENCE_FILTER_SPEC 3.1): public address-point estimates, or voter-file doors matching the audience filter. */
+export type Basis='public-estimate'|'voter-file';
+/** Basis-neutral grouping input: `doors` is whatever the basis counts. */
+export interface StreetCount {id:string;label:string;center:PublicPoint;doors:number}
 /** regrouped: formed from streets an earlier pass stranded, so with no distance limit. */
-export interface PublicStreetGroup {streets:PublicStreet[];estimated_doors:number;regrouped?:boolean}
-export interface PublicGrouping {groups:PublicStreetGroup[];leftovers:PublicStreet[];oversized:PublicStreet[];zero:PublicStreet[];reason:string|null}
-/** Bounded spatial-order partitioning. Whole streets stay whole. No claim of road-network connectivity. */
+export interface StreetGroup<T extends StreetCount> {streets:T[];doors:number;basis:Basis;regrouped?:boolean}
+export interface Grouping<T extends StreetCount> {basis:Basis;groups:StreetGroup<T>[];leftovers:T[];oversized:T[];zero:T[];reason:string|null}
+export type PublicStreetCount=PublicStreet&StreetCount;
+export type PublicStreetGroup=StreetGroup<PublicStreetCount>&{estimated_doors:number};
+export type PublicGrouping=Omit<Grouping<PublicStreetCount>,'groups'>&{groups:PublicStreetGroup[]};
+/** The public basis: estimates are the doors, the address points (or the road line) give the center. */
 export function groupPublicStreets(input:PublicStreet[],min:number,max:number):PublicGrouping{
+  const grouping=groupStreets(input.map(s=>({...s,center:publicStreetCenter(s),doors:s.estimated_doors})),'public-estimate',min,max);
+  return {...grouping,groups:grouping.groups.map(g=>({...g,estimated_doors:g.doors}))};
+}
+/** Bounded spatial-order partitioning. Whole streets stay whole. No claim of road-network connectivity. */
+export function groupStreets<T extends StreetCount>(input:T[],basis:Basis,min:number,max:number):Grouping<T>{
   if(!Number.isInteger(min)||!Number.isInteger(max)||min<1||max<min||max>1000)throw new Error('Use whole-number limits from 1 to 1,000, with minimum no larger than maximum.');
   if(input.length>MAX_PUBLIC_STREETS)throw new Error(`Choose at most ${MAX_PUBLIC_STREETS.toLocaleString('en-US')} streets at once.`);
   if(new Set(input.map(s=>s.id)).size!==input.length)throw new Error('Street IDs must be unique.');
-  if(input.some(s=>!Number.isInteger(s.estimated_doors)||s.estimated_doors<0))throw new Error('Street estimates must be nonnegative whole numbers.');
-  const zero=input.filter(s=>s.estimated_doors===0),oversized=input.filter(s=>s.estimated_doors>max);
-  const usable=input.filter(s=>s.estimated_doors>0&&s.estimated_doors<=max);
-  const total=usable.reduce((s,r)=>s+r.estimated_doors,0),target=(min+max)/2;
-  if(!usable.length)return {groups:[],leftovers:[],oversized,zero,reason:input.length?'No selected streets can fit these limits.':null};
-  // Best of four sweep axes over one street set. Four axes keep work bounded: O(4*n*max), because each positive street contributes at least one estimate.
-  const partition=(streets:PublicStreet[])=>{
-    const centers=new Map(streets.map(s=>[s.id,publicStreetCenter(s)]));
-    const latitude=streets.reduce((s,r)=>s+centers.get(r.id)![1],0)/streets.length;
+  if(input.some(s=>!Number.isInteger(s.doors)||s.doors<0))throw new Error('Street counts must be nonnegative whole numbers.');
+  const zero=input.filter(s=>s.doors===0),oversized=input.filter(s=>s.doors>max);
+  const usable=input.filter(s=>s.doors>0&&s.doors<=max);
+  const total=usable.reduce((s,r)=>s+r.doors,0),target=(min+max)/2;
+  if(!usable.length)return {basis,groups:[],leftovers:[],oversized,zero,reason:input.length?'No selected streets can fit these limits.':null};
+  // Best of four sweep axes over one street set. Four axes keep work bounded: O(4*n*max), because each positive street contributes at least one door.
+  const partition=(streets:T[])=>{
+    const latitude=streets.reduce((s,r)=>s+r.center[1],0)/streets.length;
     const lonScale=Math.cos(latitude*Math.PI/180);
-    let best:{groups:PublicStreetGroup[];leftovers:PublicStreet[];covered:number;cost:number}|null=null;
+    let best:{groups:StreetGroup<T>[];leftovers:T[];covered:number;cost:number}|null=null;
     for(const angle of [0,Math.PI/2,Math.PI/4,-Math.PI/4]){
-      const projected=streets.map(street=>{const c=centers.get(street.id)!;return {street,x:c[0]*lonScale*111,y:c[1]*111};});
+      const projected=streets.map(street=>{const c=street.center;return {street,x:c[0]*lonScale*111,y:c[1]*111};});
       projected.sort((a,b)=>(a.x-b.x)*Math.cos(angle)+(a.y-b.y)*Math.sin(angle)||a.street.id.localeCompare(b.street.id));
       const n=projected.length,covered=new Int32Array(n+1),cost=new Float64Array(n+1),from=new Int32Array(n+1),taken=new Uint8Array(n+1);
       const sums=Array.from({length:6},()=>new Float64Array(n+1));
-      projected.forEach((p,i)=>{const w=p.street.estimated_doors;[w,w*p.x,w*p.y,w*p.x*p.x,w*p.y*p.y,1].forEach((v,j)=>sums[j][i+1]=sums[j][i]+v);});
+      projected.forEach((p,i)=>{const w=p.street.doors;[w,w*p.x,w*p.y,w*p.x*p.x,w*p.y*p.y,1].forEach((v,j)=>sums[j][i+1]=sums[j][i]+v);});
       for(let end=1;end<=n;end++){
         covered[end]=covered[end-1];cost[end]=cost[end-1];from[end]=end-1;
         for(let start=end-1;start>=0;start--){
@@ -69,8 +80,8 @@ export function groupPublicStreets(input:PublicStreet[],min:number,max:number):P
           if(value>covered[end]||(value===covered[end]&&penalty<cost[end])){covered[end]=value;cost[end]=penalty;from[end]=start;taken[end]=1;}
         }
       }
-      const groups:PublicStreetGroup[]=[],leftovers:PublicStreet[]=[];
-      for(let end=n;end>0;){const start=from[end];if(taken[end]){const rows=projected.slice(start,end).map(p=>p.street);groups.push({streets:rows,estimated_doors:rows.reduce((s,r)=>s+r.estimated_doors,0)});}else leftovers.push(projected[end-1].street);end=start;}
+      const groups:StreetGroup<T>[]=[],leftovers:T[]=[];
+      for(let end=n;end>0;){const start=from[end];if(taken[end]){const rows=projected.slice(start,end).map(p=>p.street);groups.push({streets:rows,doors:rows.reduce((s,r)=>s+r.doors,0),basis});}else leftovers.push(projected[end-1].street);end=start;}
       groups.reverse();leftovers.reverse();
       const candidate={groups,leftovers,covered:covered[n],cost:cost[n]};
       if(!best||candidate.covered>best.covered||(candidate.covered===best.covered&&candidate.cost<best.cost))best=candidate;
@@ -81,10 +92,11 @@ export function groupPublicStreets(input:PublicStreet[],min:number,max:number):P
   const first=partition(usable),groups=[...first.groups];let leftovers=first.leftovers;
   while(leftovers.length){const next=partition(leftovers);if(!next.groups.length)break;groups.push(...next.groups.map(g=>({...g,regrouped:true})));leftovers=next.leftovers;}
   const reason=leftovers.length?(Math.ceil(total/max)>Math.floor(total/min)?'These totals cannot all fit the requested minimum and maximum.':'Some whole streets remain outside the bounded spatial grouping. Adjust limits or selections; a different arrangement may fit.'):null;
-  return {groups,leftovers,oversized,zero,reason};
+  return {basis,groups,leftovers,oversized,zero,reason};
 }
-const csv=(rows:unknown[][])=>'\uFEFF'+csvText(rows)+'\r\n';
-const round6=(p:PublicPoint[])=>p.map(v=>v.map(x=>Math.round(x*1e6)/1e6));
+export const csv=(rows:unknown[][])=>'\uFEFF'+csvText(rows)+'\r\n';
+export const round6=(p:PublicPoint[])=>p.map(v=>v.map(x=>Math.round(x*1e6)/1e6));
+export const PUBLIC_ZIP='street-groups-public-estimate.zip';
 export type PublicStreetStatus='grouped'|'unassigned'|'over_max'|'zero';
 export interface PublicExportInfo {
   catalogId:string;catalog:string;sourceDate:string;basis:string;polygon:PublicPoint[];min:number;max:number;generatedAt:string;
