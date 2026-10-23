@@ -6,6 +6,7 @@ import {hasEvidence} from './walkEvidence.ts';
 import {MAX_LIST_PEOPLE,MAX_PLAN_SPANS,parseSpansParam,parseTrim} from './plan.ts';
 import {marginBin} from './opinions.ts';
 import {HEADER,PUBLIC_SCOPE_WARNING} from './publicStreetGroups.ts';
+import {VOTER_HEADER,VOTER_SCOPE_WARNING} from './audienceGroups.ts';
 
 const DOT=' · ';
 const COUNT=new Intl.NumberFormat('en-US');
@@ -775,7 +776,7 @@ const tooLong=(fields:readonly Field[]):string=>{
  * Cells are trimmed. Rows with no street are skipped. A row with a value longer than the server takes (MATCH_LIMITS, counted the
  * way the server counts, on the value as it would be sent) is left out with a problem such as "Row 7: street name is too long",
  * and the other rows go on. Throws a plain-language Error when a header has no street column, more than MAX_UPLOAD_ROWS rows
- * could be sent, or the file is over 1 MB. A public-estimate export (header row exactly publicStreetGroups' HEADER) is read one group at a time:
+ * could be sent, or the file is over 1 MB. A public-estimate export (header row exactly publicStreetGroups' HEADER) or a voter-file export (exactly audienceGroups' VOTER_HEADER) is read one group at a time:
  * several groups, or any row that was not grouped, throws; its street names lose the formula guard apostrophe and `warning` is set.
  */
 export function readWalkCsv(text:string):WalkCsvRead{
@@ -789,16 +790,17 @@ export function readWalkCsv(text:string):WalkCsvRead{
   if(hasHeader&&found.street===undefined)throw new Error('Add a column named street.');
   const at:Partial<Record<Field,number>>=hasHeader?found:{street:0,side:1,city:2,zip:3};
   const heads=rows[0].map(norm),statusAt=heads.indexOf('status'),groupAt=heads.indexOf('group');
-  const publicExport=heads.length===HEADER.length&&HEADER.every((h,i)=>rows[0][i].trim()===h);
-  if(publicExport){
+  const same=(h:readonly string[])=>heads.length===h.length&&h.every((x,i)=>rows[0][i].trim()===x);
+  const kind=same(HEADER)?'public-estimate':same(VOTER_HEADER)?'voter-file':null,exported=kind!==null;
+  if(kind){
     const body=rows.slice(1);
-    if(new Set(body.map(r=>(r[groupAt]??'').trim()).filter(Boolean)).size>1)throw new Error('This public-estimate file has several groups. Import one group file at a time.');
+    if(new Set(body.map(r=>(r[groupAt]??'').trim()).filter(Boolean)).size>1)throw new Error(`This ${kind==='voter-file'?'voter-file export':'public-estimate file'} has several groups. Import one group file at a time.`);
     if(body.some(r=>(r[statusAt]??'').trim().toLowerCase()!=='grouped'))throw new Error("Streets that were not grouped can't be imported as a walk list.");
-    out.warning=PUBLIC_SCOPE_WARNING;
+    out.warning=kind==='voter-file'?VOTER_SCOPE_WARNING:PUBLIC_SCOPE_WARNING;
   }
   for(let n=hasHeader?1:0;n<rows.length;n++){
     const r=rows[n];
-    const get=(f:Field):string=>at[f]===undefined?'':squash(publicExport&&f==='street'?unguard(r[at[f] as number]??''):r[at[f] as number]??'');
+    const get=(f:Field):string=>at[f]===undefined?'':squash(exported&&f==='street'?unguard(r[at[f] as number]??''):r[at[f] as number]??'');
     const street=get('street');if(!street)continue;
     const item:WalkMatchInput={street};
     const side=get('side');if(side)item.side=sideFromText(side)??side;

@@ -1,10 +1,16 @@
 import {Suspense,lazy,useEffect,useMemo,useRef,useState} from 'react';
+import {getAudienceOptions,isVoterFileUnavailable} from '../api/audience.ts';
+import type {AudienceOptions} from '../api/audience.ts';
 import {getPublicStreetCatalogs,isLocalOnlyDenial,queryPublicStreets} from '../api/publicStreets.ts';
-import type {PublicBounds,PublicPoint,PublicStreetCatalog,PublicStreetQuery} from '../api/publicStreets.ts';
-import {boundsPolygon,groupPublicStreets,polygonBounds,publicExportFiles,PUBLIC_SCOPE_WARNING,validatePublicPolygon} from '../lib/publicStreetGroups.ts';
+import type {PublicBounds,PublicPoint,PublicStreet,PublicStreetCatalog,PublicStreetQuery} from '../api/publicStreets.ts';
+import {DEFAULT_FILTER} from '../lib/audienceGroups.ts';
+import type {AudienceFilter} from '../lib/audienceGroups.ts';
+import {boundsPolygon,groupPublicStreets,polygonBounds,publicExportFiles,PUBLIC_SCOPE_WARNING,PUBLIC_ZIP,validatePublicPolygon} from '../lib/publicStreetGroups.ts';
 import {buildZip,downloadZip} from '../lib/walkZip.ts';
+import {VoterAudience} from './VoterAudience.tsx';
 import '../styles/public-streets.css';
 const AreaStreetMap=lazy(()=>import('./AreaStreetMap.tsx').then(m=>({default:m.AreaStreetMap})));
+const NONE:PublicStreet[]=[];
 const count=(n:number)=>n.toLocaleString('en-US');
 const message=(e:unknown)=>e instanceof Error?e.message:'Public street data could not be loaded.';
 const safeLink=(url:string)=>/^https?:\/\//i.test(url)?url:undefined;
@@ -33,8 +39,15 @@ function DiscoveryBody({catalogs,catalogLoading,catalogError,onRetry}:{catalogs:
   const [box,setBox]=useState(['','','','']),[coordinates,setCoordinates]=useState('');
   const [drawing,setDrawing]=useState(false),[draft,setDraft]=useState<PublicPoint[]>([]);
   const [minText,setMinText]=useState('100'),[maxText,setMaxText]=useState('150');
+  const [mode,setMode]=useState<'public'|'voter'>('public'),[options,setOptions]=useState<AudienceOptions|null>(null),[filter,setFilter]=useState<AudienceFilter>(DEFAULT_FILTER);
   const queryEpoch=useRef(0),catalog=catalogs.find(c=>c.id===catalogId);
   const data=response?.request===request&&response.value.catalog.id===catalogId?response.value:null;
+  // Voter-file mode exists only while the options request answers; a 403 or 503 leaves the public estimate alone.
+  useEffect(()=>{
+    const ac=new AbortController();
+    getAudienceOptions(ac.signal).then(r=>{if(!ac.signal.aborted)setOptions(r);}).catch(e=>{if(!ac.signal.aborted&&!isVoterFileUnavailable(e))setNote('Voter-file options could not be loaded; the public estimate is still available.');});
+    return ()=>ac.abort();
+  },[]);
   useEffect(()=>{setCatalogId(id=>catalogs.some(c=>c.id===id)?id:catalogs[0]?.id??'');},[catalogs]);
   useEffect(()=>{
     if(!catalog){setRequest(null);setResponse(null);return;}
@@ -66,22 +79,30 @@ function DiscoveryBody({catalogs,catalogLoading,catalogError,onRetry}:{catalogs:
   function download(){
     if(!data||!groups?.groups.length)return;
     const {catalog:c}=data,info={catalogId:c.id,catalog:c.label,sourceDate:c.source_date,basis:data.count_basis,polygon:data.polygon,min:Number(minText),max:Number(maxText),generatedAt:new Date().toISOString(),sources:c.sources};
-    try{downloadZip('public-street-groups.zip',buildZip(publicExportFiles(groups,info)));}catch(e){setNote(message(e));}
+    try{downloadZip(PUBLIC_ZIP,buildZip(publicExportFiles(groups,info)));}catch(e){setNote(message(e));}
   }
+  const limits=(unit:string,hint:string)=><>
+    <div className="public-street-limits"><label>Minimum {unit} per group<input type="number" min={1} max={1000} step={1} value={minText} onChange={e=>setMinText(e.target.value)}/></label><label>Maximum {unit} per group<input type="number" min={1} max={1000} step={1} value={maxText} onChange={e=>setMaxText(e.target.value)}/></label></div>
+    <p className="public-street-hint">{hint}</p>
+  </>;
+  const voter=mode==='voter'&&!!options;
   return <div className="public-street-body">
-    <p className="public-street-intro">Choose public coverage, refine an area, then divide selected street names into groups by estimated residential points.</p>
+    {options&&<div className="public-street-mode" role="group" aria-label="Count basis">{(['public','voter'] as const).map(m=><button type="button" key={m} aria-pressed={mode===m} onClick={()=>setMode(m)}>{m==='public'?'Public estimate':'Voter file'}</button>)}</div>}
+    <p className="public-street-intro">{voter?'Choose coverage, refine an area, then divide its streets into groups by voter-file doors that match the Audience filter.':'Choose public coverage, refine an area, then divide selected street names into groups by estimated residential points.'}</p>
     {catalogLoading&&<p role="status">Loading available coverage…</p>}
     {catalogError&&<p className="public-street-alert" role="alert">{catalogError} <button type="button" onClick={onRetry}>Retry coverage</button></p>}
     {!catalogLoading&&!catalogError&&!catalogs.length&&<p role="status">No public street coverage has been prepared on this server.</p>}
     {!!catalogs.length&&<label className="public-street-label">Coverage<select value={catalogId} onChange={e=>setCatalogId(e.target.value)}>{catalogs.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select></label>}
     {catalog&&<>
-      <p className="public-street-meta">{count(catalog.street_count)} streets · {count(catalog.estimated_doors)} residential estimates across loaded coverage{catalog.source_date?` · source date ${catalog.source_date}`:''}</p>
-      <p className="public-street-basis"><strong>Count basis:</strong> {data?.count_basis??catalog.count_basis}</p>
-      <ul className="public-street-sources">{catalog.sources.map((source,i)=><li key={i}>{safeLink(source.url)?<a href={source.url} target="_blank" rel="noreferrer">{source.label}</a>:source.label}</li>)}</ul>
+      {!voter&&<>
+        <p className="public-street-meta">{count(catalog.street_count)} streets · {count(catalog.estimated_doors)} residential estimates across loaded coverage{catalog.source_date?` · source date ${catalog.source_date}`:''}</p>
+        <p className="public-street-basis"><strong>Count basis:</strong> {data?.count_basis??catalog.count_basis}</p>
+        <ul className="public-street-sources">{catalog.sources.map((source,i)=><li key={i}>{safeLink(source.url)?<a href={source.url} target="_blank" rel="noreferrer">{source.label}</a>:source.label}</li>)}</ul>
+      </>}
       <div className="public-street-tools"><button type="button" aria-pressed={drawing} onClick={()=>{setDrawing(v=>!v);setDraft([]);setNote('');}}>{drawing?'Cancel drawing':'Draw area on map'}</button>
         {drawing&&<><button type="button" onClick={()=>setDraft(p=>p.slice(0,-1))} disabled={!draft.length}>Undo corner</button><button type="button" onClick={()=>applyPolygon(draft)} disabled={draft.length<3}>Use drawn area</button><span role="status">{draft.length} corners · click 3 or more points, then use area. Escape cancels.</span></>}
         <button type="button" onClick={()=>applyPolygon(boundsPolygon(catalog.bbox))}>Use full coverage</button></div>
-      <Suspense fallback={<p role="status">Loading local map…</p>}><AreaStreetMap coverage={catalog.bbox} polygon={request?.id===catalog.id?request.polygon:[]} draft={draft} drawing={drawing} streets={data?.streets??[]} selected={selected} onPoint={p=>{
+      <Suspense fallback={<p role="status">Loading local map…</p>}><AreaStreetMap coverage={catalog.bbox} polygon={request?.id===catalog.id?request.polygon:[]} draft={draft} drawing={drawing} streets={voter?NONE:data?.streets??[]} selected={selected} keyless={voter} onPoint={p=>{
         if(p[0]<catalog.bbox[0]||p[0]>catalog.bbox[2]||p[1]<catalog.bbox[1]||p[1]>catalog.bbox[3]){setNote('Choose corners inside the loaded coverage.');return;}
         if(draft.length>=199){setNote('Use at most 199 polygon corners.');return;}setDraft(v=>[...v,p]);
       }}/></Suspense>
@@ -94,17 +115,18 @@ function DiscoveryBody({catalogs,catalogLoading,catalogError,onRetry}:{catalogs:
         </form>
       </details>
       {note&&<p className="public-street-alert" role="alert">{note}</p>}
-      {loading&&<p role="status">Finding every street in the selected area…</p>}
-      {error&&<p className="public-street-alert" role="alert">{error} <button type="button" onClick={()=>setQueryRetry(n=>n+1)}>Retry area</button></p>}
-      {data&&<>
+      {voter&&options&&<VoterAudience options={options} polygon={request?.id===catalog.id?request.polygon:null} filter={filter} onFilter={setFilter} minText={minText} maxText={maxText} onNote={setNote}
+        limits={limits('voter doors','Limits include both endpoints. Whole street entries stay together. Groups are first formed from nearby street centers; groups made from leftovers have no distance limit. Road connectivity is not verified.')}/>}
+      {!voter&&loading&&<p role="status">Finding every street in the selected area…</p>}
+      {!voter&&error&&<p className="public-street-alert" role="alert">{error} <button type="button" onClick={()=>setQueryRetry(n=>n+1)}>Retry area</button></p>}
+      {!voter&&data&&<>
         <p className="public-street-total" role="status">{count(data.streets.length)} streets · {count(data.estimated_doors)} estimated residential points in this area</p>
         {!data.streets.length?<p>No public streets intersect this area. Expand the area or choose another coverage.</p>:<>
           <label className="public-street-label">Find street names<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search loaded streets"/></label>
           <div className="public-street-tools"><button type="button" onClick={()=>setSelected(s=>new Set([...s,...filtered.map(r=>r.id)]))}>Select shown</button><button type="button" onClick={()=>setSelected(s=>new Set([...s].filter(id=>!filtered.some(r=>r.id===id))))}>Clear shown</button><span>{count(chosen.length)} selected · {count(chosen.reduce((n,s)=>n+s.estimated_doors,0))} estimates</span></div>
           <ul className="public-street-list" aria-label="All public street names in queried area">{filtered.map(s=><li key={s.id}><label><input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggle(s.id)}/><span>{s.label}</span><strong>{count(s.estimated_doors)}</strong></label>{!s.estimated_doors&&<small>No residential estimate; review separately</small>}</li>)}</ul>
           {!filtered.length&&<p>No street names match this search. Selections outside the search remain selected.</p>}
-          <div className="public-street-limits"><label>Minimum estimates per group<input type="number" min={1} max={1000} step={1} value={minText} onChange={e=>setMinText(e.target.value)}/></label><label>Maximum estimates per group<input type="number" min={1} max={1000} step={1} value={maxText} onChange={e=>setMaxText(e.target.value)}/></label></div>
-          <p className="public-street-hint">Limits include both endpoints. Whole selected street entries stay together. Groups are first formed from nearby street centers; groups made from leftovers have no distance limit. Road connectivity and occupied doors are not verified.</p>
+          {limits('estimates','Limits include both endpoints. Whole selected street entries stay together. Groups are first formed from nearby street centers; groups made from leftovers have no distance limit. Road connectivity and occupied doors are not verified.')}
           {grouping.error&&<p role="alert" className="public-street-alert">{grouping.error}</p>}
           {groups&&<>
             {!!groups.zero.length&&<p className="public-street-alert">{groups.zero.length} streets have zero estimated points and are excluded from counted groups: {groups.zero.map(s=>s.label).join('; ')}.</p>}

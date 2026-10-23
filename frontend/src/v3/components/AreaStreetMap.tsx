@@ -6,7 +6,7 @@ import type {PublicBounds,PublicPoint,PublicStreet} from '../api/publicStreets.t
 import {boundsPolygon} from '../lib/publicStreetGroups.ts';
 maplibregl.setWorkerUrl(workerUrl);
 const empty:GeoJSON.FeatureCollection={type:'FeatureCollection',features:[]};
-interface Props {coverage:PublicBounds;polygon:PublicPoint[];draft:PublicPoint[];drawing:boolean;streets:PublicStreet[];selected:ReadonlySet<string>;onPoint:(p:PublicPoint)=>void}
+interface Props {coverage:PublicBounds;polygon:PublicPoint[];draft:PublicPoint[];drawing:boolean;streets:PublicStreet[];selected:ReadonlySet<string>;keyless?:boolean;onPoint:(p:PublicPoint)=>void}
 /** Local vector canvas: no tiles, external glyphs, geocoder or identity-linked data. */
 export function AreaStreetMap(p:Props){
   const el=useRef<HTMLDivElement>(null),map=useRef<maplibregl.Map|null>(null),current=useRef(p);current.current=p;
@@ -44,6 +44,6 @@ export function AreaStreetMap(p:Props){
   useEffect(()=>{const m=map.current;if(m)m.getCanvas().style.cursor=p.drawing?'crosshair':'';},[p.drawing,ready]);
   return <div className="public-street-map-wrap"><div ref={el} className="public-street-map" aria-label="Public streets and anonymous residential points. Use the coordinate fields below as a keyboard alternative."/>
     {failed&&<p role="status" className="public-street-map-note">Map unavailable. Area coordinates and the complete street list remain available below.</p>}
-    <p className="public-street-map-key">Teal: selected streets · plum dots: residential points · dashed edge: loaded coverage</p>
+    {!p.keyless&&<p className="public-street-map-key">Teal: selected streets · plum dots: residential points · dashed edge: loaded coverage</p>}
   </div>;
 }

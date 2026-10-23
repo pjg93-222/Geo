@@ -152,6 +152,17 @@ ADVISORY_PATTERN = re.compile(
     r'worth|likely to join|persuad|persuasion|convert|opportunity|high[- ]value|insufficient evidence)\b', re.I)
 
 
+# Audience filter (docs/AUDIENCE_FILTER_SPEC.md): registration and canvass choices as the UI names them, and the support
+# presets. Registration choices say what the data is ("Registered Green"), never a spectrum word. 'none': no code / no result.
+AUDIENCE_PARTY_LABELS = {**{code: 'Registered ' + label for code, label in PARTY_CODES.items()},
+                         'O': 'Registered Other party', 'T': 'Party code T', 'none': 'No party code'}
+AUDIENCE_CANVASS_LABELS = {'S': 'Supporter', 'U': 'Undecided', 'O': 'Opposed', 'NH': 'Not home', 'none': 'No result yet'}
+AUDIENCE_PRESET_LABELS = ('Leans R', 'Persuadable', 'Leans D', 'Everyone')
+# D4 (owner, 2026-10-22): exactly this label may say "Persuadable" (the middle-third support preset). The pattern itself
+# is unchanged, so every other advisory word stays banned. Mirrored in frontend/tests/v3/copy.test.ts.
+ADVISORY_EXEMPT = frozenset({'Persuadable'})
+
+
 def reg_group_of(party_code):
     """The registration rollup used by the list, the balanced view and within-registration standings."""
     return party_code if party_code in ('D', 'R', 'U') else 'O'
@@ -205,7 +216,8 @@ def self_check():
     strings = [row['label'] for row in FIELDS] + list(GROUP_LABELS.values()) + list(STATUS_LABELS.values())
     strings += list(OWNER_RENTER.values()) + list(PARTY_CODES.values()) + list(LEAN_BAND_LABELS.values()) + [CHILDREN_RULE_SOURCE, CODE50_VALUE]
     strings += [text for preset in ROI_PRESETS.values() for text in preset]
-    bad = [text for text in strings if ADVISORY_PATTERN.search(text)]
+    strings += list(AUDIENCE_PARTY_LABELS.values()) + list(AUDIENCE_CANVASS_LABELS.values()) + list(AUDIENCE_PRESET_LABELS)
+    bad = [text for text in strings if text not in ADVISORY_EXEMPT and ADVISORY_PATTERN.search(text)]
     if bad:
         raise ValueError('Advisory wording in labels: ' + ', '.join(bad))
     return len(strings)

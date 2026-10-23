@@ -283,21 +283,26 @@ def catalogs(request):
     return response({'catalogs': [get_catalog(path.stem).metadata for path in files]})
 
 
-@local_only_post
-@_guard
-def query(request):
+def json_request(request):
+    """The strict JSON body of a POST (no query string, at most MAX_BODY bytes, no duplicate keys or nonfinite numbers)."""
     if request.GET or request.content_type != 'application/json':
         raise RequestProblem('Send an application/json request without query parameters.')
     declared = request.META.get('CONTENT_LENGTH', '')
     if declared and (not declared.isdecimal() or int(declared) > MAX_BODY):
-        raise RequestProblem('Public street request exceeds the size limit.')
+        raise RequestProblem('Request exceeds the size limit.')
     raw = request.body
     if len(raw) > MAX_BODY:
-        raise RequestProblem('Public street request exceeds the size limit.')
+        raise RequestProblem('Request exceeds the size limit.')
     try:
-        body = _json(raw)
+        return _json(raw)
     except (ValueError, UnicodeError, RecursionError) as problem:
         raise RequestProblem('Invalid JSON request.') from problem
+
+
+@local_only_post
+@_guard
+def query(request):
+    body = json_request(request)
     if not isinstance(body, dict) or set(body) != {'catalog_id', 'polygon'}:
         raise RequestProblem('Provide only catalog_id and polygon.')
     polygon = polygon_input(body['polygon'])
