@@ -541,8 +541,8 @@ class DecideTests(SimpleTestCase):
         self.c = self.street(3, 'Main Ave', 'FOUNTAIN', '80817')
         self.doors = {1: 5, 2: 9, 3: 1}
 
-    def decide(self, hits, city='', zip_code=''):
-        return V.decide(hits, city, zip_code, self.doors)
+    def decide(self, hits, city='', zip_code='', text=''):
+        return V.decide(hits, city, zip_code, self.doors, text)
 
     def test_a_single_clear_winner_and_nothing_less_is_matched(self):
         self.assertEqual(self.decide([(0.95, self.a)]), ([self.a], []))
@@ -573,6 +573,21 @@ class DecideTests(SimpleTestCase):
         self.assertEqual(self.decide(both, zip_code='80920-1234')[0], [north])
         self.assertEqual(len(self.decide(both, city='Monument', zip_code='80000')[0]), 2)
         self.assertEqual(self.decide(both, city='Fountain', zip_code='80920')[0], [east])      # the city wins; zip only breaks ties
+
+    def test_a_lone_fuzzy_reading_in_another_direction_is_not_taken(self):
+        south, southeast = self.street(6, 'S Foo St'), self.street(7, 'SE Foo St')
+        self.assertEqual(self.decide([(0.97, south)], text='SE Foo St'), ([], ['S Foo St']))
+        self.assertEqual(self.decide([(0.97, southeast)], text='S Foo St'), ([], ['SE Foo St']))
+        self.assertEqual(self.decide([(0.97, south)], text='S Fooo St'), ([south], []))       # same direction: taken
+        self.assertEqual(self.decide([(0.97, south)], text='Fooo St'), ([south], []))         # no direction typed: nothing to disagree
+        self.assertEqual(self.decide([(1.0, south)], text='SE Foo St'), ([south], []))        # an exact name is still the street
+
+    def test_a_lone_fuzzy_reading_in_another_city_is_not_taken(self):
+        fountain = self.street(8, 'Foo St', 'FOUNTAIN', '80817')
+        self.assertEqual(self.decide([(0.97, fountain)], city='Monument', text='Fooo St'), ([], ['Foo St']))
+        self.assertEqual(self.decide([(0.97, fountain)], city='Fountain', text='Fooo St'), ([fountain], []))
+        self.assertEqual(self.decide([(0.97, fountain)], city='', text='Fooo St'), ([fountain], []))
+        self.assertEqual(self.decide([(1.0, fountain)], city='Monument', text='Foo St'), ([fountain], []))
 
     def test_a_pick_offers_at_most_eight_places(self):
         streets = [self.street(10 + n, 'Pine St', 'CITY %d' % n) for n in range(12)]
