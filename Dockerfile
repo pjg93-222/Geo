@@ -6,7 +6,7 @@
 # requirements.linux.lock is the hashed lock of requirements.linux.in for CPython 3.12 on linux x86_64 (its header has the command).
 # Base images are Debian 13 (trixie, D-181), pinned by index digest: the python and node digests are the ones in the platform repo's ops/images.lock.
 
-FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS frontend
+FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
