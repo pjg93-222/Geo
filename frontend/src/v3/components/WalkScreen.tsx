@@ -332,6 +332,8 @@ class MapGuard extends Component<{children:ReactNode},{failed:boolean}>{
 export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const [init]=useState(()=>readWalkAddress(route.search));
   const [source,setSource]=useState<'streets'|'addresses'>('streets');
+  const [addressFile,setAddressFile]=useState<File|null>(null);
+  const addressFileRead=useCallback(()=>setAddressFile(null),[]);
   const [splitSides,setSplitSides]=useState(()=>new URLSearchParams(route.search).get('split_sides')!=='0');
   const [capText,setCapText]=useState(()=>new URLSearchParams(route.search).get('max_doors')??'');
   const [sheetIndex,setSheetIndex]=useState(0);
@@ -719,6 +721,11 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     // restores the picker or leaving the screen makes this one stale, and a stale answer changes nothing.
     const job=matchJobs.start();setMatching(false);
     setUploadError('');setUploadWarning('');setSkipped([]);setNote('');
+    // Workbooks need the full review reader: it retains exact addresses, worksheet sections and unreadable cells.
+    if(/\.xlsx$/i.test(file.name)){
+      job.end();setAddressFile(file);setSource('addresses');
+      setAnnounce(`${file.name} opened for address and street review.`);return;
+    }
     let read:WalkCsvRead;
     try{read=readWalkCsv(await file.text());}catch(e){if(job.live()){job.end();setUploadError(e instanceof Error?e.message:'That file could not be read.');}return;}
     if(!job.live())return;
@@ -821,8 +828,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
         <div ref={search}><StreetSearch area={area} onAdd={s=>{setNote('');addPicks([fromStreet(s)]);setAnnounce(`${s.label} added.`);}}/></div>
         <Chips picks={picks} planned={spans.length} onSide={cycleSide} onRemove={removePick} onUnplan={()=>{setNote('');putSpans([]);setAnnounce('Planned blocks removed.');}}/>
         <div className="walk-upload">
-          <input ref={fileInput} type="file" accept=".csv,text/csv" hidden aria-label="Upload a CSV of streets" onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void onFile(f);}}/>
-          <button type="button" className="walk-button" onClick={()=>fileInput.current?.click()} disabled={matching}><Upload size={15} strokeWidth={1.75} aria-hidden="true"/>{matching?'Matching…':'Upload street CSV'}</button>
+          <input ref={fileInput} type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden aria-label="Upload a street file" onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void onFile(f);}}/>
+          <button type="button" className="walk-button" onClick={()=>fileInput.current?.click()} disabled={matching}><Upload size={15} strokeWidth={1.75} aria-hidden="true"/>{matching?'Matching…':'Upload street file'}</button>
           {upload&&<span className="walk-file">{upload.name} · {countText(upload.count,'row')} <button type="button" className="walk-link" onClick={()=>{putUpload(null);setSkipped([]);setUploadWarning('');}}>Clear</button></span>}
         </div>
         {uploadError&&<p className="walk-note" role="alert">{uploadError}</p>}
@@ -862,7 +869,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
 
       <section className="walk-main" ref={main} aria-label="Walk list" aria-busy={loading}>
         <p className="walk-sr" role="status">{announce}</p>
-        {source==='addresses'?<WalkAddressSheets capText={capText} splitSides={splitSides} hosted={hosted} showOptIns={showOptIns}/>:loading?<div className="walk-wait" aria-hidden="true">
+        {source==='addresses'?<WalkAddressSheets capText={capText} splitSides={splitSides} hosted={hosted} showOptIns={showOptIns} initialFile={addressFile} onInitialFileRead={addressFileRead}/>:loading?<div className="walk-wait" aria-hidden="true">
             <span className="sk walk-sk" style={{width:'62%',height:16}}/>
             <span className="sk walk-sk" style={{width:'46%',height:36,marginTop:14}}/>
             <span className="sk walk-sk" style={{width:'100%',height:260,marginTop:14}}/>
