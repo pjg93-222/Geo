@@ -100,7 +100,7 @@ ROI_PRESETS = {'push': ('Needs a push', 'sum over people of (wP x (1 - |2s - 1|)
 TURNOUT_FIELDS = ('sai_midterm_general_turnout_score', 'sai_non_presidential_primary_turnout_score',
                   'sai_offyear_general_turnout_score', 'sai_presidential_general_turnout_score',
                   'sai_presidential_primary_turnout_score')
-# Voter profile thresholds on s (support score / 100). Defaults pending Paul's ruling; they are the thirds the 'identify'
+# Voter profile thresholds on s (support score / 100). v1 ratified (D-317, Paul 2026-10-26); they are the thirds the 'identify'
 # preset already reads (its middle third is PERSUADE_MIN..PERSUADE_MAX). tools/profiles.py is the only reader.
 SUPPORT_MIN = 2 / 3         # an own-party registrant is a supporter from here up
 PERSUADE_MIN = 1 / 3        # an other-party registrant is persuadable from here ...

@@ -9,7 +9,7 @@ A profile is (label, builder); the builder takes the candidate's party ('D' or '
                registered P with s >= SUPPORT_MIN, or registered with neither P nor Q (unaffiliated and minor parties, all of
                them), or registered Q with PERSUADE_MIN <= s <= PERSUADE_MAX. A person with no s counts as 0.5 for the
                persuadable test (as untapped.py does), and an own-party person with no s is not a supporter.
-The thresholds are tools/field_labels.py's (defaults pending Paul's ruling).
+The thresholds are tools/field_labels.py's (v1 ratified, D-317).
 """
 from . import field_labels as FL
 
