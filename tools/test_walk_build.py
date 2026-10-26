@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -593,6 +594,26 @@ class RunTests(unittest.TestCase):
         self.assertEqual(len(list((self.dir / 'walk-backups').glob('walk-*.sqlite3'))), 2)    # never overwrites one
         self.assertNotEqual(third['backup'], second['backup'])
         self.only_expected_files()
+
+    def test_a_restored_walk_salt_gives_the_same_keys_and_another_salt_gives_other_keys(self):
+        salt = self.dir / '.walk-salt'
+
+        def keys():
+            with closing(connect(self.out)) as db:
+                return dict(db.execute('SELECT person_id, voter_key FROM person').fetchall())
+        build(self.stores)
+        before = keys()
+        backup = self.dir.parent / 'salt-backup'                          # outside the data directory, as a laptop backup is
+        shutil.copyfile(salt, backup)
+        salt.unlink()
+        shutil.copyfile(backup, salt)                                     # restored
+        build(self.stores)
+        self.assertEqual(keys(), before)
+        salt.write_text('ab' * 32, encoding='ascii')                      # any other salt re-keys everyone
+        build(self.stores)
+        other = keys()
+        self.assertEqual(other.keys(), before.keys())
+        self.assertTrue(set(other.values()).isdisjoint(before.values()))
 
     def test_row_count_must_match_the_contacts_store(self):
         for name, edit, message in (
