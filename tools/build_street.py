@@ -127,7 +127,22 @@ def create_schema(connection):
     """)
 
 
-def read_or_create_salt(path):
+class BuildError(ValueError):
+    """A build refused on purpose; the message says what to do."""
+
+
+def read_or_create_salt(path, keyed=(), new_salt=False):
+    """The street salt at `path`, made on the first build of a district. A missing salt next to existing keyed output
+    (`keyed`: files whose presence means people were already keyed, the store, its backups, the contacts store) is a lost
+    salt, not a new district: a new one re-keys every household and person id, so it is refused unless `new_salt` is set."""
+    if not new_salt and not path.exists():
+        found = next((Path(k) for k in keyed if Path(k).exists()), None)
+        if found:
+            raise BuildError("%s is missing but %s exists: its households and people were keyed with a salt this build "
+                             "cannot find, and a new one would re-key every household and person id (the contacts, "
+                             "scores and walk stores too). Restore %s (from your backup; "
+                             "street-backups/ holds stores, not the salt), or pass --new-salt "
+                             "(build_database(..., new_salt=True)) to start over on purpose" % (path, found, path))
     try:
         with path.open("xb") as secret_file:
             secret_file.write(secrets.token_bytes(32))
@@ -162,7 +177,9 @@ def backup_existing(database):
 
 
 def build_database(csv_path, geography, database, encoding="cp1252", progress=None, *,
-                   state="CO", cd="005", salt_file=None):
+                   state="CO", cd="005", salt_file=None, new_salt=False):
+    """`new_salt` lets a district whose store exists make a new street salt (every household and person id changes);
+    without it a missing salt next to an existing store, backup or contacts store is an error."""
     csv_path, database = Path(csv_path).resolve(), Path(database).resolve()
     database.parent.mkdir(parents=True, exist_ok=True)
     lock = database.with_suffix(".build.lock")
@@ -178,7 +195,12 @@ def build_database(csv_path, geography, database, encoding="cp1252", progress=No
         if progress:
             progress({"stage": "parsed", **receipt})
         lookup, district, geographic_metadata = load_geography(geography, state, cd)
-        salt = read_or_create_salt(Path(salt_file) if salt_file else database.parent / ".street-salt")
+        # build_step.run already stops on a missing street salt; this guard covers hand runs and library calls.
+        salt_path = Path(salt_file).resolve() if salt_file else database.parent / ".street-salt"
+        keyed = [database]
+        for folder in dict.fromkeys((database.parent, salt_path.parent)):   # the store's folder and the salt's: either may hold the keyed files
+            keyed += [folder / "street.sqlite3", folder / "contacts.sqlite3", *folder.glob("street-backups/street-*.sqlite3")]
+        salt = read_or_create_salt(salt_path, keyed, new_salt)
         fd, filename = tempfile.mkstemp(prefix=".street-build-", suffix=".sqlite3", dir=database.parent)
         os.close(fd)
         temporary = Path(filename)
@@ -261,6 +283,9 @@ def main(argv=None):
     parser.add_argument("--database", type=Path, help="default: street.sqlite3 in the district data directory")
     parser.add_argument("--salt-file", type=Path, help="default: the district's street salt")
     parser.add_argument("--encoding", default="cp1252")
+    parser.add_argument("--new-salt", action="store_true",
+                        help="allow a new street salt when it is missing although a street store, backup or contacts store "
+                             "exists (re-keys every household and person id; not for a district with its own salt, co-05)")
     args = parser.parse_args(argv)
     district = D.get(args.district)
     csv_path = args.csv or district["source_csv"]
@@ -276,9 +301,12 @@ def main(argv=None):
     if district["street_salt"] and not args.salt_file and not salt_file.is_file():
         parser.error("The street salt of %s is missing (%s); a new one would re-key every person id"
                      % (district["id"], salt_file))
-    receipt = build_database(csv_path, geography, database, args.encoding,
-                             progress=lambda result: print(json.dumps(result), flush=True),
-                             state=district["state"], cd=district["cd"], salt_file=salt_file)
+    try:
+        receipt = build_database(csv_path, geography, database, args.encoding,
+                                 progress=lambda result: print(json.dumps(result), flush=True),
+                                 state=district["state"], cd=district["cd"], salt_file=salt_file, new_salt=args.new_salt)
+    except BuildError as error:
+        parser.error(str(error))
     print(json.dumps({"stage": "complete", **receipt}), flush=True)
 
 

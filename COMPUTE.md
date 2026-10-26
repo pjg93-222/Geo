@@ -158,7 +158,7 @@ so the harness reports the check's own verdict, not a count).
 - `--api` runs `co_baseline.py check --parts api --data-dir <folder>` on A1 and B (a spare server per folder, minutes each). It needs a
   complete data folder (snapshots, accounts), so it only makes sense after the full set exists in every folder.
 - Salts and keys (`.street-salt`, `.walk-salt`, `.demo-key`, `.secret`) are copied, never regenerated: for CO the street salt is the
-  read-only mount; for OR/CT `build_step.py` stops when it is missing. The Census downloads (T1, T9) stay on Windows.
+  read-only mount; for OR/CT `build_step.py` stops when it is missing, and `build_street.py` run by hand refuses to make a new one beside an existing street store, backup or contacts store (restore the salt, or pass `--new-salt`; co-05's is refused either way). The Census downloads (T1, T9) stay on Windows.
 - Windows reference: the live `.local` CO stores are not touched. The A runs rebuild from the same inputs into scratch. If the roads
   line says `equals the recorded co_baseline fixture: no`, the inputs or tools moved since 2026-10-09; the A1/A2/B comparison still stands.
 
@@ -339,7 +339,7 @@ The new bytes are a one-time change of the served file's bytes (`geometry.json`,
 **The volatile list (D-242, Paul 2026-10-18).** `--single-reference` is also the standard for stores: ONE Windows run (A1; A2 is A1) and the container run (B), compared exactly, except that what a store records
 about the build itself is left out from a fixed, reviewed list, `tools/compute_volatile.json`, instead of a measured A1/A2 variance. Each entry names a store, its key/value table, the key, a JSON pointer into the value (an empty pointer is the whole value; `*` stands for exactly one segment),
 the `path:line` of the statement that writes it and a `needle` that line contains, a `kind` and, for a pointer, `dumps` (how the writer dumps the stored value). The six entries are the names that sections 9 and 10 record as left out in the full-chain
-and walk runs of 2026-10-13: `street.metadata[created_at_utc]` (`build_street.py:232`); `scores.metadata[built_utc]` (`scores_writer.py:325`); `scores.metadata[w1]` field `/seconds` (`build_scores_v3.py:330`); `walk.meta[built_utc]` (`build_walk.py:797`);
+and walk runs of 2026-10-13: `street.metadata[created_at_utc]` (`build_street.py:254`); `scores.metadata[built_utc]` (`scores_writer.py:325`); `scores.metadata[w1]` field `/seconds` (`build_scores_v3.py:330`); `walk.meta[built_utc]` (`build_walk.py:797`);
 `walk.meta[qa]` fields `/timing/*` (`build_walk.py:794`: the phase names must match, the seconds are left out) and `/peak_memory_mb` (`:795`; a number on Windows, null in the container, so this one entry has `or_null`). The rules: only a key/value table of a SQLite store a build step writes
 can be listed (the loader refuses a zip, the shown table, `density.json`, a receipt, a wildcard key or a pointer of nothing but wildcards); a value is left out only when both sides have the same JSON type (a bare ISO text is `text`, a JSON string is `string`) and look like their
 kind (`clock`: an ISO-8601 time; `duration` and `measured`: a number of at least 0); a key missing on one side, a key or field the list does not name, a shape change (another key set, list length or container against leaf) and any difference in the rest of a JSON value still fail. The rest of a value is
