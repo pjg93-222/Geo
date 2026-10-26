@@ -61,6 +61,12 @@ class LocalCacheTests(unittest.TestCase):
         SA.local_cache(cfg, SA.D.get('co-05'))
         self.assertEqual(cfg['overall'], {'default': 'W40_35_25', 'W40_35_25': {'weights': {}}})
 
+    def test_an_overall_without_a_default_or_a_support_block_is_left_alone(self):
+        for overall in ({}, {'W': {'support': {'pct_file': 'p'}}}):
+            cfg = {'inputs': {'cache': {'path': 'old'}}, 'overall': overall}
+            SA.local_cache(cfg, SA.D.get('co-05'))
+            self.assertEqual(cfg['overall'], overall)
+
 
 class ReproducedTests(unittest.TestCase):
     def test_new_areas_and_re_ranked_standings_pass(self):
