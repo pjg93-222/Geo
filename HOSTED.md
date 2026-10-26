@@ -136,10 +136,15 @@ or unknown block.
   would also share their staff lists and a token from one would open the other. Never reuse one `ACCESS_AUD` across containers.
 * **`AuditEvent` rows hold voter keys.** A door-knock result is audited with the voter keys it wrote (`HMAC-SHA256(.walk-salt, voter id)`,
   never a name, address or phone), and each saved list read with its list key. The keys are pseudonymous, not anonymous, so treat the
-  accounts database and its backups as sensitive. No retention policy has been set: pending Paul's ruling.
-* **No per-list assignment.** A list is not assigned to anyone: any `field-staff` account in a district can open any saved list of that
+  accounts database and its backups as sensitive. Retention (ruled 2026-10-26): the voter-key `AuditEvent` rows (`walk.disposition.write`, `walk.opt_in.write`) are kept for the
+  election cycle plus 90 days, then purged with `python manage.py purge_audit --cycle-end <YYYY-MM-DD> --yes`. It deletes those rows
+  created before the end of the cycle-end day (UTC), keeps later ones (the next cycle's), and refuses to run until 90 days after that
+  (cycle end + 91 days). Account, snapshot and admin events, list-read events and earlier purge records are kept. Run it without `--yes`
+  first for the counts. It touches no other table and records one `audit.purged` event (cycle end, cutoff, earliest run, the number of
+  rows deleted; no keys). The operator runs it; nothing schedules it.
+* **No per-list assignment (closed).** A list is not assigned to anyone: any `field-staff` account in a district can open any saved list of that
   district and record results on it, and any `field-manager` can build and save lists. The district boundary is the only separation.
-  Pending Paul's ruling on assignment.
+  Per-list assignment is closed: any staff account works every list of its district, per the one-application ruling.
 * **Fixtures are not shipped.** `frontend/public/fixtures/v3` (made by `tools/make_v3_fixtures.py`, used only by the demo and test
   servers) holds synthetic numbers (fixed totals of 109,150 people and 45,000 households, a smooth random field) on real public
   geography: the Census block GEOIDs, polygons, roads and district outline of co-05. No person-level data is read to make it. The real
