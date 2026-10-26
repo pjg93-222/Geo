@@ -84,10 +84,10 @@ OVR = {'p01': 71.5, 'p02': 40.4}          # overall standings that exercise the 
 SUP_PCT = {'p01': 62.5}                   # a support standing that is not the support score
 PRECINCT_W = '5200021301'
 PRECINCT_F = '5200021417'                 # Fountain's Pine St alone, 3 km from everything else
-GOLDEN = {'spans': '00b37cdfa741464ccca1a18a20468bc7639c7561671d2c927952db50940d9ae4',      # digests of lists without doors=, taken before it existed
-          'fresh': '57f8b608de7f77051538b845ec759a8acda9f8483a02dbe8497469ca0f7f0d60',
-          'streets': 'c9a3e7e3e702dfca1109a4f9bdcb37d4e57670b3fd9ecd293412def1cef11971',
-          'area': '6f82e41b75bf77c53f33029dabe933c4ee81ef0053d993bc9c63e80c2156de30'}
+GOLDEN = {'spans': '28980a61e46b7d026b2bade2105bfc08075ac4b19d9658f148beb81085ece664',      # digests of lists without doors=; re-taken when voters gained opt_ins (b852c8b): the old digests match with that key removed
+          'fresh': '6151b178121393c506315c8444da143a6acc3c6ded5f99b9a5f4ff9ab65a5bb1',
+          'streets': '7a17b3425cbd26ead054417082336fc725d735971b5108457dac9d8a218cf1e4',
+          'area': 'c9b1d641938485befa550f83ab98abe2a633111e12efe025db17fa50600d5644'}
 
 
 def digest(payload):
