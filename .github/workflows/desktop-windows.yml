@@ -1,3 +1,8 @@
+# MANUAL ONLY (workflow_dispatch). Terrier desktop releases are built and published by Melange's release_from_main.py
+# (desktop-v1.0.15 onward); this workflow is kept for manual reference builds. Its VERSION / RELEASE_TAG / STABLE_TAG pins and
+# TOOLING_SHA are frozen at 1.0.14 on purpose: the client version check compares them with the package.json of the pinned
+# TOOLING_SHA, so bumping VERSION alone would fail. A manual run needs VERSION, the tags and TOOLING_SHA moved together.
+
 # Terrier desktop: unsigned Windows x64 installer built on a free standard GitHub-hosted runner, either a manual-install
 # PREVIEW or (RELEASE_PUBLISHER set) the unsigned INPUT of a signed release.
 # Repo path: .github/workflows/desktop-windows.yml on pjg93-222/Geo main.
@@ -13,7 +18,7 @@
 # Source binding: the Terrier source is always github.sha on refs/heads/main, and it may differ from the reviewed source
 # REVIEWED_BASE only by the CI files in CI_FILES. The desktop tooling (ops/desktop) is not in Geo: it is checked out from
 # the public pjg93-222/Melange at the pinned TOOLING_SHA. Rebuilding a later main or tooling means editing REVIEWED_BASE /
-# TOOLING_SHA here, and that edit is itself the trigger (paths filter).
+# TOOLING_SHA here, and a manual dispatch then builds it.
 # Integration (two commits on main, the Melange T/Y procedure): first the reviewed source commit S, whose tree has NO
 #   .github/; then the CI commit that restores .github and sets REVIEWED_BASE = RELEASE_TARGET = S's full SHA. CI_FILES
 #   is therefore every file under .github. The prerelease and its tag target RELEASE_TARGET, not github.sha; provenance
@@ -42,11 +47,6 @@ name: desktop-windows
 run-name: Terrier desktop ${{ github.sha }}
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/desktop-windows.yml
-      - .github/desktop/desktop-access-trust.public.json
   workflow_dispatch:
     inputs:
       source_sha:
