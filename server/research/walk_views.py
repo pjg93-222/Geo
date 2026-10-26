@@ -391,17 +391,38 @@ def narrow(candidates, city, zip_code):
     return candidates
 
 
-def decide(hits, city, zip_code, doors):
+def directions(key):
+    """The leading and trailing directionals of a street key ('SE FOO ST' -> ('SE',))."""
+    tokens = key.split()
+    lo, hi = 0, len(tokens)
+    while hi - lo > 1 and tokens[lo] in N.DIRECTIONS:
+        lo += 1
+    while hi - lo > 1 and tokens[hi - 1] in N.DIRECTIONS:
+        hi -= 1
+    return tuple(tokens[:lo] + tokens[hi:])
+
+
+def same_place(street, city, text):
+    """False when the row names a city other than the street's, or a directional other than the street's. A column or
+    directional the row leaves out is no disagreement."""
+    if city and city_key(street.city) != city_key(city):
+        return False
+    typed, held = directions(N.name_key(text)), directions(street.key)
+    return not (typed and held and typed != held)
+
+
+def decide(hits, city, zip_code, doors, text=''):
     """(candidate streets, suggested labels) for the ranked hits of one row. An exact name is the street (or, in several
     cities, a choice the city and zip columns may settle). Otherwise the readings within NEAR_EQUAL of the best one, if it
-    is at least PICK_MIN, are a choice when there are two or more, and the street meant only when it is alone and at
-    least MATCH_MIN. Anything weaker is no match and comes with up to three labels that come close."""
+    is at least PICK_MIN, are a choice when there are two or more, and the street meant only when it is alone, at
+    least MATCH_MIN and in the city and direction the row gives (`text`: the street as typed). Anything weaker is no
+    match and comes with up to three labels that come close."""
     if not hits:
         return [], []
     best = hits[0][0]
     near = [street for score, street in hits if score >= best - NEAR_EQUAL] if best >= PICK_MIN else []
     near = narrow(near, city, zip_code)
-    if near and (best >= 1.0 or len(near) > 1 or best >= MATCH_MIN):
+    if near and (best >= 1.0 or len(near) > 1 or best >= MATCH_MIN and same_place(near[0], city, text)):
         return sorted(near, key=lambda s: (-doors.get(s.id, 0), s.display, s.city, s.id))[:MAX_PLACES], []
     labels = []
     for _, street in hits:
@@ -425,7 +446,7 @@ def match(request):
         directory = store.directory()
         doors = store.street_doors(area)
         allowed = doors if area else None
-        decided = [decide(directory.lookup(text, allowed), city, zip_code, doors) for text, _, city, zip_code in inputs]
+        decided = [decide(directory.lookup(text, allowed), city, zip_code, doors, text) for text, _, city, zip_code in inputs]
         counts = store.street_counts([s.id for candidates, _ in decided for s in candidates], area)
     out = []
     for number, ((text, side, _, _), (candidates, suggestions)) in enumerate(zip(inputs, decided), 1):
