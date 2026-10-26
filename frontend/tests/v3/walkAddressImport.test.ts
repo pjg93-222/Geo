@@ -214,6 +214,33 @@ test('sparse XLSX reads all 33 scattered street cells and a separate anchor with
   assert.equal(read.sourceRows,34);
 });
 
+test('grouped street XLSX preserves park context and group labels while reading Loop streets',async()=>{
+  const files=unzipSync(sparseWorkbook());
+  const entries=['Happy Valley Nature Park','','Group 1','SE Plover Dr','SE Purple Finch Loop','','Group 4A (North)','SE Emerald Loop','Unreadable entry'];
+  files['xl/worksheets/sheet1.xml']=strToU8(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${entries.map((text,i)=>`<row r="${i+1}"><c r="A${i+1}" t="inlineStr"><is><t>${text}</t></is></c></row>`).join('')}</sheetData></worksheet>`);
+  const bytes=zipSync(files);
+  const read=await readAddressFile({name:'groups.xlsx',arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer,text:async()=>''});
+  assert.deepEqual(read.streets?.map(street=>[street.street,street.sourceCell]),[['SE Plover Dr','A4'],['SE Purple Finch Loop','A5'],['SE Emerald Loop','A8']]);
+  assert.deepEqual(read.notes?.map(note=>[note.text,note.sourceCell]),[['Happy Valley Nature Park','A1'],['Group 1','A3'],['Group 4A (North)','A7']]);
+  assert.deepEqual(read.issues.map(issue=>[issue.source,issue.sourceCell]),[['Unreadable entry','A9']]);
+  assert.equal(read.sourceRows,4);
+});
+
+test('street section restrictions require explicit boundaries and never expand to the whole street',()=>{
+  for(const input of ['SE 152nd Ave (north section)\nSE 152nd Ave (south section)','street\nSE 152nd Ave (north section)\nSE 152nd Ave (south section)']){
+    const read=parseAddressText(input,'sections.txt');
+    assert.equal(read.streets?.length,0);
+    assert.equal(read.addresses.length,0);
+    assert.equal(read.issues.length,2);
+    assert.ok(read.issues.every(issue=>/restriction needs exact addresses or defined street boundaries/.test(issue.message)));
+    assert.match(read.issues[0].source!,/north section/);
+    assert.match(read.issues[1].source!,/south section/);
+  }
+  const explicit=parseAddressText('street\nHappy Valley Nature Park','street.csv');
+  assert.equal(explicit.streets?.[0].street,'Happy Valley Nature Park');
+  assert.deepEqual(explicit.notes,[]);
+});
+
 test('JSON table arrays and multiline independent entries are supported without losing unit lines',()=>{
   const read=parseAddressText(JSON.stringify({data:[['Delivery list'],['House No','Street Name','City'],[123,'Main St','Hartford'],['','Oak Rd','Hartford']]}),'table.json');
   assert.deepEqual(read.issues,[]);

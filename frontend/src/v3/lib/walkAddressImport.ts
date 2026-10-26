@@ -49,8 +49,10 @@ const blank = (value: unknown): boolean => value == null || (typeof value === 's
 const emptyResult = (): AddressImportResult => ({ addresses: [], streets:[], notes:[], images:[], issues: [], sourceRows: 0 });
 const UNIT = /(?:\s+|,\s*)((?:apt\.?|apartment|unit|suite|ste\.?|lot|room|rm\.?|bldg\.?|building|floor|fl\.?)\s*#?\s*\S.*|#\s*\S.*)$/i;
 const HOUSE = /^(\d+[a-z]?(?:[-/]\d+[a-z]?)?(?:\s+\d\/\d)?)\s+(.+)$/i;
-const STREET_END=/\b(?:st(?:reet)?|rd|road|dr(?:ive)?|ave(?:nue)?|blvd|boulevard|ct|court|cir(?:cle)?|ln|lane|way|pkwy|parkway|pl(?:ace)?|ter(?:race)?|trl|trail|path|pike|hwy|highway|turnpike|plaza)(?:\.?)(?:\s+(?:n|s|e|w|ne|nw|se|sw|north|south|east|west))?$/i;
+const STREET_END=/\b(?:st(?:reet)?|rd|road|dr(?:ive)?|ave(?:nue)?|blvd|boulevard|ct|court|cir(?:cle)?|ln|lane|way|loop|pkwy|parkway|pl(?:ace)?|ter(?:race)?|trl|trail|path|pike|hwy|highway|turnpike|plaza)(?:\.?)(?:\s+(?:n|s|e|w|ne|nw|se|sw|north|south|east|west))?$/i;
 const TITLE=/^(?:(?:[a-z]{2}|[a-z]+\s+county)\s+)?(?:door\s*knock(?:ing)?|walk|walking|canvass(?:ing)?|address|street|route|volunteer|contact)(?:\s+(?:list|sheet|addresses|streets|routes|assignment|plan|area|schedule|name|names|data|report|for|\d+))*\s*:?(?:\s*\d{4}[-/]\d{1,2}[-/]\d{1,2})?$/i;
+const GROUP_TITLE=/^group\s+\d+[a-z]?(?:\s*\([^()]+\))?$/i;
+const PLACE_TITLE=/^[a-z][a-z .'-]*\s+(?:nature|regional|community)\s+park$/i;
 const colName=(number:number):string=>{let value=number,out='';while(value>0){value--;out=String.fromCharCode(65+value%26)+out;value=Math.floor(value/26);}return out;};
 const sourceOf=(row:number,filename:string,sheet?:string,column?:number,text?:string):ImportSource=>({sourceRow:row,sourceFile:filename,...sheet?{sourceSheet:sheet}:{},...column?{sourceColumn:column,sourceCell:`${colName(column)}${row}`}:{},...text?{sourceText:text}:{}});
 
@@ -72,6 +74,8 @@ function streetFromFields(fields:Fields,source:ImportSource):ImportedWalkStreet|
   if(fields.house)return null;
   const raw=locationCommas(fields.address||[fields.direction,fields.street,fields.streetType,fields.postDirection].filter(Boolean).join(' '),fields.city);
   if(!raw||HOUSE.test(raw.split(',')[0]))return null;
+  const section=/^(.*?)\s*\(([^()]*(?:\bsection\b|\bsegment\b|\bportion\b)[^()]*)\)(?:\s*,.*)?$/i.exec(raw);
+  if(section&&STREET_END.test(section[1].trim()))throw new Error(`The "${section[2]}" restriction needs exact addresses or defined street boundaries. This entry cannot be expanded to the whole street.`);
   if(fields.unit||UNIT.test(raw.split(',')[0]))throw new Error('An apartment or unit needs an exact house number. Add the house number; this entry cannot be expanded to a whole street.');
   const parts=raw.split(',').map(normalize).filter(Boolean),street=parts[0];
   if(!/[a-z]/i.test(street)||/^(?:po\s*box|p\.?o\.?\s*box)/i.test(street)||(!fields.street&&!STREET_END.test(street)&&!/^\b(?:us|state|county)?\s*(?:route|highway)\s+\d+[a-z]?$/i.test(street)))return null;
@@ -201,6 +205,7 @@ function parseTable(rows: SourceRow[], filename: string, sheet?: string): Addres
     return fields.some(field=>field==='address'||field==='street')&&!cells.some((value,i)=>!blank(value)&&!fields[i]&&(looksLikeRecord(value)||/^\d/.test(String(value))));
   };
   const firstHeader=nonempty.findIndex(({cells})=>headerCandidate(cells));
+  const firstRecord=nonempty.findIndex(({cells})=>cells.some(looksLikeRecord));
   const initialFields=headerFields(nonempty[0].cells);
   if(firstHeader<0&&initialFields.filter(Boolean).length>=2)throw new Error(`Add a column named address, or house number and street${sheet?` in sheet ${sheet}`:''}.`);
   let columns:Map<Field,number>|null=null,headerWidth=0;
@@ -223,7 +228,7 @@ function parseTable(rows: SourceRow[], filename: string, sheet?: string): Addres
     if(columns){
       const selected=columns;
       // Repeated section titles do not become missing-house errors or location defaults.
-      if(occupied.length===1&&typeof occupied[0].value==='string'&&TITLE.test(normalize(occupied[0].value))){addNote(row,occupied[0].index+1,displayCell(occupied[0].value));continue;}
+      if(occupied.length===1&&typeof occupied[0].value==='string'&&(TITLE.test(normalize(occupied[0].value))||GROUP_TITLE.test(normalize(occupied[0].value)))){addNote(row,occupied[0].index+1,displayCell(occupied[0].value));continue;}
       addRow(out,row,source,()=>{
         if(cells.slice(headerWidth).some(cell=>!blank(cell)))throw new Error('This row has more values than the header. Quote addresses containing commas.');
         const fields:Fields={};for(const [field,index] of selected)fields[field]=stringCell(cells[index]);return fields;
@@ -243,7 +248,7 @@ function parseTable(rows: SourceRow[], filename: string, sheet?: string): Addres
     }
     for(const {value,index} of occupied){
       const raw=displayCell(value),text=typeof value==='string'?cleanEntry(value):raw;
-      if(typeof value==='string'&&(TITLE.test(text)||(firstHeader>=0&&rowIndex<firstHeader&&!looksLikeRecord(text)))){addNote(row,index+1,raw);continue;}
+      if(typeof value==='string'&&(TITLE.test(text)||GROUP_TITLE.test(text)||(firstRecord>=0&&rowIndex<firstRecord&&PLACE_TITLE.test(text))||(firstHeader>=0&&rowIndex<firstHeader&&!looksLikeRecord(text)))){addNote(row,index+1,raw);continue;}
       const lines=typeof value==='string'?value.split(/\r\n|\n|\r/).map(cleanEntry).filter(Boolean):[];
       if(lines.length>1&&lines.every(looksLikeRecord))for(const line of lines)addRow(out,row,line,()=>({address:line}),filename,sheet,index+1);
       else addRow(out,row,raw,()=>({address:typeof value==='string'?text:stringCell(value)}),filename,sheet,index+1);

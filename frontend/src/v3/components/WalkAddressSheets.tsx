@@ -1,4 +1,4 @@
-import {useMemo,useRef,useState} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import {Upload} from 'lucide-react';
 import {parseAddressText,readAddressFile} from '../lib/walkAddressImport';
 import type {AddressImportResult,ImportedWalkAddress,ImportedWalkStreet,ImportSource} from '../lib/walkAddressImport';
@@ -32,7 +32,7 @@ const excluded='__exclude';
 const distanceText=(metres:number)=>metres<1000?`${Math.round(metres)} m`:`${(metres/1000).toFixed(1)} km`;
 const imageNameKey=(value:string)=>value.toLowerCase().replace(/\b(?:street|road|drive|avenue|terrace|circle|court|lane|boulevard|place|parkway)\b/g,word=>({street:'st',road:'rd',drive:'dr',avenue:'ave',terrace:'ter',circle:'cir',court:'ct',lane:'ln',boulevard:'blvd',place:'pl',parkway:'pkwy'}[word]!)).replace(/[^a-z0-9]/g,'');
 
-export function WalkAddressSheets({capText,splitSides,hosted,showOptIns=false}:{capText:string;splitSides:boolean;hosted:boolean;showOptIns?:boolean}){
+export function WalkAddressSheets({capText,splitSides,hosted,showOptIns=false,initialFile,onInitialFileRead}:{capText:string;splitSides:boolean;hosted:boolean;showOptIns?:boolean;initialFile?:File|null;onInitialFileRead?:()=>void}){
   const [loaded,setLoaded]=useState<{name:string;result:AddressImportResult}|null>(null);
   const [pastedText,setPastedText]=useState('');
   const [streets,setStreets]=useState<ReviewStreet[]>([]);
@@ -51,6 +51,11 @@ export function WalkAddressSheets({capText,splitSides,hosted,showOptIns=false}:{
   const [workingImage,setWorkingImage]=useState<string|null>(null),workingImageRef=useRef<string|null>(null);
   const blocked=busy||workingImage!==null;
   const input=useRef<HTMLInputElement>(null),imageInput=useRef<HTMLInputElement>(null);const request=useRef(0);
+  const initialFileRead=useRef<File|null>(null);
+  useEffect(()=>{
+    if(!initialFile||initialFile===initialFileRead.current)return;
+    initialFileRead.current=initialFile;void upload(initialFile);onInitialFileRead?.();
+  },[initialFile,onInitialFileRead]);
   let cap:number|null=null,capError='';try{cap=doorCap(capText);}catch(e){capError=(e as Error).message;}
   const pendingStreets=streets.filter(row=>row.choice!==excluded&&!row.match?.candidates.some(candidate=>candidateKey(candidate)===row.choice)).length;
   const streetCount=streets.filter(row=>row.choice!==excluded).length;
