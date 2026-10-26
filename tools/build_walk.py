@@ -286,7 +286,16 @@ def sha256_of(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def read_or_create_salt(path):
+def read_or_create_salt(path, keyed=(), new_salt=False):
+    """The walk salt at `path`, made on the first build of a district. A missing salt next to existing keyed output
+    (`keyed`: files whose presence means voters were already keyed, the store or its backups) is a lost salt, not a new
+    district: a new one re-keys every voter and orphans every saved result, so it is refused unless `new_salt` is set."""
+    if not new_salt and not path.exists():
+        found = next((Path(k) for k in keyed if Path(k).exists()), None)
+        if found:
+            raise BuildError('%s is missing but %s exists: a new salt would re-key every voter and orphan the saved '
+                             'results. Restore .walk-salt from the backup, or pass --new-salt to start over'
+                             % (path, found))
     try:
         with path.open('xb') as stream:
             stream.write(secrets.token_hex(32).encode('ascii'))
@@ -702,11 +711,12 @@ def default_data_dir(d):
     return Path((d['id'] == D.DEFAULT and os.environ.get('CU_DATA_DIR')) or D.data_dir(d))
 
 
-def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=None, district=None):
+def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=None, district=None, new_salt=False):
     """Build the store; see the module docstring. `source` defaults to the district's CSV (`district`: an id or a config
     dict, default co-05). `gates` overrides GATES entries (tests only); a district without abs_gate has no abs_share
     gates whatever `gates` says. Returns a dict: passed, failed (gate names), replaced, forced, qa, out, backup (path of
-    the copy of the replaced file), bytes."""
+    the copy of the replaced file), bytes. `new_salt` lets a district whose store exists make a new .walk-salt (every voter is re-keyed);
+    without it a missing salt next to an existing store or backup is an error."""
     d = D.get(district)
     G.EPSG = d['utm_epsg']
     if list(d['primaries']) != list(N.PRIMARIES):
@@ -738,7 +748,8 @@ def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=
         with clock.phase('stores'):
             people = load_people(data_dir, checksum, source, d)
         with clock.phase('read_csv'):
-            src = read_source(source, people.ids, read_or_create_salt(data_dir / '.walk-salt'), d)
+            keyed = (out, data_dir / 'walk.sqlite3', *out.parent.glob('walk-backups/walk-*.sqlite3'))
+            src = read_source(source, people.ids, read_or_create_salt(data_dir / '.walk-salt', keyed, new_salt), d)
         latest = source.stat()
         if (original.st_size, original.st_mtime_ns) != (latest.st_size, latest.st_mtime_ns):
             raise BuildError('The source changed during the build')
@@ -875,6 +886,8 @@ def main(argv=None):
                         help="default: .local for co-05 (CU_DATA_DIR if set), else the district's folder under .local")
     parser.add_argument('--out', type=Path, default=None, help='default: <data-dir>/walk.sqlite3')
     parser.add_argument('--force', action='store_true', help='replace the store although a quality gate failed')
+    parser.add_argument('--new-salt', action='store_true',
+                        help='make a new .walk-salt although a store exists (re-keys every voter, orphaning saved results)')
     args = parser.parse_args(argv)
     d = D.get(args.district)
     source = args.source
@@ -885,7 +898,7 @@ def main(argv=None):
                   file=sys.stderr)
             return 1
     try:
-        result = build(source, args.data_dir, args.out, force=args.force, district=d,
+        result = build(source, args.data_dir, args.out, force=args.force, district=d, new_salt=args.new_salt,
                        log=lambda text: print(text, flush=True))
     except BuildError as error:
         print('error: %s' % error, file=sys.stderr)
