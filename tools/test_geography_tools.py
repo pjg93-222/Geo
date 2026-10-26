@@ -348,6 +348,16 @@ class OregonStreetAndContactsTests(unittest.TestCase):
             self.build(folder, salt_file=salt)
         self.assertFalse(salt.exists())
 
+    def test_keyed_files_beside_the_salt_count_when_the_store_is_built_elsewhere(self):
+        folder, salt_folder = self.folder(), self.folder()
+        (salt_folder / 'contacts.sqlite3').touch()                        # the salt's folder holds a keyed store, the database's does not
+        salt = salt_folder / 'x.salt'
+        with self.assertRaisesRegex(build_street.BuildError, r'x\.salt is missing but .*contacts\.sqlite3 exists.*Restore .*x\.salt'):
+            self.build(folder, salt_file=salt)
+        self.assertFalse(salt.exists())
+        self.assertEqual(list(folder.iterdir()), [])
+        self.build(folder, salt_file=salt, new_salt=True)
+
     def test_new_salt_starts_over_beside_an_existing_store(self):
         folder = self.folder()
         self.build(folder)
