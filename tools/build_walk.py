@@ -1,13 +1,13 @@
 """Build the walk-list store `walk.sqlite3` (schema walk-v1) from the source voter CSV and the local stores.
 
-    <app venv python> tools/build_walk.py [--district ID] [--source CSV] [--data-dir DIR] [--out FILE] [--force]
+    <app venv python> tools/build_walk.py [--district ID] [--source CSV] [--data-dir DIR] [--out FILE] [--force] [--new-salt]
 
 CSV data row i is contacts.rowid i+1 and carries the person id every store uses (never recomputed: .street-salt is
 gone). The row count and the sha256 of the file must agree with the contact, score and street stores; a mismatch is an
 error (exit 1, --force does not override it). Per person the store keeps the walk address (street, stop, unit), the
 area codes exactly as the file spells them, the vote-history tallies of the district's window (tools/districts.py;
-Colorado's is server/research/walk_names.py) and an HMAC voter key (.walk-salt in the data directory, created on first
-use, never printed). It holds no name, address text or birth date. Cities are canonicalised (CO SPGS / COLO SPRINGS ->
+Colorado's is server/research/walk_names.py) and an HMAC voter key (.walk-salt in the data directory, created on a district's first build; a missing one beside an existing store or
+backup stops the build unless --new-salt; never printed). It holds no name, address text or birth date. Cities are canonicalised (CO SPGS / COLO SPRINGS ->
 COLORADO SPRINGS) so one street is one row; dates are read in whichever of DATE_FORMATS the file uses (qa.dates names
 the format, never a value). --district (default co-05) picks the config entry: UTM zone, primary dates, mail rule and
 its gate, city column and spelling rules, precinct key. A district with person_fields 'csv' (OR, CT: no score store
@@ -293,9 +293,11 @@ def read_or_create_salt(path, keyed=(), new_salt=False):
     if not new_salt and not path.exists():
         found = next((Path(k) for k in keyed if Path(k).exists()), None)
         if found:
-            raise BuildError('%s is missing but %s exists: a new salt would re-key every voter and orphan the saved '
-                             'results. Restore .walk-salt from the backup, or pass --new-salt to start over'
-                             % (path, found))
+            raise BuildError('%s is missing but %s exists: its voters were keyed with a salt this build cannot find, and '
+                             'a new one would re-key every voter and orphan their saved results. Restore that .walk-salt '
+                             '(from the laptop backup, or write $TERRIER_WALK_SALT into it for a container-built store; '
+                             'walk-backups/ holds stores, not the salt), or pass --new-salt (build(..., new_salt=True)) '
+                             'to start over on purpose' % (path, found))
     try:
         with path.open('xb') as stream:
             stream.write(secrets.token_hex(32).encode('ascii'))
@@ -887,7 +889,8 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, default=None, help='default: <data-dir>/walk.sqlite3')
     parser.add_argument('--force', action='store_true', help='replace the store although a quality gate failed')
     parser.add_argument('--new-salt', action='store_true',
-                        help='make a new .walk-salt although a store exists (re-keys every voter, orphaning saved results)')
+                        help='allow a new .walk-salt when it is missing although a store or backup exists (re-keys every voter, '
+                             'orphaning saved results)')
     args = parser.parse_args(argv)
     d = D.get(args.district)
     source = args.source

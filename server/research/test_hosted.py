@@ -515,7 +515,7 @@ class FieldResultsSurviveRebuildTests(base.WalkCase):
         shown = self.json('/api/v3/walk/lists/' + key)
         self.assertEqual({v['last']['code'] for v in base.voters_of(shown)}, {'NH'})
 
-        (self.stores.directory / '.walk-salt').unlink()                              # a lost salt is a new salt: everyone is re-keyed
+        (self.stores.directory / '.walk-salt').unlink()                              # a lost salt now stops the rebuild; only --new-salt / new_salt=True re-keys everyone
         with self.assertRaises(B.BuildError):                                       # the build refuses to invent one
             self.rebuild()
         self.rebuild(new_salt=True)
