@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -593,6 +594,65 @@ class RunTests(unittest.TestCase):
         self.assertEqual(len(list((self.dir / 'walk-backups').glob('walk-*.sqlite3'))), 2)    # never overwrites one
         self.assertNotEqual(third['backup'], second['backup'])
         self.only_expected_files()
+
+    def test_a_restored_walk_salt_gives_the_same_keys_and_another_salt_gives_other_keys(self):
+        salt = self.dir / '.walk-salt'
+
+        def keys():
+            with closing(connect(self.out)) as db:
+                return dict(db.execute('SELECT person_id, voter_key FROM person').fetchall())
+        build(self.stores)
+        before = keys()
+        backup = self.dir.parent / 'salt-backup'                          # outside the data directory, as a laptop backup is
+        shutil.copyfile(salt, backup)
+        salt.unlink()
+        shutil.copyfile(backup, salt)                                     # restored
+        build(self.stores)
+        self.assertEqual(keys(), before)
+        salt.write_text('ab' * 32, encoding='ascii')                      # any other salt re-keys everyone
+        build(self.stores)
+        other = keys()
+        self.assertEqual(other.keys(), before.keys())
+        self.assertTrue(set(other.values()).isdisjoint(before.values()))
+
+    def test_a_missing_salt_is_made_for_a_new_district_but_refused_beside_an_existing_store(self):
+        salt = self.dir / '.walk-salt'
+        build(self.stores)                                                # no store, no salt: a new district gets a salt
+        self.assertTrue(salt.is_file())
+        before = dump(self.out)
+        backup = salt.read_bytes()
+        salt.unlink()
+        with self.assertRaisesRegex(B.BuildError, r'\.walk-salt is missing but .*walk\.sqlite3 exists.*Restore'):
+            build(self.stores)
+        self.assertFalse(salt.exists())                                   # nothing was made
+        self.assertEqual(dump(self.out), before)                          # and the store is untouched
+        self.only_expected_files()
+        code, out, err = cli(self.stores)
+        self.assertEqual(code, 1)
+        self.assertIn('--new-salt', err)
+        self.assertFalse(salt.exists())
+        shutil.rmtree(self.dir / 'walk-backups', ignore_errors=True)
+        self.out.rename(self.dir / 'gone.sqlite3')                        # a store that moved away is no store: a fresh start
+        build(self.stores)
+        self.assertNotEqual(salt.read_bytes(), backup)
+
+    def test_a_backup_alone_also_marks_a_district_whose_salt_was_lost(self):
+        salt = self.dir / '.walk-salt'
+        build(self.stores)
+        build(self.stores)                                                # the second build backs up the first
+        salt.unlink()
+        self.out.unlink()
+        with self.assertRaisesRegex(B.BuildError, r'walk-backups'):
+            build(self.stores)
+
+    def test_new_salt_starts_over_beside_an_existing_store(self):
+        salt = self.dir / '.walk-salt'
+        build(self.stores)
+        old = salt.read_bytes()
+        salt.unlink()
+        code, out, err = cli(self.stores, '--new-salt')
+        self.assertEqual(code, 0, err)
+        self.assertNotEqual(salt.read_bytes(), old)
 
     def test_row_count_must_match_the_contacts_store(self):
         for name, edit, message in (

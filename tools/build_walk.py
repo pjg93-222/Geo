@@ -1,13 +1,13 @@
 """Build the walk-list store `walk.sqlite3` (schema walk-v1) from the source voter CSV and the local stores.
 
-    <app venv python> tools/build_walk.py [--district ID] [--source CSV] [--data-dir DIR] [--out FILE] [--force]
+    <app venv python> tools/build_walk.py [--district ID] [--source CSV] [--data-dir DIR] [--out FILE] [--force] [--new-salt]
 
 CSV data row i is contacts.rowid i+1 and carries the person id every store uses (never recomputed: .street-salt is
 gone). The row count and the sha256 of the file must agree with the contact, score and street stores; a mismatch is an
 error (exit 1, --force does not override it). Per person the store keeps the walk address (street, stop, unit), the
 area codes exactly as the file spells them, the vote-history tallies of the district's window (tools/districts.py;
-Colorado's is server/research/walk_names.py) and an HMAC voter key (.walk-salt in the data directory, created on first
-use, never printed). It holds no name, address text or birth date. Cities are canonicalised (CO SPGS / COLO SPRINGS ->
+Colorado's is server/research/walk_names.py) and an HMAC voter key (.walk-salt in the data directory, created on a district's first build; a missing one beside an existing store or
+backup stops the build unless --new-salt; never printed). It holds no name, address text or birth date. Cities are canonicalised (CO SPGS / COLO SPRINGS ->
 COLORADO SPRINGS) so one street is one row; dates are read in whichever of DATE_FORMATS the file uses (qa.dates names
 the format, never a value). --district (default co-05) picks the config entry: UTM zone, primary dates, mail rule and
 its gate, city column and spelling rules, precinct key. A district with person_fields 'csv' (OR, CT: no score store
@@ -286,7 +286,18 @@ def sha256_of(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def read_or_create_salt(path):
+def read_or_create_salt(path, keyed=(), new_salt=False):
+    """The walk salt at `path`, made on the first build of a district. A missing salt next to existing keyed output
+    (`keyed`: files whose presence means voters were already keyed, the store or its backups) is a lost salt, not a new
+    district: a new one re-keys every voter and orphans every saved result, so it is refused unless `new_salt` is set."""
+    if not new_salt and not path.exists():
+        found = next((Path(k) for k in keyed if Path(k).exists()), None)
+        if found:
+            raise BuildError('%s is missing but %s exists: its voters were keyed with a salt this build cannot find, and '
+                             'a new one would re-key every voter and orphan their saved results. Restore that .walk-salt '
+                             '(from the laptop backup, or write $TERRIER_WALK_SALT into it for a container-built store; '
+                             'walk-backups/ holds stores, not the salt), or pass --new-salt (build(..., new_salt=True)) '
+                             'to start over on purpose' % (path, found))
     try:
         with path.open('xb') as stream:
             stream.write(secrets.token_hex(32).encode('ascii'))
@@ -702,11 +713,12 @@ def default_data_dir(d):
     return Path((d['id'] == D.DEFAULT and os.environ.get('CU_DATA_DIR')) or D.data_dir(d))
 
 
-def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=None, district=None):
+def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=None, district=None, new_salt=False):
     """Build the store; see the module docstring. `source` defaults to the district's CSV (`district`: an id or a config
     dict, default co-05). `gates` overrides GATES entries (tests only); a district without abs_gate has no abs_share
     gates whatever `gates` says. Returns a dict: passed, failed (gate names), replaced, forced, qa, out, backup (path of
-    the copy of the replaced file), bytes."""
+    the copy of the replaced file), bytes. `new_salt` lets a district whose store exists make a new .walk-salt (every voter is re-keyed);
+    without it a missing salt next to an existing store or backup is an error."""
     d = D.get(district)
     G.EPSG = d['utm_epsg']
     if list(d['primaries']) != list(N.PRIMARIES):
@@ -738,7 +750,8 @@ def build(source=None, data_dir=None, out=None, *, force=False, gates=None, log=
         with clock.phase('stores'):
             people = load_people(data_dir, checksum, source, d)
         with clock.phase('read_csv'):
-            src = read_source(source, people.ids, read_or_create_salt(data_dir / '.walk-salt'), d)
+            keyed = (out, data_dir / 'walk.sqlite3', *out.parent.glob('walk-backups/walk-*.sqlite3'))
+            src = read_source(source, people.ids, read_or_create_salt(data_dir / '.walk-salt', keyed, new_salt), d)
         latest = source.stat()
         if (original.st_size, original.st_mtime_ns) != (latest.st_size, latest.st_mtime_ns):
             raise BuildError('The source changed during the build')
@@ -875,6 +888,9 @@ def main(argv=None):
                         help="default: .local for co-05 (CU_DATA_DIR if set), else the district's folder under .local")
     parser.add_argument('--out', type=Path, default=None, help='default: <data-dir>/walk.sqlite3')
     parser.add_argument('--force', action='store_true', help='replace the store although a quality gate failed')
+    parser.add_argument('--new-salt', action='store_true',
+                        help='allow a new .walk-salt when it is missing although a store or backup exists (re-keys every voter, '
+                             'orphaning saved results)')
     args = parser.parse_args(argv)
     d = D.get(args.district)
     source = args.source
@@ -885,7 +901,7 @@ def main(argv=None):
                   file=sys.stderr)
             return 1
     try:
-        result = build(source, args.data_dir, args.out, force=args.force, district=d,
+        result = build(source, args.data_dir, args.out, force=args.force, district=d, new_salt=args.new_salt,
                        log=lambda text: print(text, flush=True))
     except BuildError as error:
         print('error: %s' % error, file=sys.stderr)

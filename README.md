@@ -77,7 +77,7 @@ Each row is matched against the streets in the chosen area. A row with one match
 python tools/build_walk.py
 ```
 
-The build joins each CSV row to the stored person by row order (it first checks that the CSV and the contact store have the same number of rows), builds the walking network from the stored roads, places every address on a street side, and records the source checksums, the election window and the Abs rule in the store's `meta` table. It also creates `.local/.walk-salt` on the first run. That key makes the voter keys that link recorded results across lists, so keep it with the store. `.local/` is excluded from Git like the other stores.
+The build joins each CSV row to the stored person by row order (it first checks that the CSV and the contact store have the same number of rows), builds the walking network from the stored roads, places every address on a street side, and records the source checksums, the election window and the Abs rule in the store's `meta` table. It also creates `.local/.walk-salt` on a district's first build, and refuses to make a new one beside an existing store or backup (restore the salt, or pass `--new-salt`). That key makes the voter keys that link recorded results across lists, so keep it with the store. `.local/` is excluded from Git like the other stores.
 
 **Printed columns.** Each stop prints a table with Address, Name and Phone, then the voter history (Pri, Gen, Abs), Party, Age, Gender, Reg. date and a Result box.
 

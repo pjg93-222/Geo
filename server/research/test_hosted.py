@@ -495,8 +495,8 @@ class FieldResultsSurviveRebuildTests(base.WalkCase):
         with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
             return dict(db.execute('SELECT person_id, voter_key FROM person'))
 
-    def rebuild(self):
-        B.build(self.stores.source_csv, self.stores.directory, force=True)
+    def rebuild(self, **kwargs):
+        B.build(self.stores.source_csv, self.stores.directory, force=True, **kwargs)
         W.reset()
 
     def test_keys_and_recorded_results_survive_a_rebuild_with_the_same_salt_and_not_without_it(self):
@@ -515,8 +515,10 @@ class FieldResultsSurviveRebuildTests(base.WalkCase):
         shown = self.json('/api/v3/walk/lists/' + key)
         self.assertEqual({v['last']['code'] for v in base.voters_of(shown)}, {'NH'})
 
-        (self.stores.directory / '.walk-salt').unlink()                              # a lost salt is a new salt: everyone is re-keyed
-        self.rebuild()
+        (self.stores.directory / '.walk-salt').unlink()                              # a lost salt now stops the rebuild; only --new-salt / new_salt=True re-keys everyone
+        with self.assertRaises(B.BuildError):                                       # the build refuses to invent one
+            self.rebuild()
+        self.rebuild(new_salt=True)
         self.assertTrue(set(self.keys().values()).isdisjoint(before.values()))
         gone = self.post('/api/v3/walk/lists', {'title': 'Lost', 'from': key, 'reknock': True})
         self.assertEqual(gone.status_code, 409)                                      # the results are orphaned, loudly

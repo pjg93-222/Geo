@@ -4,7 +4,7 @@ Status: **design only, not yet built.** Written 2026-10-22. No code changes acco
 
 ## 0.1 Owner decisions (2026-10-22)
 
-**D1. Basis: Terrier's registration party.** The audience filter selects voters by the party recorded in Terrier's walk store (`person.party`), which `tools/build_walk.py:319, 329` loads unchanged from the source file's `svi_party_registration` column. The source file for OR-05 (`statara_or_cd005_20260904.csv`, 622 columns) also carries modeled political leanings: `svi_party_modeled_rollup`, `svi_party_combined_rollup`, `sai_ideology_score`, `sai_ideology_enhanced_score`, the `sci_ct_political_partyaff_*` and `sci_ct_political_outlk_*` flags, and `sei_party_trust_range`. None of these is used as the filter basis, and neither is Terrier's legacy lean.
+**D1. Basis: Terrier's registration party.** The audience filter selects voters by the party recorded in Terrier's walk store (`person.party`), which `tools/build_walk.py:330, 340` loads unchanged from the source file's `svi_party_registration` column. The source file for OR-05 (`statara_or_cd005_20260904.csv`, 622 columns) also carries modeled political leanings: `svi_party_modeled_rollup`, `svi_party_combined_rollup`, `sai_ideology_score`, `sai_ideology_enhanced_score`, the `sci_ct_political_partyaff_*` and `sci_ct_political_outlk_*` flags, and `sei_party_trust_range`. None of these is used as the filter basis, and neither is Terrier's legacy lean.
 
 Registration codes in that file (whole-file row counts, read 2026-10-22; raw code, vendor rollup):
 

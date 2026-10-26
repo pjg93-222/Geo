@@ -105,9 +105,9 @@ under a new street salt). It depends on the salt and the voter id, not on row or
 its salt (same keys, every Not home voter found again) and then without it (new keys, the re-knock list refused with 409). The server
 never computes a key: it reads `voter_key` from `walk.sqlite3`, so the salt does not need to be on the server.
 
-The hazard: `read_or_create_salt` silently makes a new salt if `.walk-salt` is missing, which re-keys everyone and orphans every
-recorded result (the test shows the re-knock list then refusing with 409). Keep `.walk-salt` in the laptop's backups, and never
-rebuild a district's stores in a data directory that has lost it.
+The hazard: a new salt re-keys everyone and orphans every recorded result (the test shows the re-knock list then refusing with 409).
+`read_or_create_salt` makes one only for a district with no walk store or backup yet; if `.walk-salt` is missing beside `walk.sqlite3`
+or `walk-backups/`, the build stops and says to restore it (`--new-salt` starts over on purpose). Keep `.walk-salt` in the laptop's backups.
 
 ## Image, compose and release
 
