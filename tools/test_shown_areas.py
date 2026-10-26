@@ -2,7 +2,9 @@
 
     <system Python 3.12: pandas>  -m unittest tools.test_shown_areas          (from the V3 folder)
 """
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -33,6 +35,37 @@ class LocalCacheTests(unittest.TestCase):
         self.assertEqual(cfg['inputs']['cache'], {'path': str(SA.D.rowfw_cache(d)), 'sha256': 'abc', 'rows': 3})
         self.assertEqual((cfg['inputs']['export'], cfg['fields']), ({'path': 'x'}, {}))
         self.assertEqual(SA.D.rowfw_cache(d).name, 'inputs.parquet')
+
+    def test_a_candidate_districts_support_file_is_read_from_the_rowfw_folder_in_use_not_from_the_stored_path(self):
+        """OR-05 / CT-01: the frozen 4-term overall stores cache/support.npz by the path it was built at (the container's run failed on it)."""
+        stored = r'C:\Users\x\Codex\outputs\.local\or-05\rowfw\cache\support.npz'
+        with tempfile.TemporaryDirectory() as tmp:
+            rowfw = Path(tmp) / 'or-05' / 'rowfw'
+            (rowfw / 'cache').mkdir(parents=True)
+            np.savez(rowfw / 'cache' / 'support.npz', sup_pct=np.array([1.0, 2.0]))
+            d = {**SA.D.get('or-05'), 'rowfw_root': rowfw}
+            block = {'weights': {'sup': {'value': 0.25}}, 'support': {'pct_file': stored, 'sha256': 'abc', 'candidate': 'C'}}
+            cfg = {'inputs': {'cache': {'path': 'old', 'sha256': 'def'}},
+                   'overall': {'default': 'W30_25_25_20', 'W30_25_25_20': block, 'alternatives': {'W40_35_25': {'support': {'pct_file': 'other'}}}}}
+            with self.assertRaises(FileNotFoundError):
+                np.load(cfg['overall']['W30_25_25_20']['support']['pct_file'])
+            SA.local_cache(cfg, d)
+            support = cfg['overall']['W30_25_25_20']['support']
+            self.assertEqual(support, {'pct_file': str(rowfw / 'cache' / 'support.npz'), 'sha256': 'abc', 'candidate': 'C'})
+            self.assertEqual(cfg['overall']['alternatives'], {'W40_35_25': {'support': {'pct_file': 'other'}}})
+            self.assertEqual(cfg['inputs']['cache'], {'path': str(rowfw / 'cache' / 'inputs.parquet'), 'sha256': 'def'})
+            self.assertEqual(np.load(support['pct_file'])['sup_pct'].tolist(), [1.0, 2.0])
+
+    def test_colorados_overall_has_no_support_block_and_gets_none(self):
+        cfg = {'inputs': {'cache': {'path': 'old'}}, 'overall': {'default': 'W40_35_25', 'W40_35_25': {'weights': {}}}}
+        SA.local_cache(cfg, SA.D.get('co-05'))
+        self.assertEqual(cfg['overall'], {'default': 'W40_35_25', 'W40_35_25': {'weights': {}}})
+
+    def test_an_overall_without_a_default_or_a_support_block_is_left_alone(self):
+        for overall in ({}, {'W': {'support': {'pct_file': 'p'}}}):
+            cfg = {'inputs': {'cache': {'path': 'old'}}, 'overall': overall}
+            SA.local_cache(cfg, SA.D.get('co-05'))
+            self.assertEqual(cfg['overall'], overall)
 
 
 class ReproducedTests(unittest.TestCase):

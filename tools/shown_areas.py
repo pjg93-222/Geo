@@ -65,8 +65,13 @@ def bands_moved(m):
 
 def local_cache(cfg, d):
     """The frozen config names its cache by the Windows path it was built at; read the district's own cache instead (tools/districts.py,
-    which tools/hostpaths.py can move: the container mounts it elsewhere). On the laptop that is the same file; its sha256 is unchanged."""
+    which tools/hostpaths.py can move: the container mounts it elsewhere). On the laptop that is the same file; its sha256 is unchanged.
+    A candidate district's 4-term overall (OR-05, CT-01) also names cache/support.npz, which the engine np.loads: it is the cache's neighbour."""
     cfg['inputs']['cache']['path'] = str(D.rowfw_cache(d))
+    overall = cfg.get('overall', {})
+    support = overall.get(overall.get('default'), {}).get('support')
+    if support:
+        support['pct_file'] = str(D.rowfw_cache(d).with_name('support.npz'))
     return cfg
 
 
