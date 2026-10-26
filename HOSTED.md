@@ -137,9 +137,10 @@ or unknown block.
 * **`AuditEvent` rows hold voter keys.** A door-knock result is audited with the voter keys it wrote (`HMAC-SHA256(.walk-salt, voter id)`,
   never a name, address or phone), and each saved list read with its list key. The keys are pseudonymous, not anonymous, so treat the
   accounts database and its backups as sensitive. Retention (ruled 2026-10-26): `AuditEvent` rows are kept for the election cycle plus 90
-  days, then purged with `python manage.py purge_audit --cycle-end <YYYY-MM-DD> --yes`. Run it without `--yes` first for the counts; it
-  refuses before cycle end + 90 days, touches no other table and records one `audit.purged` event (counts, no keys). The operator runs
-  it; nothing schedules it.
+  days, then purged with `python manage.py purge_audit --cycle-end <YYYY-MM-DD> --yes`. It deletes the rows created on or before the
+  end of the cycle-end day (UTC) and keeps later ones (the next cycle's); it refuses to run before cycle end + 90 days. Run it without
+  `--yes` first for the counts. It touches no other table and records one `audit.purged` event (counts, no keys). The operator runs it;
+  nothing schedules it.
 * **No per-list assignment (closed).** A list is not assigned to anyone: any `field-staff` account in a district can open any saved list of that
   district and record results on it, and any `field-manager` can build and save lists. The district boundary is the only separation.
   Per-list assignment is closed: any staff account works every list of its district, per the one-application ruling.
