@@ -1,7 +1,7 @@
 # MANUAL ONLY (workflow_dispatch). Terrier desktop releases are built and published by Melange's release_from_main.py
 # (desktop-v1.0.15 onward); this workflow is kept for manual reference builds. Its VERSION / RELEASE_TAG / STABLE_TAG pins and
-# TOOLING_SHA are frozen at 1.0.14 on purpose: the client version check compares them with the package.json of the pinned
-# TOOLING_SHA, so bumping VERSION alone would fail. A manual run needs VERSION, the tags and TOOLING_SHA moved together.
+# TOOLING_SHA are frozen at 1.0.14 on purpose: the client version check (compares VERSION with the package.json version of the
+# pinned TOOLING_SHA checkout) would fail on a bump of VERSION alone. A manual run needs VERSION, the tags and TOOLING_SHA moved together.
 
 # Terrier desktop: unsigned Windows x64 installer built on a free standard GitHub-hosted runner, either a manual-install
 # PREVIEW or (RELEASE_PUBLISHER set) the unsigned INPUT of a signed release.
@@ -577,7 +577,7 @@ jobs:
     if: >-
       always() && needs.preflight.result == 'success' &&
       (needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.preflight.outputs.mode == 'resume')) &&
-      (github.event_name == 'push' || inputs.publish)
+      inputs.publish
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
