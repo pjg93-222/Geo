@@ -100,7 +100,7 @@ start if one is in WAL mode.
 
 A result is stored with the voter key of the person. The key is `HMAC-SHA256(.walk-salt, voter id)` (`tools/build_walk.py`; a person
 with no voter id in the file falls back to `person:<person id>`, the contact store's id, which changes only when that store is rebuilt
-under a new street salt). It depends on the salt and the voter id, not on row order, so a rebuild of the stores with the same
+under a new street salt, which `tools/build_street.py` refuses to make beside an existing street store, backup or contacts store unless `--new-salt` is passed). It depends on the salt and the voter id, not on row order, so a rebuild of the stores with the same
 `.walk-salt` gives the same keys. `server/research/test_hosted.py::FieldResultsSurviveRebuildTests` rebuilds a synthetic district with
 its salt (same keys, every Not home voter found again) and then without it (new keys, the re-knock list refused with 409). The server
 never computes a key: it reads `voter_key` from `walk.sqlite3`, so the salt does not need to be on the server.

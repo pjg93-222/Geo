@@ -292,6 +292,108 @@ class OregonStreetAndContactsTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):       # the default is still directory/.street-salt
             build_contacts.build(self.csv_path, folder)
 
+    # the street salt guard: a missing salt beside keyed output is a lost salt, not a new district (as build_walk's)
+    def build(self, folder, **options):
+        return build_street.build_database(self.csv_path, self.geography, folder / 'street.sqlite3', state='OR', cd='005', **options)
+
+    def folder(self):
+        return Path(tempfile.mkdtemp(dir=self.temporary.name))
+
+    def ids(self, folder):
+        with closing(sqlite3.connect((folder / 'street.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+            return {row[0] for row in connection.execute('SELECT id FROM people')}
+
+    def test_a_new_district_gets_a_street_salt_and_the_second_build_reuses_it(self):
+        folder = self.folder()
+        self.build(folder)                                                # no store, no backup: a first build makes the salt
+        salt = folder / '.street-salt'
+        self.assertEqual(len(salt.read_bytes()), 32)
+        first, kept = self.ids(folder), salt.read_bytes()
+        self.build(folder)                                                # the store exists and so does the salt: fine
+        self.assertEqual((salt.read_bytes(), self.ids(folder)), (kept, first))
+
+    def test_a_missing_salt_beside_an_existing_store_is_refused_and_nothing_changes(self):
+        folder = self.folder()
+        self.build(folder)
+        salt = folder / '.street-salt'
+        store = folder / 'street.sqlite3'
+        before, kept = store.read_bytes(), salt.read_bytes()
+        salt.unlink()
+        with self.assertRaisesRegex(build_street.BuildError, r'\.street-salt is missing but .*street\.sqlite3 exists.*Restore.*--new-salt'):
+            self.build(folder)
+        self.assertFalse(salt.exists())                                   # no new salt was made
+        self.assertEqual(store.read_bytes(), before)                      # the store is untouched
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['street.sqlite3'])    # no lock, no temporary file, no backup
+        salt.write_bytes(kept)
+        self.build(folder)                                                # the restored salt builds again
+        self.assertEqual(salt.read_bytes(), kept)
+
+    def test_a_backup_or_a_contacts_store_alone_also_marks_a_district_whose_salt_was_lost(self):
+        for name, left in (('backup', 'street-backups/street-1.sqlite3'), ('contacts', 'contacts.sqlite3')):
+            with self.subTest(name):
+                folder = self.folder()
+                (folder / left).parent.mkdir(exist_ok=True)
+                (folder / left).touch()
+                with self.assertRaisesRegex(build_street.BuildError, re.escape(Path(left).name)):
+                    self.build(folder)
+                self.assertFalse((folder / '.street-salt').exists())
+                self.assertFalse((folder / 'street.sqlite3').exists())
+
+    def test_the_guard_covers_a_salt_file_given_by_path(self):
+        folder = self.folder()
+        salt = folder / 'elsewhere.salt'
+        self.build(folder, salt_file=salt)
+        salt.unlink()
+        with self.assertRaisesRegex(build_street.BuildError, r'elsewhere\.salt is missing'):
+            self.build(folder, salt_file=salt)
+        self.assertFalse(salt.exists())
+
+    def test_new_salt_starts_over_beside_an_existing_store(self):
+        folder = self.folder()
+        self.build(folder)
+        salt, old_ids = folder / '.street-salt', self.ids(folder)
+        old = salt.read_bytes()
+        salt.unlink()
+        self.build(folder, new_salt=True)
+        self.assertNotEqual(salt.read_bytes(), old)
+        self.assertTrue(self.ids(folder).isdisjoint(old_ids))            # every person id changed
+
+    def cli(self, folder, *extra, district):
+        config = {**D.get('or-05'), **district, 'source_csv': self.csv_path, 'geography': self.geography, 'state': 'OR', 'cd': '005',
+                  'sha256': hashlib.sha256(self.csv_path.read_bytes()).hexdigest()}
+        argv = ['--database', str(folder / 'street.sqlite3'), *extra]
+        err = io.StringIO()
+        with patch.object(D, 'get', return_value=config), redirect_stdout(io.StringIO()), redirect_stderr(err):
+            try:
+                build_street.main(argv)
+            except SystemExit as stop:
+                return stop.code, err.getvalue()
+        return 0, err.getvalue()
+
+    def test_the_command_line_refuses_without_and_allows_with_new_salt(self):
+        folder = self.folder()
+        salt = folder / 'x.salt'
+        own = {'street_salt': None}
+        self.assertEqual(self.cli(folder, '--salt-file', str(salt), district=own)[0], 0)
+        salt.unlink()
+        code, err = self.cli(folder, '--salt-file', str(salt), district=own)
+        self.assertEqual(code, 2)
+        self.assertIn('--new-salt', err)
+        self.assertFalse(salt.exists())
+        self.assertEqual(self.cli(folder, '--salt-file', str(salt), '--new-salt', district=own)[0], 0)
+        self.assertEqual(len(salt.read_bytes()), 32)
+
+    def test_a_district_with_its_own_salt_is_still_refused_even_with_new_salt(self):
+        folder = self.folder()
+        sibling = folder / 'sibling' / '.street-salt'                     # co-05's salt lives in another repo
+        for extra in ((), ('--new-salt',)):
+            with self.subTest(extra):
+                code, err = self.cli(folder, *extra, district={'id': 'co-05', 'street_salt': sibling})
+                self.assertEqual(code, 2)
+                self.assertIn('street salt of co-05 is missing', err)
+                self.assertFalse(sibling.parent.exists())
+                self.assertFalse((folder / 'street.sqlite3').exists())
+
 
 class CanonicalBlocksTests(unittest.TestCase):
     """Phase 3b Lane G, B-8: the old-county -> planning-region block map applied to the voter file."""
