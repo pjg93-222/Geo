@@ -4,6 +4,7 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db.models import QuerySet
 from django.test import TestCase
 
 from .models import AuditEvent
@@ -80,7 +81,14 @@ class PurgeAuditTests(TestCase):
         self.assertEqual(AuditEvent.objects.count(), 6)
 
     def test_a_delete_that_reaches_another_model_rolls_back(self):
-        with mock.patch('django.db.models.query.QuerySet.delete', return_value=(3, {'research.AuditEvent': 2, 'research.Disposition': 1})):
+        real = QuerySet.delete
+
+        def reaches_another_model(queryset):
+            deleted, by_model = real(queryset)     # really delete, so only the rollback can bring the rows back
+            return deleted + 1, {**by_model, 'research.Disposition': 1}
+
+        with mock.patch.object(QuerySet, 'delete', autospec=True, side_effect=reaches_another_model):
             with self.assertRaisesRegex(CommandError, 'other models'):
                 self.run_command('2027-03-01T00:00:00', '--cycle-end', '2026-11-03', '--yes')
+        self.assertTrue(AuditEvent.objects.filter(pk__in=[self.ids['old'], self.ids['edge']]).count() == 2)
         self.assertFalse(AuditEvent.objects.filter(action='audit.purged').exists())

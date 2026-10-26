@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from server.research.models import AuditEvent
 
-RETENTION = timedelta(days=90)   # ruled 2026-10-26: keep AuditEvent rows for the election cycle plus 90 days, then purge
+RETENTION = timedelta(days=90)   # ruled 2026-10-26: voter-key rows are kept for the election cycle plus 90 days, then purged
 # The only actions that put voter keys in `detail` (walk_views.py:1093 and :1129, the `voter_keys` list). Every other event (walk.list.*
 # keep a list key, walk.build.* a route, account.* and snapshot.* a username or snapshot key) and audit.purged are kept for good.
 VOTER_KEY_ACTIONS = ('walk.disposition.write', 'walk.opt_in.write')
@@ -16,7 +16,7 @@ VOTER_KEY_ACTIONS = ('walk.disposition.write', 'walk.opt_in.write')
 class Command(BaseCommand):
     help = ('Purge the AuditEvent rows that hold voter keys (%s) created on or before the end of the --cycle-end day (UTC); '
             'rows after it belong to the next cycle. Account, snapshot and admin events and earlier purge records are kept. '
-            'Refuses to run before cycle end + 90 days. Dry run unless --yes. Touches no other model.' % ', '.join(VOTER_KEY_ACTIONS))
+            'Refuses to run until 90 days after the day following cycle end (cycle end + 91 days). Dry run unless --yes. Touches no other model.' % ', '.join(VOTER_KEY_ACTIONS))
 
     def add_arguments(self, parser):
         parser.add_argument('--cycle-end', required=True, help='last day of the election cycle, YYYY-MM-DD')
