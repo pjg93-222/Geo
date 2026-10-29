@@ -39,6 +39,16 @@ def local_denied(request, field=False):
     """The 403 response unless this is a direct loopback request of the signed-in local administrator, else None.
     `field` names a group (field_access.GROUP or MANAGER; the few routes the walk-list flow needs): the same rule locally;
     hosted, where there is no local administrator and every other person-level route stays closed, the group decides."""
+    if getattr(settings, "DESKTOP_STANDALONE", False):
+        # The launcher owns the opaque Windows/account capability. A Django
+        # login or a request flag alone cannot grant this desktop access.
+        try:
+            from terrier_standalone import standalone_administrator_authorized
+        except ImportError:
+            return response({"error": "Local desktop authentication is required."}, 403)
+        if standalone_administrator_authorized(request):
+            return None
+        return response({"error": "Local desktop authentication is required."}, 403)
     if field and settings.HOSTED:
         from . import field_access
         return field_access.denied(request, field)
