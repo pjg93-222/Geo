@@ -31,9 +31,10 @@ export function matchWalkStreets(rows:WalkMatchInput[],area:WalkArea,signal?:Abo
 /** `streets` is "12:even,15:both"; the area narrows the list the same way as in the picker. `spans` are road-span ids from the street plan
  *  (at most 200, in the order given); they add those spans' voters, with or without an area. `fresh` leaves out the people at doors with a recorded result.
  *  `profile` (a voter profile key, left out for 'all') limits the list to those people.
+ *  `affiliation` selects categorical simulation records; omitted keeps every category, `empty` keeps none.
  *  `trim` (the one-click list: needs spans and fresh) keeps the blocks whole until the last one, which is cut to reach that many doors; a server without it refuses the name. */
-export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[],fresh?:boolean,trim?:WalkListTrim,splitSides=true,profile='all'):Promise<WalkListPayload>{
-  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),fresh:fresh?1:undefined,doors:trim?.doors,wp:trim?.wp,wi:trim?.wi,split_sides:splitSides?undefined:0,profile:profile==='all'?undefined:profile,...areaOf(area)})}`,signal);
+export function getWalkList(streets:string,area:WalkArea,signal?:AbortSignal,spans?:number[],fresh?:boolean,trim?:WalkListTrim,splitSides=true,profile='all',affiliation=''):Promise<WalkListPayload>{
+  return localJson(`${BASE}/list${query({streets,spans:spans?.join(','),fresh:fresh?1:undefined,doors:trim?.doors,wp:trim?.wp,wi:trim?.wi,split_sides:splitSides?undefined:0,profile:profile==='all'?undefined:profile,affiliation:affiliation||undefined,...areaOf(area)})}`,signal);
 }
 /** Block plan: the road spans of an area ranked by the preset's value per 100 m walked; with `doors`, in a precinct, also the blocks one click picks
  *  (candidate districts only). */

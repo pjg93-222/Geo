@@ -61,6 +61,7 @@ from . import untapped as U
 from . import walk_context as C
 from . import walk_names as N
 from . import walk_opt_ins as O
+from . import route_affiliation as RA
 from . import walk_route
 from . import walk_store as W
 from . import walk_turf
@@ -93,7 +94,7 @@ LISTS_SHOWN = 50
 CODES = ('S', 'U', 'O', 'NH', 'MV')
 # an area id as the store holds it: at most 24 characters, but a CT precinct key is the code and the name (build_walk caps it at 64)
 AREA = r'[0-9A-Za-z._-]{1,%d}' % (64 if settings.DISTRICT['precinct_key'] == 'code-name' else 24)
-QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi', 'split_sides', 'profile'}
+QUERY_KEYS = {'streets', 'spans', 'ss', 'sh', 'precinct', 'fresh', 'doors', 'wp', 'wi', 'split_sides', 'profile', 'affiliation'}
 NO_CANDIDATE = 'No candidate is set for this district.'
 PROFILE_NOT_OFFERED = 'That voter profile is not offered.'
 PROFILE_EMPTY = 'Nobody on those blocks is in this voter profile.'
@@ -251,6 +252,13 @@ def profile_keep(store, profile):
     return lambda row: member(row['party'], float(s[row['pos'] - 1]) if row['pos'] else None)
 
 
+def parse_affiliation(text):
+    try:
+        return RA.parse(text)
+    except ValueError as problem:
+        raise Refused(str(problem)) from None
+
+
 def trim_query(values, area, plain):
     """{'doors', 'wp', 'wi'} of a list cut to a door count (doors and the weights written plainly, the weights only if sent), {}
     for any other list. Only the planned blocks of one precinct, with fresh=1 and doors=N (1 to 1,000) take it: the weights mean
@@ -284,9 +292,10 @@ def list_query(values):
     query = {'streets': ','.join('%d:%s' % pick for pick in picks)} if picks else {}
     if spans:
         query['spans'] = ','.join(map(str, spans))
+    affiliation = RA.wire(parse_affiliation(values.get('affiliation')))
     profile = parse_profile(values.get('profile'))                   # 'all' is no profile: it leaves the query as it was
     return picks, spans, area, {**query, **area, **({'fresh': fresh} if fresh else {}), **trim, **sides,
-                                **({'profile': profile} if profile != 'all' else {})}
+                                **({'profile': profile} if profile != 'all' else {}), **({'affiliation': affiliation} if affiliation else {})}
 
 
 CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
@@ -599,7 +608,7 @@ def left_out_to_fit(store, spans, area, query, knocked):
     asked, (wp, wi) = int(query['doors']), U.parse_weights(query)
     if not (store.attach_scores() and store.support):
         raise Refused(SUPPORT_NOT_BUILT, 503)
-    keep = profile_keep(store, query.get('profile', 'all'))
+    keep = RA.keep(profile_keep(store, query.get('profile', 'all')), parse_affiliation(query.get('affiliation')))
     folded, _ = fold_plan(store, store.span_people(area, spans), {}, U.terms(), knocked, wp, wi, by_door=True, keep=keep)
     out, held = set(), 0
     for span in spans:
@@ -618,15 +627,18 @@ def standard_payload(store, picks, spans, area, query):
     skip = knocked.doors if knocked else None                       # the doors with a recorded result, for a fresh list
     cut = left_out_to_fit(store, spans, area, query, knocked) if 'doors' in query else None      # more doors the blocks do not add
     keep = profile_keep(store, query.get('profile', 'all'))       # only the people of a voter profile, if one is asked
-    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut, keep)
+    affiliation = parse_affiliation(query.get('affiliation'))
+    rows = store.voters(picks, area, MAX_VOTERS + 1, spans, skip, cut, keep, affiliation=affiliation)
     if len(rows) > MAX_VOTERS:
-        if keep is not None:          # a profile is judged person by person: not counted past the ceiling
+        if keep is not None or affiliation is not None:          # a profile is judged person by person: not counted past the ceiling
             raise Refused('That is more than %s voters, too large to build in one list. Choose a smaller area or fewer streets.'
                           % '{:,}'.format(MAX_VOTERS))
         raise Refused('That is %s voters, too large to build in one list (at most %s). Choose a smaller area or fewer streets.'
                       % ('{:,}'.format(store.count_voters(picks, area, spans, skip, cut)), '{:,}'.format(MAX_VOTERS)))
     if not rows:
-        if skip and store.voters(picks, area, 1, spans, keep=keep):
+        if affiliation is not None:
+            raise Refused('No simulation records match the affiliation selection in this route. Change the selection or area.')
+        if skip and store.voters(picks, area, 1, spans, keep=keep, affiliation=affiliation):
             raise Refused('Everyone on those blocks already has a recorded result.')
         if keep and store.voters(picks, area, 1, spans):
             raise Refused(PROFILE_EMPTY)
@@ -857,7 +869,7 @@ def plan(request):
     roi = settings.DISTRICT['roi']
     if roi is None:
         raise Refused(NO_CANDIDATE, 404)
-    q = params(request, {*W.AREA_COLUMNS, 'preset', 'w_value', 'w_pop', 'w_voter', 'wp', 'wi', 'doors', 'profile'})
+    q = params(request, {*W.AREA_COLUMNS, 'preset', 'w_value', 'w_pop', 'w_voter', 'wp', 'wi', 'doors', 'profile', 'affiliation'})
     area = area_of(q)
     if not area:
         raise Refused('Choose a district or precinct first.')
@@ -866,6 +878,7 @@ def plan(request):
         raise Refused('That street plan is not offered.')
     wp, wi = U.parse_weights(q)                    # the untapped potential's balance and influence weight (push, and the turf)
     asked = parse_doors(q.get('doors'), area)
+    affiliation = parse_affiliation(q.get('affiliation'))
     profile = parse_profile(q.get('profile'))
     given = {'value': q.get('w_value'), 'pop_density': q.get('w_pop'), 'voter_density': q.get('w_voter')}
     if all(text is None for text in given.values()):
@@ -883,7 +896,7 @@ def plan(request):
         if not (store.attach_scores() and store.support):
             raise Refused(SUPPORT_NOT_BUILT, 503)
         rows, blocks = store.span_plan(area)
-        keep = profile_keep(store, profile)           # the sums count only the people of the voter profile
+        keep = RA.keep(profile_keep(store, profile), affiliation)           # the sums count only the people of the voter profile
         spans, left_out = fold_plan(store, rows, blocks, U.terms(), U.knocked(), wp, wi, by_door=bool(asked), keep=keep)
         if len(spans) > MAX_SPANS:
             raise Refused('That area has %s blocks; choose a house district or a precinct to rank them.' % '{:,}'.format(len(spans)))
@@ -893,6 +906,8 @@ def plan(request):
             'potential': {'wp': wp, 'wi': wi}, 'p': roi['p'], 'race_mode': settings.DISTRICT['race_mode'], 'spans': ranked,
             'not_ranked': skipped, 'knocked': left_out,
             'matched': {'people': sum(s['people'] for s in spans.values()), 'scored': sum(s['scored'] for s in spans.values())}}
+    if affiliation is not None:
+        body['affiliation'] = RA.wire(affiliation)
     if profile != 'all':
         body['profile'] = profile
     if asked:           # a turf is worth the untapped potential at wp, wi, whatever the preset that ranks the blocks

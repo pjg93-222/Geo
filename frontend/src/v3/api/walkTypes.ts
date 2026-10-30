@@ -121,11 +121,12 @@ export interface WalkPlan {
   race_mode: 'general' | 'primary'; spans: WalkPlanSpan[]; not_ranked: { spans: number; people: number };
   matched?: { people: number; scored: number };   // people in the area, and how many of them have a score
   potential?: { wp: number; wi: number }; knocked?: { people: number; doors: number }; turf?: WalkTurf;   // walk-plan-2
+  affiliation?: string; // categorical simulation filter
   profile?: string;   // only when not 'all'
 }
 // `wp` and `wi` are the balance and influence weights as text (weightsQuery); `doors` asks for a turf and needs a precinct.
 // `profile` limits the sums to a voter profile (omitted for 'all'); the plan then says which one it counted.
-export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number; wp?: string; wi?: string; doors?: number; profile?: string }
+export interface WalkPlanOptions { preset?: string; w_value?: number; w_pop?: number; w_voter?: number; wp?: string; wi?: string; doors?: number; profile?: string; affiliation?: string }
 
 // POST /api/v3/walk/scores {ids} -> {scores}; `sup` and `push` (Needs a push) only in candidate districts. Whole numbers, for the printed list.
 export interface WalkScores { scores: Record<string, { ovr: number; part: number; sup?: number; push?: number }> }

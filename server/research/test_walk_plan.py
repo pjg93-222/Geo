@@ -256,6 +256,21 @@ class WalkPlanTests(TestCase):
             return {person for stop, unit in doors for (person,) in db.execute(
                 "SELECT person_id FROM person WHERE stop_id = ? AND IFNULL(unit, '') = ? AND precinct = ?", (stop, unit, precinct))}
 
+    @override_settings(DISTRICT=lowered(min_doors=1))
+    def test_affiliation_is_shared_by_block_plan_and_trimmed_route(self):
+        planned = self.plan(precinct=PRECINCT_W, doors=3, affiliation='D', preset='push')
+        self.assertEqual(planned['affiliation'], 'D')
+        self.assertTrue(planned['turf']['spans'])
+        routed = self.list(precinct=PRECINCT_W, spans=','.join(map(str, planned['turf']['spans'])),
+                           fresh='1', doors='3', affiliation='D')
+        records = [p for run in routed['runs'] for door in run['doors'] for p in door['voters']]
+        self.assertEqual({p['party'] for p in records}, {'D'})
+        self.assertEqual(routed['totals']['doors'], planned['turf']['doors'])
+        self.assertLessEqual(routed['totals']['doors'], 3)
+        empty = self.plan(precinct=PRECINCT_W, doors=3, affiliation='empty')
+        self.assertEqual(empty['matched']['people'], 0)
+        self.assertEqual(empty['turf']['spans'], [])
+
     def door_of(self, key):
         with closing(sqlite3.connect(self.stores.directory / 'walk.sqlite3')) as db:
             return tuple(db.execute("SELECT stop_id, IFNULL(unit, '') FROM person WHERE person_id = ?", self.ids(key)).fetchone())

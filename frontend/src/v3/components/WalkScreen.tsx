@@ -5,6 +5,8 @@ import type {ReactNode} from 'react';
 import {Check,ChevronDown,Route as RouteIcon,Search,Upload,X} from 'lucide-react';
 import {PageHeader,useFeatures} from './Header';
 import {StreetPlan} from './StreetPlan';
+import {RouteAffiliationControls,RouteContext} from './RouteAffiliation';
+import {normalizeAffiliation} from '../lib/routeAffiliation';
 import {WalkAddressSheets} from './WalkAddressSheets';
 import {WalkOptIns,type RecordWalkOptIn} from './WalkOptIns';
 import {AreaStreetDiscovery} from './AreaStreetDiscovery';
@@ -34,6 +36,7 @@ import {refusedStore} from '../lib/walkRefused';
 import {onRefusedReset} from '../lib/walkRefusedReset';
 import {hasRecordedOptIn,optInEntry,optInWriteScope,patchRecordedOptIn,recordedOptIns} from '../lib/walkOptIns';
 import '../styles/walk.css';
+import '../styles/pathfinder.css';
 
 // MapLibre loads only once a list exists, so opening this screen stays light.
 const WalkMap=lazy(()=>import('./WalkMap').then(m=>({default:m.WalkMap})));
@@ -350,6 +353,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   const features=useFeatures();
   // The voter profile (roi.profiles): 'all' is everyone and is left out of every request and of the page address. A profile the district does not offer counts as 'all' once the settings are here.
   const [profileChoice,setProfileChoice]=useState(init.profile??'all');
+  const [affiliation,setAffiliation]=useState(()=>normalizeAffiliation(route.search.get('affiliation')??''));
   const profile=features&&!features.roi?.profiles?.some(x=>x.key===profileChoice)?'all':profileChoice;
   // One click (Plan walk list) and the sliders and doors it uses. A server without these settings gets the agent defaults.
   const roi=features?.roi??null;
@@ -533,6 +537,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     const names=new Map<number,string>(p.runs.map(r=>[r.street_id,r.street]));
     const from=adopt?pickerOf(p):null;   // a re-knock list (either query shape) and a list with no picker settings leave the picker as it is
     if(from){
+      setAffiliation(p.query.affiliation??'');
       setArea(from.area);setProfileChoice(from.profile??'all');
       const next=parseStreetsParam(from.streets).map((s):WalkPick=>({...s,label:names.get(s.id)??'',city:''}));picksRef.current=next;setPicks(next);
       putSpans(parseSpansParam(from.spans),!!from.fresh,from.trim??null);
@@ -579,7 +584,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     }
     if(!picks.length&&!planned.length&&noArea(area)){setNote('Pick an area or add a street first.');return;}
     const streets=streetsParam(picks),where={...area},left=freshRef.current,cut=trimRef.current??undefined;
-    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides,profile),p=>show(p,false));
+    void load(sig=>getWalkList(streets,where,sig,planned,left,cut,splitSides,profile,affiliation),p=>show(p,false));
   }
   function walkPlanned(ids:number[]){putSpans(ids,true);generate(ids);}   // the checked blocks of the block plan, whole (no doors); their counts leave out doors with a recorded result
   const commitDoors=():number=>{setDoorsText(String(doorsNow));if(features)writeDoors(features.district,doorsNow);return doorsNow;};
@@ -589,12 +594,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     if(!area.precinct){setNote('Pick a precinct first.');return;}
     const where={...area},asked=commitDoors(),q=weightsQuery(weights),got:{turf?:WalkTurf;cut?:WalkListTrim|null}={};
     void load(async sig=>{
-      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked,profile},sig);
+      const plan=await getWalkPlan(where,{preset:'push',...q,doors:asked,profile,affiliation},sig);
       got.turf=plan.turf;
       if(!plan.turf)throw new ApiError(NO_TURF,400,true);
       if(!plan.turf.spans.length)throw new ApiError(NO_DOORS,400,true);
       got.cut=trimFor(plan.turf,asked,q);   // the list is cut to the doors asked for, with the weights the blocks were picked by (a server that cannot cut sends no trim)
-      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides,profile);
+      return getWalkList('',where,sig,plan.turf.spans,true,got.cut??undefined,splitSides,profile,affiliation);
     },p=>{
       picksRef.current=[];setPicks([]);putUpload(null);setSkipped([]);setUploadWarning('');   // the list is the planned blocks alone
       putSpans(got.turf?.spans??[],true,got.cut??null);show(p,false);setTurf(got.turf??null);
@@ -747,8 +752,8 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
   // ---- area, address bar, lifecycle ----------------------------------------------------------------------------------------------
   const setLevel=(level:WalkLevel,v:string)=>{setNote('');putSpans([]);setArea(a=>level==='ss'?{ss:v,sh:'',precinct:''}:level==='sh'?{...a,sh:v,precinct:''}:{...a,precinct:v});};
   useEffect(()=>{
-    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,profile:profile==='all'?null:profile,plan:null,list:listKey||null});
-  },[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
+    replaceQuery({ss:area.ss||null,sh:area.sh||null,precinct:area.precinct||null,streets:streetsParam(picks)||null,spans:spansParam(spans)||null,fresh:fresh?'1':null,...trimQuery(trim),split_sides:splitSides?'1':'0',max_doors:capText||null,profile:profile==='all'?null:profile,affiliation:affiliation||null,plan:null,list:listKey||null});
+  },[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile,affiliation]);   // plan=1 (from the map) is read once and dropped, so a reload shows the list and does not plan again
   const started=useRef(false);
   useEffect(()=>{
     if(started.current)return;started.current=true;
@@ -800,11 +805,12 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
     <main className="walk-body">
       <aside className="walk-rail" aria-label="Walk list builder">
         <p className="walk-eyebrow">Walk list</p>
-        <h1 className="walk-title">Build a walk list</h1>
-        <p className="walk-sub">Build from streets, paste addresses or import a file.</p>
+        <h1 className="walk-title">Pathfinder</h1>
+        <p className="walk-sub">Street and house research routes.</p>
 
         <div className="walk-source"><Segmented variant="index" label="Walk list source" items={[{id:'streets',label:'Streets'},{id:'addresses',label:'Addresses'}]} value={source} onChange={setSource}/></div>
         <AreaStreetDiscovery/>
+        {source==='streets'&&<RouteAffiliationControls value={affiliation} onChange={setAffiliation} meta={meta} names={features?.party_codes??{}} disabled={loading}/>}
         <label className="walk-check"><input type="checkbox" checked={splitSides} onChange={e=>setSplitSides(e.target.checked)}/> Split even and odd</label>
         <label className="walk-doors"><span>Maximum doors per list</span><input type="number" min={1} max={10000} step={1} inputMode="numeric" placeholder="No cap" value={capText} onChange={e=>{setCapText(e.target.value);setSheetIndex(0);}} aria-describedby="walk-cap-hint"/></label>
         <p id="walk-cap-hint" className="walk-hint">Creates as many lists as needed to cover every door. Blank means no cap. Even and odd stay on separate lists when enabled. Downloads include all lists.</p>
@@ -843,7 +849,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           <select aria-label="Voter profile" value={profile} onChange={e=>setProfileChoice(e.target.value)}>
             {features?.roi?.profiles?.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}
           </select></label>}
-        {features?.roi&&<StreetPlan area={area} roi={features.roi} profile={profile} race={features.candidate?raceWords(features.candidate.race_mode):''} density={features.overlay.density} busy={loading}
+        {features?.roi&&<StreetPlan area={area} roi={features.roi} profile={profile} affiliation={affiliation} race={features.candidate?raceWords(features.candidate.race_mode):''} density={features.overlay.density} busy={loading}
           weights={weights} defaults={defaults} onWeights={changeWeights} doors={doorsNow} onWalk={walkPlanned}/>}
 
         <button type="button" className="walk-generate" onClick={()=>generate()} disabled={loading} aria-busy={loading}>{loading?'Building…':'Generate walk list'}</button>
@@ -924,6 +930,7 @@ export function WalkScreen({meta,route}:{meta:Meta;route:Route}){
           <p>For your own addresses, choose Addresses and paste addresses or street names, or upload CSV, TSV, TXT, JSON or XLSX.</p>
         </div>}
       </section>
+      <RouteContext meta={meta} payload={source==='streets'?shownSheet:null} names={features?.party_codes??{}} pending={affiliation} loading={loading} addresses={source==='addresses'}/>
     </main>
     {refusal&&<div className="walk-refused-bar" role="region" aria-label="Results not saved">
       <span><span aria-hidden="true">!</span> {refusalBarText(refusal)}</span>
