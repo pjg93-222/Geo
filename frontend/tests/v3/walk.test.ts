@@ -11,6 +11,7 @@ import {
 import {DOOR_SCRIPT, choiceText, fillScript, stepById, stepNumber} from '../../src/v3/lib/walkScript.ts';
 
 const BOM = String.fromCharCode(0xfeff);
+const FORMATTED_PHONE = '(719) 555-0142';
 const voter = (over: Partial<WalkVoter> = {}): WalkVoter => ({
   person_id: 'p1', name: 'Dana Whitfield', phone: '7195550142', pri: {voted: 4, eligible: 6}, gen: {voted: 5, eligible: 6}, abs: {voted: 2, eligible: 12},
   party: 'D', age: 44, gender: 'F', reg_date: '1994-09-29', last: null, ...over
@@ -39,8 +40,8 @@ test('dates: m/d/yy for registration, m/d/yyyy for the page date, empty when unu
 });
 
 test('phones: ten digits formatted, a leading 1 dropped, odd shapes kept as typed', () => {
-  assert.equal(phoneText('7195550142'), '(719) 555-0142'); assert.equal(phoneText('17195550142'), '(719) 555-0142');
-  assert.equal(phoneText('(719) 555-0142'), '(719) 555-0142'); assert.equal(phoneText('719.555.0142'), '(719) 555-0142'); assert.equal(phoneText('+1 719-555-0142'), '(719) 555-0142');
+  assert.equal(phoneText('7195550142'), FORMATTED_PHONE); assert.equal(phoneText('17195550142'), FORMATTED_PHONE);
+  assert.equal(phoneText('(719) 555-0142'), FORMATTED_PHONE); assert.equal(phoneText('719.555.0142'), FORMATTED_PHONE); assert.equal(phoneText('+1 719-555-0142'), FORMATTED_PHONE);
   assert.equal(phoneText('5550142'), '555-0142'); assert.equal(phoneText(''), ''); assert.equal(phoneText('  12345 '), '12345');
 });
 
