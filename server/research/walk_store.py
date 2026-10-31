@@ -28,6 +28,7 @@ from django.conf import settings
 
 from tools import scores_schema as S
 
+from . import route_affiliation as RA
 from . import walk_names as N
 from .scoresdb import title_name
 from .terrier_contacts import SourceStoreError, metadata
@@ -380,14 +381,18 @@ class Store:
                     count['odd'] += doors
         return out
 
-    def voters(self, picks, area, limit, spans=None, skip=None, span_skip=None, keep=None):
+    def voters(self, picks, area, limit, spans=None, skip=None, span_skip=None, keep=None, *, affiliation=None):
         """Rows of the people at the picked street sides ([(street id, 'even'|'odd'|'both')]) and on the picked road
         spans (ids from the street plan) or, with neither, of everyone in `area` who has a stop: at most `limit`. `skip`:
         doors ({(stop id, unit '')}) whose people are left out; they do not count towards the limit. `span_skip`: more
         doors left out of what the spans add alone (the street picks keep their people whole). `keep`: a function of a row
         (with its score row `pos` too, attach_scores first) that the people listed must pass (a voter profile); they do not
-        count towards the limit either."""
+        count towards the limit either. `affiliation`: categorical simulation codes, filtered in SQL before the limit;
+        None retains the original query and an empty tuple matches no records."""
         clause, args = _area(area, 'p')
+        extra, extra_args = RA.sql(affiliation)
+        clause += extra
+        args += extra_args
         base = VOTER_SQL if keep is None else VOTER_PROFILE_SQL
 
         def run(sql, sql_args, room, left_out=skip):

@@ -11,6 +11,7 @@ import {
 import {DOOR_SCRIPT, choiceText, fillScript, stepById, stepNumber} from '../../src/v3/lib/walkScript.ts';
 
 const BOM = String.fromCharCode(0xfeff);
+const FORMATTED_PHONE = '(719) 555-0142';
 const voter = (over: Partial<WalkVoter> = {}): WalkVoter => ({
   person_id: 'p1', name: 'Dana Whitfield', phone: '7195550142', pri: {voted: 4, eligible: 6}, gen: {voted: 5, eligible: 6}, abs: {voted: 2, eligible: 12},
   party: 'D', age: 44, gender: 'F', reg_date: '1994-09-29', last: null, ...over
@@ -39,8 +40,8 @@ test('dates: m/d/yy for registration, m/d/yyyy for the page date, empty when unu
 });
 
 test('phones: ten digits formatted, a leading 1 dropped, odd shapes kept as typed', () => {
-  assert.equal(phoneText('7195550142'), '(719) 555-0142'); assert.equal(phoneText('17195550142'), '(719) 555-0142');
-  assert.equal(phoneText('(719) 555-0142'), '(719) 555-0142'); assert.equal(phoneText('719.555.0142'), '(719) 555-0142'); assert.equal(phoneText('+1 719-555-0142'), '(719) 555-0142');
+  assert.equal(phoneText('7195550142'), FORMATTED_PHONE); assert.equal(phoneText('17195550142'), FORMATTED_PHONE);
+  assert.equal(phoneText('(719) 555-0142'), FORMATTED_PHONE); assert.equal(phoneText('719.555.0142'), FORMATTED_PHONE); assert.equal(phoneText('+1 719-555-0142'), FORMATTED_PHONE);
   assert.equal(phoneText('5550142'), '555-0142'); assert.equal(phoneText(''), ''); assert.equal(phoneText('  12345 '), '12345');
 });
 
@@ -1391,7 +1392,7 @@ test('page address: planned streets ride along, are enough to rebuild a list, an
 test('walk screen wiring: the street plan shows only with features.roi, builds with spans, and the print toggle asks for scores only while on', () => {
   const src = readFileSync(path.join(import.meta.dirname, '../../src/v3/components/WalkScreen.tsx'), 'utf8');
   assert.ok(/features\?\.roi&&<StreetPlan /.test(src), 'no street plan without features.roi (Colorado)');
-  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut,splitSides,profile\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets with the side toggle, and the click is not passed in as the streets');
+  assert.ok(/getWalkList\(streets,where,sig,planned,left,cut,splitSides,profile,affiliation\)/.test(src) && /onClick=\{\(\)=>generate\(\)\}/.test(src), 'the list is built from the picks and the planned streets with the side toggle, and the click is not passed in as the streets');
   assert.ok(/spans:spansParam\(spans\)\|\|null/.test(src), 'the page address carries the planned streets');
   assert.ok(/if\(!printScores\)return undefined;/.test(src) && /useState\(false\);?\s*\/\/ the Print scores toggle/.test(src), 'Print scores starts off and asks for nothing while off');
   assert.ok(/exportWalkPdf\(p,\{area:listLabel\(p\),scores,watermark,sheets:splitWalkSheets\(p,cap\),profile:profileLabel\(p\.query,roi\?\.profiles\)\}\)/.test(src) && /if\(scores===null\)return;/.test(src), 'a failed scores request stops the export and says so');
@@ -1515,14 +1516,14 @@ test('walk screen wiring: Plan walk list and Doors by the precinct field, the cl
   assert.ok(/\{roi&&area\.precinct&&<div className="walk-oneclick">/.test(src) && />Plan walk list<\/button>/.test(src) && /<span>Doors<\/span>/.test(src), 'a visible button and a Doors input, with a precinct chosen and a plan in the district');
   assert.ok(/min=\{DOORS_MIN\} max=\{DOORS_MAX\} step=\{1\}/.test(src) && /\{DOORS_MIN\} to \{DOORS_MAX\.toLocaleString\('en-US'\)\}/.test(src), 'doors from 1 to 1,000 on the input and in the hint');
   assert.ok(/clampDoors\(doorsText\?\?savedDoors,turfCfg\.doors\)/.test(src) && /writeDoors\(features\.district,doorsNow\)/.test(src), 'doors from the district\'s default, kept per viewer');
-  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked,profile\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
-  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined,splitSides,profile\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
+  assert.ok(/getWalkPlan\(where,\{preset:'push',\.\.\.q,doors:asked,profile,affiliation\},sig\)/.test(src) && /q=weightsQuery\(weights\)/.test(src), 'the plan with the weights and the doors');
+  assert.ok(/got\.cut=trimFor\(plan\.turf,asked,q\)/.test(src) && /getWalkList\('',where,sig,plan\.turf\.spans,true,got\.cut\?\?undefined,splitSides,profile,affiliation\)/.test(src), 'then the list from its blocks in pick order, fresh, cut to the doors with the same weights');
   assert.ok(/putSpans\(got\.turf\?\.spans\?\?\[\],true,got\.cut\?\?null\);show\(p,false\);setTurf\(got\.turf\?\?null\)/.test(src), 'the blocks and the cut go in the address with fresh, and the note is kept for this list');
-  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),split_sides:splitSides\?'1':'0',max_doors:capText\|\|null,profile:profile==='all'\?null:profile,plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile\]/.test(src), 'the address preserves plan options, side toggle and sheet cap, and drops plan so a reload does not plan again');
+  assert.ok(/fresh:fresh\?'1':null,\.\.\.trimQuery\(trim\),split_sides:splitSides\?'1':'0',max_doors:capText\|\|null,profile:profile==='all'\?null:profile,affiliation:affiliation\|\|null,plan:null,list:listKey\|\|null/.test(src) && /\[area,picks,spans,fresh,trim,listKey,splitSides,capText,profile,affiliation\]/.test(src), 'the address preserves plan options, side toggle and sheet cap, and drops plan so a reload does not plan again');
   assert.ok(/startPlan\(init\)==='turf'/.test(src) && /if\(!turfWaits\.current\|\|!features\)return;/.test(src) && /if\(features\.roi\)planTurf\(\);else generate\(\);/.test(src), 'plan=1 runs once the settings are here, and a district with no plan builds the precinct as it did');
   assert.ok(/putSpans\(ids,true\);generate\(ids\)/.test(src) && /putSpans\(parseSpansParam\(from\.spans\),!!from\.fresh,from\.trim\?\?null\)/.test(src) && /const putSpans=\(next:number\[\],left=false,cut:WalkListTrim\|null=null\)/.test(src), 'fresh goes with planned blocks: checked blocks (whole, no doors) and a saved list (with its doors) bring it, clearing them takes it away');
   assert.ok(/const kept=next\.length>0&&left\?cut:null;trimRef\.current=kept;setTrim\(kept\)/.test(src), 'doors ride only with planned blocks that are fresh, as the server wants');
-  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut,splitSides,profile\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
+  assert.ok(/cut=trimRef\.current\?\?undefined/.test(src) && /getWalkList\(streets,where,sig,planned,left,cut,splitSides,profile,affiliation\)/.test(src), 'building again from the screen keeps the cut of the planned blocks it still holds');
   assert.ok(/readWeights\(features\.district,defaults\)/.test(src) && /writeWeights\(features\.district,next\)/.test(src) && /weights=\{weights\} defaults=\{defaults\} onWeights=\{changeWeights\} doors=\{doorsNow\}/.test(src), 'the sliders are shared with the map through the weights helpers');
   assert.ok(/turfLines\(turf,payload\.totals,turfCfg\.jump_m\)/.test(src), 'the note uses the routed list\'s totals');
 });
